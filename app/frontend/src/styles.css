@@ -318,9 +318,12 @@ textarea {
 }
 
 .topbar-page-toggle {
+  /* Overridden inline from WORKSPACE_PAGES so adding a view cannot desync the
+     sliding thumb from the button count. */
+  --page-count: 4;
   position: relative;
   display: inline-grid;
-  grid-template-columns: repeat(3, minmax(118px, 1fr));
+  grid-template-columns: repeat(var(--page-count), minmax(104px, 1fr));
   gap: 0;
   padding: 0.18rem;
   border: 1px solid #9cb0c4;
@@ -333,7 +336,7 @@ textarea {
   top: 0.18rem;
   bottom: 0.18rem;
   left: 0.18rem;
-  width: calc((100% - 0.36rem) / 3);
+  width: calc((100% - 0.36rem) / var(--page-count));
   border-radius: 999px;
   background: #2563eb;
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.18);
@@ -375,11 +378,13 @@ textarea {
   }
 }
 
-.standards-page-workspace {
+.standards-page-workspace,
+.courses-page-workspace {
   grid-template-columns: minmax(0, 1fr);
 }
 
-.standards-page-pane {
+.standards-page-pane,
+.courses-page-pane {
   min-width: 0;
   min-height: 0;
   overflow: auto;
@@ -1968,9 +1973,11 @@ textarea {
   padding: 1.25rem;
 }
 
+/* Pages are laid out in JS, so each sheet is a real element of exact paper size
+   rather than one tall block the browser chops up wherever it likes. Width and
+   height come from inline styles computed from the page size and margins. */
 .print-page {
-  width: 8.5in;
-  min-height: 11in;
+  position: relative;
   margin: 0 auto;
   padding: var(--print-margin);
   background: #ffffff;
@@ -1978,15 +1985,70 @@ textarea {
   font-family: "Times New Roman", Georgia, serif;
   font-size: var(--print-font-size);
   line-height: 1.35;
+  overflow: hidden;
 }
 
-.print-page.page-legal {
-  min-height: 14in;
+/* Dotted rule on the margin, so it is obvious how much room the text really has. */
+.print-page-margin-guide {
+  position: absolute;
+  inset: var(--print-margin);
+  border: 1px dashed #b8c6d8;
+  pointer-events: none;
 }
 
-.print-page.page-a4 {
-  width: 8.27in;
-  min-height: 11.69in;
+.print-page-columns {
+  display: grid;
+  align-items: start;
+  height: 100%;
+}
+
+.print-page-column {
+  min-width: 0;
+}
+
+.print-page-wrapper {
+  display: grid;
+  justify-items: center;
+}
+
+/* The page break itself: a dotted line across the gutter with the page number. */
+.print-page-break {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: min(8.5in, 100%);
+  margin: 0 auto;
+  padding: 0.9rem 0;
+  color: #64748b;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.print-page-break::before,
+.print-page-break::after {
+  content: "";
+  flex: 1;
+  border-top: 1px dashed #94a3b8;
+}
+
+/* Off-screen measuring pass. Kept in the layout (not display:none) so the blocks
+   really lay out and can be measured, but pulled out of view. */
+.print-measure {
+  position: absolute;
+  top: 0;
+  left: -10000px;
+  visibility: hidden;
+  pointer-events: none;
+  font-family: "Times New Roman", Georgia, serif;
+  font-size: var(--print-font-size);
+  line-height: 1.35;
+}
+
+/* flow-root so each block's own bottom margin counts toward its measured height
+   instead of collapsing out of it. */
+.print-measure-block {
+  display: flow-root;
 }
 
 .print-cover-sheet {
@@ -2045,10 +2107,6 @@ textarea {
   padding-bottom: 0.07in;
 }
 
-.print-question-flow {
-  column-count: var(--print-columns);
-  column-gap: 0.35in;
-}
 
 .print-question-item {
   break-inside: avoid;
@@ -2342,20 +2400,32 @@ textarea {
   }
 
   .print-page {
-    width: auto;
+    width: 100%;
+    height: auto;
     min-height: auto;
     margin: 0;
     padding: var(--print-margin);
     box-shadow: none;
+    overflow: visible;
+    /* One element per sheet, so the browser breaks exactly where we decided. */
+    break-after: page;
+    page-break-after: always;
   }
 
-  .print-page.page-legal {
-    min-height: auto;
+  .print-page.print-page-last {
+    break-after: auto;
+    page-break-after: auto;
   }
 
-  .print-page.page-a4 {
-    width: auto;
-    min-height: auto;
+  .print-page-wrapper {
+    display: block;
+  }
+
+  /* Preview-only chrome. */
+  .print-page-margin-guide,
+  .print-page-break,
+  .print-measure {
+    display: none;
   }
 }
 
@@ -2469,9 +2539,15 @@ textarea {
   display: grid;
   gap: 0.5rem;
   align-items: start;
+  /* id, short name, statement, source, strand, subject, grade band, tags, actions.
+     The actions column is a fixed width rather than `auto`: the head row leaves it
+     empty while body rows put a button in it, and an auto column that measures
+     differently in each row changes the free space the fr columns divide up, which
+     drifts the headers out of line with the table underneath. */
   grid-template-columns:
-    minmax(110px, 0.8fr) minmax(90px, 0.6fr) minmax(220px, 2.2fr)
-    minmax(90px, 0.6fr) minmax(70px, 0.5fr) minmax(120px, 1fr) auto;
+    minmax(100px, 0.7fr) minmax(80px, 0.55fr) minmax(200px, 2fr)
+    minmax(100px, 0.8fr) minmax(90px, 0.6fr) minmax(80px, 0.55fr)
+    minmax(64px, 0.45fr) minmax(100px, 0.85fr) 4rem;
   padding: 0.5rem 0.6rem;
   border: 1px solid #d7e1eb;
   border-radius: 8px;
@@ -2509,6 +2585,7 @@ textarea {
 
 .standards-cell-subject,
 .standards-cell-grade,
+.standards-cell-strand,
 .standards-cell-muted {
   color: #475569;
   font-size: 0.85rem;
@@ -2559,9 +2636,638 @@ textarea {
   display: grid;
   gap: 0.5rem;
   align-items: start;
+  /* source, id, short name, statement, strand, subject, grade band, tags, remove */
   grid-template-columns:
-    minmax(110px, 0.8fr) minmax(90px, 0.6fr) minmax(220px, 2.2fr)
-    minmax(90px, 0.6fr) minmax(70px, 0.5fr) minmax(120px, 1fr) auto;
+    minmax(120px, 0.9fr) minmax(100px, 0.7fr) minmax(80px, 0.55fr) minmax(200px, 2fr)
+    minmax(90px, 0.6fr) minmax(80px, 0.55fr) minmax(64px, 0.45fr) minmax(100px, 0.85fr) auto;
+}
+
+.standards-manual-entry {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.standards-manual-source-expansion {
+  border: 1px dashed #9cb0c4;
+  border-radius: 8px;
+  padding: 0.6rem;
+  background: #f6f9fc;
+}
+
+.standards-manual-source-expansion .metadata-help-text {
+  margin: 0.4rem 0 0;
+}
+
+.standards-import-detection {
+  border: 1px solid #d7e1eb;
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  background: #f8fbff;
+}
+
+.standards-import-detection p {
+  margin: 0 0 0.4rem;
+  font-size: 0.88rem;
+}
+
+.standards-detected-sources {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.standards-detected-sources li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.85rem;
+  color: #475569;
+}
+
+.standards-filter-row.library {
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.courses-workspace {
+  display: grid;
+  align-content: start;
+  gap: 1rem;
+  min-height: 100%;
+  overflow-y: auto;
+  padding: 1rem 1.25rem;
+  background: #eef3f8;
+}
+
+.courses-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  gap: 0.75rem;
+  min-height: 0;
+}
+
+.courses-list-panel,
+.courses-detail-panel {
+  min-height: 0;
+  overflow: auto;
+}
+
+.courses-detail-form {
+  display: grid;
+  grid-template-columns: minmax(200px, 1fr) minmax(280px, 2.4fr);
+  gap: 0.6rem 0.9rem;
+  align-items: start;
+}
+
+/* Stacked, not inline: an inline label leaves the control only the width left
+   over on its line, which squeezed the description into a tall narrow box while
+   the panel beside it sat empty. */
+.courses-detail-form > label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #475569;
+}
+
+.courses-detail-form > label input,
+.courses-detail-form > label textarea {
+  width: 100%;
+  font-weight: 400;
+}
+
+.courses-detail-form .standards-description-input {
+  min-height: 2.4rem;
+  resize: vertical;
+}
+
+.courses-detail-form .standards-course-actions {
+  grid-column: 1 / -1;
+}
+
+.courses-section-tabs {
+  display: flex;
+  gap: 0.3rem;
+  border-bottom: 1px solid #d7e1eb;
+  padding-bottom: 0.3rem;
+}
+
+.courses-section-tabs button {
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  padding: 0.32rem 0.85rem;
+  font-weight: 600;
+}
+
+.courses-section-tabs button.active {
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.course-coverage-table {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.course-coverage-row {
+  display: grid;
+  gap: 0.5rem;
+  align-items: start;
+  /* short name, statement, source, strand, count, actions */
+  grid-template-columns:
+    minmax(90px, 0.7fr) minmax(220px, 2.4fr) minmax(110px, 0.9fr)
+    minmax(90px, 0.7fr) minmax(96px, 0.7fr) auto;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid #d7e1eb;
+  border-radius: 8px;
+  background: #fbfdff;
+}
+
+.course-coverage-row > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.course-coverage-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #eef3f8;
+  border-color: transparent;
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #64748b;
+}
+
+.course-coverage-count {
+  font-weight: 700;
+  color: #15803d;
+  font-size: 0.85rem;
+}
+
+.course-coverage-count small {
+  font-weight: 500;
+  color: #64748b;
+}
+
+.course-coverage-count.empty {
+  color: #b45309;
+}
+
+.course-library-picker {
+  max-height: 24rem;
+  overflow: auto;
+}
+
+.course-test-list {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.course-test-version-tag {
+  margin-left: 0.4rem;
+  padding: 0.05rem 0.4rem;
+  border: 1px solid #c7d7ea;
+  border-radius: 999px;
+  background: #eaf2fb;
+  color: #1d4ed8;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.course-test-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid #d7e1eb;
+  border-radius: 8px;
+  background: #fbfdff;
+}
+
+.course-test-row.attached {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.course-test-row > div {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.course-test-row span {
+  font-size: 0.83rem;
+  color: #475569;
+}
+
+.courses-coverage-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.courses-stat {
+  display: grid;
+  gap: 0.1rem;
+  padding: 0.5rem 0.9rem;
+  border: 1px solid #d7e1eb;
+  border-radius: 8px;
+  background: #f8fbff;
+  min-width: 8rem;
+}
+
+.courses-stat strong {
+  font-size: 1.35rem;
+}
+
+.courses-stat span {
+  font-size: 0.78rem;
+  color: #64748b;
+}
+
+.courses-stat.warning {
+  border-color: #f59e0b;
+  background: #fffbeb;
+}
+
+.bank-assets-count.warning {
+  color: #b45309;
+}
+
+/* Course membership reads as a row of tags rather than a checkbox grid, so a
+   test with one course costs one line instead of the whole bank's worth. */
+.test-course-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.test-course-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.3rem 0.15rem 0.55rem;
+  border: 1px solid #c7d7ea;
+  border-radius: 999px;
+  background: #eaf2fb;
+  color: #1d4ed8;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.test-course-tag button {
+  padding: 0 0.25rem;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: #64748b;
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.test-course-tag button:hover:not(:disabled) {
+  color: #b91c1c;
+}
+
+.test-course-picker {
+  position: relative;
+}
+
+.test-course-add {
+  padding: 0.15rem 0.6rem;
+  border: 1px dashed #b6c6da;
+  border-radius: 999px;
+  background: transparent;
+  color: #475569;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.test-course-add:hover:not(:disabled) {
+  border-color: #1d4ed8;
+  color: #1d4ed8;
+}
+
+.test-course-menu {
+  position: absolute;
+  top: calc(100% + 0.3rem);
+  left: 0;
+  z-index: 20;
+  display: grid;
+  min-width: 200px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 0.25rem;
+  border: 1px solid #d1dbe5;
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.14);
+}
+
+.test-course-menu button {
+  padding: 0.4rem 0.55rem;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.test-course-menu button:hover {
+  background: #eef3f8;
+}
+
+.test-course-empty {
+  color: #94a3b8;
+  font-size: 0.82rem;
+}
+
+.test-shared-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid #fcd34d;
+  border-radius: 10px;
+  background: #fffbeb;
+}
+
+.test-shared-notice p {
+  margin: 0;
+  color: #92400e;
+  font-size: 0.85rem;
+}
+
+.test-shared-notice-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.test-shared-notice-dismiss {
+  background: transparent;
+  border-color: #d6b46a;
+  color: #92400e;
+}
+
+/* Multi-level item sorting. */
+.test-item-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.test-sort-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.test-sort-rules {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0.5rem 0 0.75rem;
+  padding: 0.6rem;
+  border: 1px solid #dce5ef;
+  border-radius: 10px;
+  background: #f7fafd;
+}
+
+.test-sort-rule {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.test-sort-rank {
+  min-width: 3.9rem;
+  color: #64748b;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.test-sort-manual {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.test-sort-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.1rem 0.2rem 0.1rem 0.5rem;
+  border: 1px solid #d1dbe5;
+  border-radius: 999px;
+  background: #ffffff;
+  font-size: 0.8rem;
+}
+
+.test-sort-value button {
+  padding: 0 0.2rem;
+  border: none;
+  background: transparent;
+  color: #475569;
+  font-size: 0.8rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.test-sort-value button:disabled {
+  color: #cbd5e1;
+  cursor: default;
+}
+
+.test-sort-manual-empty {
+  color: #94a3b8;
+  font-size: 0.8rem;
+}
+
+.test-sort-remove {
+  margin-left: auto;
+  color: #b91c1c;
+}
+
+.test-sort-hint {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.78rem;
+}
+
+/* Save-as-copy dialog. */
+.test-copy-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.35);
+  display: grid;
+  place-items: center;
+  z-index: 1000;
+}
+
+.test-copy-dialog {
+  display: grid;
+  gap: 0.6rem;
+  width: min(440px, 92vw);
+  max-height: 85vh;
+  overflow-y: auto;
+  padding: 1.1rem 1.25rem;
+  background: #ffffff;
+  border: 1px solid #d1dbe5;
+  border-radius: 16px;
+  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.16);
+}
+
+.test-copy-dialog h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.test-copy-dialog > p {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.85rem;
+}
+
+.test-copy-dialog label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #475569;
+}
+
+.test-copy-courses {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0.5rem 0.7rem 0.7rem;
+  border: 1px solid #dce5ef;
+  border-radius: 10px;
+}
+
+.test-copy-courses legend {
+  padding: 0 0.3rem;
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+/* Beats the dialog's `label { display: grid }`, which would otherwise stack
+   each checkbox above its text. */
+.test-copy-courses label,
+.test-copy-dialog .test-copy-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 500;
+}
+
+.test-copy-note {
+  color: #94a3b8;
+  font-weight: 400;
+}
+
+.test-copy-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.3rem;
+}
+
+/* "Start from" seeding on a new course. */
+.course-seed-block {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid #dce5ef;
+  border-radius: 10px;
+  background: #f7fafd;
+}
+
+.course-seed-source {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #475569;
+}
+
+.course-seed-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
+}
+
+.course-seed-options label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.course-seed-hint {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.78rem;
+}
+
+.new-test-courses {
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 0.6rem;
+}
+
+.new-test-course-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.9rem;
+}
+
+.new-test-course-option {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: 500;
+}
+
+@media (max-width: 1100px) {
+  .courses-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .courses-detail-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .course-coverage-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .course-coverage-row > span:nth-child(2),
+  .course-coverage-row > span:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .course-coverage-head {
+    display: none;
+  }
 }
 
 @media (max-width: 1100px) {
@@ -2600,14 +3306,6 @@ textarea {
   min-height: 0;
 }
 
-.standards-layout.drawer-open {
-  grid-template-columns: minmax(300px, 340px) minmax(0, 1fr);
-}
-
-.standards-layout.drawer-closed {
-  grid-template-columns: 42px minmax(0, 1fr);
-}
-
 .standards-layout.picker {
   grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
   gap: 1rem;
@@ -2618,40 +3316,6 @@ textarea {
   display: grid;
   gap: 1rem;
   min-height: 0;
-}
-
-.standards-source-drawer.closed {
-  display: block;
-}
-
-.standards-drawer-tab-shell {
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.standards-drawer-tab {
-  writing-mode: vertical-rl;
-  text-orientation: mixed;
-  min-height: 5.2rem;
-  padding: 0.55rem 0.35rem;
-  border-top-left-radius: 0;
-  border-bottom-left-radius: 0;
-}
-
-.standards-drawer-header {
-  margin-bottom: 0.8rem;
-}
-
-.standards-inline-section {
-  display: grid;
-  gap: 0.65rem;
-  margin-bottom: 0.8rem;
-}
-
-.standards-inline-section .standards-source-list {
-  max-height: none;
 }
 
 .standards-results-panel {
@@ -2739,44 +3403,6 @@ textarea {
   margin-bottom: 1rem;
 }
 
-.standards-filter-row.course-library {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.standards-filter-row.source-drawer {
-  grid-template-columns: minmax(0, 1fr) 220px;
-}
-
-.standards-course-bar {
-  display: grid;
-  grid-template-columns: minmax(220px, 260px) minmax(240px, 1fr) 180px minmax(260px, 1.2fr) auto;
-  gap: 0.75rem;
-  align-items: end;
-}
-
-.standards-course-bar label {
-  display: grid;
-  gap: 0.35rem;
-}
-
-.standards-course-id-preview {
-  display: grid;
-  gap: 0.3rem;
-  align-self: stretch;
-  padding: 0.75rem 0.85rem;
-  border: 1px solid #d7e1eb;
-  border-radius: 10px;
-  background: #fbfdff;
-}
-
-.standards-course-id-preview strong {
-  word-break: break-word;
-}
-
-.standards-course-description-field {
-  min-width: 0;
-}
-
 .standard-chip-list {
   display: grid;
   gap: 0.75rem;
@@ -2791,15 +3417,6 @@ textarea {
   border: 1px solid #d7e1eb;
   border-radius: 12px;
   background: #fbfdff;
-}
-
-.standards-curated-summary {
-  display: grid;
-  gap: 0.2rem;
-  padding: 0.85rem 0.95rem;
-  border: 1px solid #d7e1eb;
-  border-radius: 12px;
-  background: #f8fbfd;
 }
 
 .standards-course-actions {

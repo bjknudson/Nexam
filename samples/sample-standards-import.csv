@@ -1,0 +1,5 @@
+id,code,statement,strand,subject,grade_band,tags,source,source_id,issuer
+ELA-RL-01,ELA-RL-01,"Cite strong textual evidence to support an analysis of what the text says explicitly.",Reading: Literature,English,9-10,reading;evidence,District ELA Standards,district-ela-2026,Sample Unified School District
+ELA-W-01,ELA-W-01,"Write arguments to support claims with valid reasoning and sufficient evidence.",Writing,English,9-10,writing;argument,District ELA Standards,district-ela-2026,Sample Unified School District
+SCI-EN-01,SCI-EN-01,"Model the transfer of energy through a closed system.",Energy,Science,9-12,energy;systems,District Science Standards,district-science-2026,Sample Unified School District
+SCI-EN-02,SCI-EN-02,"Use conservation of energy to predict the outcome of an interaction.",Energy,Science,9-12,energy;conservation,District Science Standards,district-science-2026,Sample Unified School District

@@ -280,3 +280,155 @@ def test_api_health_reports_version_and_build(client: TestClient) -> None:
     # A real version, not the "unknown" fallback the frontend stays quiet on.
     assert payload["version"] != "unknown"
     assert payload["version"].count(".") == 2
+
+
+def test_api_exposes_course_detail_and_test_course_assignment(
+    client: TestClient, demo_bok: Path
+) -> None:
+    assert client.post("/api/banks/open", json={"path": str(demo_bok)}).status_code == 200
+
+    created = client.post(
+        "/api/tests",
+        json={"title": "Course API Test", "version": "A", "course_ids": ["physics-1"]},
+    )
+    assert created.status_code == 200
+    test_id = created.json()["test"]["id"]
+    assert created.json()["test"]["course_ids"] == ["physics-1"]
+
+    detail = client.get("/api/courses/physics-1")
+    assert detail.status_code == 200
+    payload = detail.json()
+    assert [item["test_id"] for item in payload["tests"]] == [test_id]
+    assert payload["uncovered_standards"]
+
+    reassigned = client.put(
+        f"/api/tests/{test_id}/courses",
+        json={"course_ids": ["physics-1", "chemistry-1"]},
+    )
+    assert reassigned.status_code == 200
+    assert reassigned.json()["test"]["course_ids"] == ["physics-1", "chemistry-1"]
+
+    assert client.delete("/api/courses/chemistry-1").status_code == 204
+    assert client.get("/api/courses/chemistry-1").status_code == 404
+    assert client.get(f"/api/tests/{test_id}").json()["test"]["course_ids"] == ["physics-1"]
+
+
+def test_api_inspects_a_standards_import_before_asking_for_a_source(
+    client: TestClient, demo_bok: Path
+) -> None:
+    assert client.post("/api/banks/open", json={"path": str(demo_bok)}).status_code == 200
+
+    response = client.post(
+        "/api/standards/import/inspect",
+        files={"file": ("silent.csv", b"id,code,statement\nZ-01,Z-01,Something.\n", "text/csv")},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_rows"] == 1
+    assert payload["needs_source_input"] is True
+
+
+def test_api_lists_standards_by_strand(client: TestClient, demo_bok: Path) -> None:
+    assert client.post("/api/banks/open", json={"path": str(demo_bok)}).status_code == 200
+
+    created = client.post(
+        "/api/standards/manual",
+        json={
+            "standards": [
+                {
+                    "id": "API-STRAND-01",
+                    "statement": "Filed under its own new source.",
+                    "strand": "Number Sense",
+                    "tags": [],
+                    "source_list_id": "api-source-2026",
+                    "source_title": "API Source",
+                    "source_issuer": "Local District",
+                }
+            ]
+        },
+    )
+    assert created.status_code == 200
+    assert created.json()["source_list"]["id"] == "api-source-2026"
+
+    assert "Number Sense" in client.get("/api/standards/strands").json()["items"]
+    filtered = client.get("/api/standards", params={"strand": "Number Sense"})
+    assert [item["id"] for item in filtered.json()["items"]] == ["API-STRAND-01"]
+
+
+def test_api_seeds_a_new_course_from_an_existing_one(
+    client: TestClient, demo_bok: Path
+) -> None:
+    assert client.post("/api/banks/open", json={"path": str(demo_bok)}).status_code == 200
+    shared = client.post(
+        "/api/tests", json={"title": "Unit 1", "version": "A", "course_ids": ["physics-1"]}
+    )
+    assert shared.status_code == 200
+    shared_id = shared.json()["test"]["id"]
+
+    assert (
+        client.put(
+            "/api/courses/physics-1-2027",
+            json={"title": "Physics 1 (2027)", "description": None, "standard_refs": []},
+        ).status_code
+        == 200
+    )
+
+    response = client.post(
+        "/api/courses/physics-1-2027/seed",
+        json={"source_course_id": "physics-1", "include_standards": True, "include_tests": True},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["course"]["standard_refs"]
+    assert [item["test_id"] for item in payload["tests"]] == [shared_id]
+    assert client.get(f"/api/tests/{shared_id}").json()["test"]["course_ids"] == [
+        "physics-1",
+        "physics-1-2027",
+    ]
+
+
+def test_api_rejects_seeding_a_course_from_itself(client: TestClient, demo_bok: Path) -> None:
+    assert client.post("/api/banks/open", json={"path": str(demo_bok)}).status_code == 200
+
+    response = client.post(
+        "/api/courses/physics-1/seed", json={"source_course_id": "physics-1"}
+    )
+
+    assert response.status_code == 400
+
+
+def test_api_copies_a_shared_test_and_restores_the_original(
+    client: TestClient, demo_bok: Path
+) -> None:
+    assert client.post("/api/banks/open", json={"path": str(demo_bok)}).status_code == 200
+    created = client.post(
+        "/api/tests",
+        json={"title": "Unit 1", "version": "A", "course_ids": ["physics-1", "algebra-1"]},
+    )
+    test_id = created.json()["test"]["id"]
+    snapshot = client.get(f"/api/tests/{test_id}").json()["test"]
+
+    edited = client.post(f"/api/tests/{test_id}/items", json={"question_id": "q_fr_0001"})
+    assert edited.status_code == 200
+
+    response = client.post(
+        f"/api/tests/{test_id}/copy",
+        json={
+            "title": "Unit 1 (2027)",
+            "course_ids": ["algebra-1"],
+            "detach_courses_from_source": True,
+            "source_restore": snapshot,
+        },
+    )
+
+    assert response.status_code == 200
+    copy = response.json()["test"]
+    assert copy["id"] != test_id
+    assert copy["course_ids"] == ["algebra-1"]
+    assert [item["question_id"] for item in copy["items"]] == ["q_fr_0001"]
+
+    original = client.get(f"/api/tests/{test_id}").json()["test"]
+    assert original["items"] == []
+    assert original["course_ids"] == ["physics-1"]

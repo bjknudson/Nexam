@@ -7,6 +7,7 @@ type PaneKind =
   | "questions"
   | "assets"
   | "standards"
+  | "courses"
   | "test-preview"
   | "editor"
   | "tests";
@@ -66,6 +67,21 @@ export async function resolveDefaultBankDirectory(): Promise<string | null> {
 export async function setArchiveDirtyInShell(dirty: boolean): Promise<void> {
   if (!isDesktopShell()) return;
   await invoke("set_archive_dirty", { dirty });
+}
+
+/** Open the system print dialog for this window.
+ *
+ *  `window.print()` does nothing inside the macOS webview, so in the desktop
+ *  shell the request goes back to Rust, which sets the paper size the test was
+ *  laid out for and then opens the print panel. In a browser there is no shell
+ *  to ask, and `window.print()` works there anyway.
+ */
+export async function printCurrentWindow(pageSize: string): Promise<void> {
+  if (!isDesktopShell()) {
+    window.print();
+    return;
+  }
+  await invoke("print_current_window", { pageSize });
 }
 
 export async function openPaneWindow(

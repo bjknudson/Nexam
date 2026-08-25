@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, ReactElement } from "react";
 
 import { getAssetFileUrl, inspectAssets, listTestDrafts } from "./api";
+import { printCurrentWindow } from "./desktop";
 import { MathTextPreview } from "./MathPreview";
 import type {
   AssetInspectionResponseModel,
@@ -375,6 +376,253 @@ function TemplateBlock({
   );
 }
 
+/** Paper sizes in inches. */
+const PAGE_DIMENSIONS: Record<TestPrintSettingsModel["page_size"], { width: number; height: number }> = {
+  letter: { width: 8.5, height: 11 },
+  legal: { width: 8.5, height: 14 },
+  a4: { width: 8.27, height: 11.69 },
+};
+
+/** CSS reference pixels per inch. */
+const PX_PER_INCH = 96;
+const COLUMN_GAP_IN = 0.35;
+
+interface PageGeometry {
+  pageWidth: number;
+  pageHeight: number;
+  contentWidth: number;
+  contentHeight: number;
+  columnWidth: number;
+  columnGap: number;
+  columns: number;
+}
+
+function getPageGeometry(settings: TestPrintSettingsModel): PageGeometry {
+  const paper = PAGE_DIMENSIONS[settings.page_size] ?? PAGE_DIMENSIONS.letter;
+  const columns = Math.max(1, settings.columns);
+  const pageWidth = paper.width * PX_PER_INCH;
+  const pageHeight = paper.height * PX_PER_INCH;
+  const margin = settings.margin_in * PX_PER_INCH;
+  const contentWidth = Math.max(1, pageWidth - margin * 2);
+  const contentHeight = Math.max(1, pageHeight - margin * 2);
+  const columnGap = COLUMN_GAP_IN * PX_PER_INCH;
+  const columnWidth = Math.max(
+    1,
+    (contentWidth - columnGap * (columns - 1)) / columns,
+  );
+  return { pageWidth, pageHeight, contentWidth, contentHeight, columnWidth, columnGap, columns };
+}
+
+/** Block indices laid out as pages of columns. */
+type PageLayout = number[][][];
+
+/** Fill column by column, page by page, so numbering runs top-to-bottom of
+ *  column one and continues in column two of the *same* page.
+ *
+ *  CSS multi-column cannot do this: it balances one flow across the whole
+ *  document, so with two columns question 5 lands at the bottom of page two
+ *  while question 8 sits back at the top of page one. */
+function paginateBlocks(
+  heights: number[],
+  leadHeight: number,
+  geometry: PageGeometry,
+): PageLayout {
+  const { columns, contentHeight } = geometry;
+  const pages: PageLayout = [];
+
+  let page: number[][] = Array.from({ length: columns }, () => []);
+  let columnIndex = 0;
+  let used = 0;
+  // The header or cover sheet spans the full width, so it shortens every
+  // column on the first page.
+  let columnHeight = Math.max(1, contentHeight - leadHeight);
+
+  pages.push(page);
+
+  heights.forEach((height, index) => {
+    // `used > 0` keeps a block taller than a whole column from looping: it goes
+    // on a column of its own and overflows rather than never being placed.
+    if (used > 0 && used + height > columnHeight) {
+      columnIndex += 1;
+      if (columnIndex >= columns) {
+        page = Array.from({ length: columns }, () => []);
+        pages.push(page);
+        columnIndex = 0;
+        columnHeight = contentHeight;
+      }
+      used = 0;
+    }
+    page[columnIndex].push(index);
+    used += height;
+  });
+
+  return pages;
+}
+
+/** Every atomic block of the test, in order.
+
+ *  A block is the smallest thing that may not be split across a column or page
+ *  boundary: a section header, or a question with its figures, choices, and
+ *  response space. Pagination moves whole blocks, never parts of them. */
+function buildPrintBlocks({
+  selectedTest,
+  settings,
+  questionsById,
+  instructionOptions,
+  assetRenders,
+}: {
+  selectedTest: TestDraftDetailModel;
+  settings: TestPrintSettingsModel;
+  questionsById: Record<string, QuestionModel>;
+  instructionOptions: TestInstructionSectionOptionsModel;
+  assetRenders: Record<string, AssetInspectionResponseModel>;
+}): ReactElement[] {
+  let questionNumber = 0;
+  let previousQuestionType: QuestionType | null = null;
+  let manualSectionQuestionType: QuestionType | null = null;
+  let suppressAutoAfterManualSection = false;
+
+  return selectedTest.test.items.map((item, index) => {
+    if (isSectionItem(item)) {
+      const sectionRun = getManualSectionRun(selectedTest, index, questionsById);
+      const linkedSection = item.question_type
+        ? getInstructionSection(settings, item.question_type)
+        : null;
+      const firstQuestion = sectionRun[0] ?? null;
+      const title = item.title || linkedSection?.title || "Section";
+      const instructions =
+        item.instructions ||
+        (linkedSection && firstQuestion
+          ? getSectionInstruction(linkedSection, firstQuestion)
+          : linkedSection?.instructions) ||
+        "";
+      const sectionMetadata = getManualSectionMetadata(item, instructionOptions, sectionRun);
+      previousQuestionType = null;
+      manualSectionQuestionType = item.question_type ?? null;
+      suppressAutoAfterManualSection = true;
+
+      return (
+        <article
+          key={`${item.section_id ?? item.title ?? "section"}-${index}`}
+          className="print-section-item"
+        >
+          <TemplateBlock
+            block={{
+              template:
+                item.header_template ??
+                linkedSection?.header_template ??
+                "{{section_title}}\n{{instructions}}\n{{topic}}\n{{standards}}\n{{time}}",
+              alignment: instructionOptions.alignment,
+              horizontal_line: instructionOptions.horizontal_line,
+              spacing_after_lines: instructionOptions.spacing_after_lines,
+            }}
+            values={{
+              section_title: title,
+              instructions,
+              ...sectionMetadata,
+            }}
+            className="print-instruction-section"
+          />
+        </article>
+      );
+    }
+
+    const question = item.question_id ? questionsById[item.question_id] : null;
+    const suppressAutoHeader =
+      !!question &&
+      suppressAutoAfterManualSection &&
+      (!manualSectionQuestionType || manualSectionQuestionType === question.type);
+    const showSectionHeader =
+      !!question && !suppressAutoHeader && previousQuestionType !== question.type;
+    const section = question
+      ? getInstructionSection(settings, question.type)
+      : null;
+    const sectionRun = question
+      ? getSectionRun(selectedTest, index, questionsById)
+      : [];
+    const sectionMetadata = section
+      ? getSectionMetadata(section, instructionOptions, sectionRun)
+      : {};
+    const choices = question ? getChoices(question) : [];
+    const responseLines =
+      item.response_space_lines ?? settings.default_response_space_lines;
+
+    if (question) {
+      questionNumber += 1;
+      if (
+        suppressAutoAfterManualSection &&
+        (!manualSectionQuestionType || manualSectionQuestionType !== question.type)
+      ) {
+        suppressAutoAfterManualSection = false;
+        manualSectionQuestionType = null;
+      }
+      if (suppressAutoAfterManualSection && !manualSectionQuestionType) {
+        suppressAutoAfterManualSection = false;
+      }
+      previousQuestionType = question.type;
+    }
+
+    return (
+      <article key={`${item.question_id ?? "question"}-${index}`} className="print-question-item">
+        {showSectionHeader && section && question ? (
+          <TemplateBlock
+            block={{
+              template:
+                section.header_template ??
+                "{{section_title}}\n{{instructions}}\n{{topic}}\n{{standards}}\n{{time}}",
+              alignment: instructionOptions.alignment,
+              horizontal_line: instructionOptions.horizontal_line,
+              spacing_after_lines: instructionOptions.spacing_after_lines,
+            }}
+            values={{
+              section_title: section.title,
+              instructions: getSectionInstruction(section, question),
+              ...sectionMetadata,
+            }}
+            className="print-instruction-section"
+          />
+        ) : null}
+
+        {/* Number and prompt share one flex row so the text starts
+            beside the number rather than beneath it. */}
+        <div className="print-question-header">
+          <strong className="print-question-number">{questionNumber}.</strong>
+          {question ? (
+            <MathTextPreview text={question.prompt} className="print-question-prompt" />
+          ) : (
+            <p className="print-missing-question">
+              Question not found: {item.question_id}
+            </p>
+          )}
+        </div>
+
+        {question ? (
+          <>
+            <QuestionAssetFigures question={question} renders={assetRenders} />
+            {choices.length > 0 ? (
+              <ol className="print-choice-list">
+                {choices.map((choice, choiceIndex) => (
+                  <li key={`${choice}-${choiceIndex}`}>
+                    <span>{CHOICE_LABELS[choiceIndex] ?? `${choiceIndex + 1}`}</span>
+                    <MathTextPreview text={choice} preferWholeExpression />
+                  </li>
+                ))}
+              </ol>
+            ) : null}
+            {responseLines > 0 ? (
+              <div className="print-response-space">
+                {Array.from({ length: responseLines }).map((_, lineIndex) => (
+                  <i key={lineIndex} />
+                ))}
+              </div>
+            ) : null}
+          </>
+        ) : null}
+      </article>
+    );
+  });
+}
+
 function TestPrintPreview({ testId, onClose }: TestPrintPreviewProps) {
   const [tests, setTests] = useState<TestDraftDetailModel[]>([]);
   const [loading, setLoading] = useState(true);
@@ -384,7 +632,14 @@ function TestPrintPreview({ testId, onClose }: TestPrintPreviewProps) {
   // Kept separate from errorMessage on purpose: failing to render a diagram
   // must not replace the whole printable test with an error.
   const [assetError, setAssetError] = useState("");
+  const [printError, setPrintError] = useState("");
   const previewViewportRef = useRef<HTMLDivElement | null>(null);
+  const measureBlocksRef = useRef<HTMLDivElement | null>(null);
+  const measureLeadRef = useRef<HTMLDivElement | null>(null);
+  // Measured heights of every block, and of the full-width header/cover, in the
+  // exact column width they will print at. Null until the first measure lands.
+  const [blockHeights, setBlockHeights] = useState<number[] | null>(null);
+  const [leadHeight, setLeadHeight] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -464,6 +719,82 @@ function TestPrintPreview({ testId, onClose }: TestPrintPreviewProps) {
     };
   }, [selectedTest]);
 
+  // Everything below has to run before the early returns to keep hook order
+  // stable, so each piece tolerates `selectedTest` being null.
+  const previewSettings = selectedTest?.test.print_settings ?? null;
+  const geometry = useMemo(
+    () => (previewSettings ? getPageGeometry(previewSettings) : null),
+    [previewSettings],
+  );
+
+  const blocks = useMemo(() => {
+    if (!selectedTest || !previewSettings) return [] as ReactElement[];
+    return buildPrintBlocks({
+      selectedTest,
+      settings: previewSettings,
+      questionsById,
+      instructionOptions: getInstructionOptions(previewSettings),
+      assetRenders,
+    });
+  }, [selectedTest, previewSettings, questionsById, assetRenders]);
+
+  // Measure off-screen at the real column width, then flow the measurements into
+  // pages. A ResizeObserver covers content that settles late -- images decoding,
+  // KaTeX swapping in its own metrics.
+  useLayoutEffect(() => {
+    const container = measureBlocksRef.current;
+    if (!container) return;
+
+    const measure = () => {
+      const lead = measureLeadRef.current;
+      const nextLead = lead ? lead.getBoundingClientRect().height : 0;
+      const nextHeights = Array.from(container.children).map(
+        (child) => (child as HTMLElement).getBoundingClientRect().height,
+      );
+
+      setLeadHeight((current) => (Math.abs(current - nextLead) < 0.5 ? current : nextLead));
+      setBlockHeights((current) => {
+        if (
+          current &&
+          current.length === nextHeights.length &&
+          current.every((value, index) => Math.abs(value - nextHeights[index]) < 0.5)
+        ) {
+          return current;
+        }
+        return nextHeights;
+      });
+    };
+
+    measure();
+
+    const observer = new ResizeObserver(measure);
+    observer.observe(container);
+    if (measureLeadRef.current) observer.observe(measureLeadRef.current);
+    Array.from(container.children).forEach((child) => observer.observe(child));
+
+    return () => observer.disconnect();
+  }, [blocks, geometry, previewSettings]);
+
+  const pages = useMemo(() => {
+    if (!geometry || blocks.length === 0) return null;
+    if (!blockHeights || blockHeights.length !== blocks.length) return null;
+    return paginateBlocks(blockHeights, leadHeight, geometry);
+  }, [blockHeights, leadHeight, geometry, blocks.length]);
+
+  // A block taller than a whole column cannot be placed without splitting it,
+  // which is the one thing pagination will not do. Say so rather than quietly
+  // cropping the question off the sheet.
+  const oversizeBlockLabels = useMemo(() => {
+    if (!geometry || !blockHeights) return [] as string[];
+    return blockHeights.flatMap((height, index) => {
+      if (height <= geometry.contentHeight) return [];
+      const key = String(blocks[index]?.key ?? "");
+      // Keys look like "q_mc_0003-7"; the question id is the useful half.
+      const label = key.replace(/-\d+$/, "").replace(/^\.\$/, "");
+      return [label || `item ${index + 1}`];
+    });
+  }, [blockHeights, geometry, blocks]);
+
   if (loading) {
     return (
       <div className="print-preview-shell">
@@ -495,7 +826,20 @@ function TestPrintPreview({ testId, onClose }: TestPrintPreviewProps) {
         ),
       );
     }
-    window.print();
+
+    // Fonts settle after images: printing mid-swap reflows the sheets and can
+    // push a block onto the next page, which is exactly what pagination just
+    // worked out not to do.
+    if (document.fonts?.ready) {
+      await document.fonts.ready.catch(() => undefined);
+    }
+
+    try {
+      await printCurrentWindow(selectedTest.test.print_settings.page_size);
+      setPrintError("");
+    } catch (error) {
+      setPrintError((error as Error).message || String(error));
+    }
   }
 
   const settings = selectedTest.test.print_settings;
@@ -507,6 +851,39 @@ function TestPrintPreview({ testId, onClose }: TestPrintPreviewProps) {
     version: selectedTest.test.version,
     date: formatDate(),
   };
+  // `geometry` is memoized before the early returns, so it carries a null in its
+  // type even though a rendered preview always has settings to derive it from.
+  const pageGeometry = geometry ?? getPageGeometry(settings);
+
+  // The header or cover sheet: full page width, first page only.
+  const leadContent = settings.cover_sheet_enabled ? (
+    <section className="print-cover-sheet">
+      <TemplateBlock
+        block={pageHeader}
+        values={headerValues}
+        className="print-page-header-template"
+      />
+      {settings.name_field_enabled ? (
+        <TemplateBlock block={nameField} values={headerValues} className="print-name-template" />
+      ) : null}
+    </section>
+  ) : (
+    <div className="print-lead-block">
+      <TemplateBlock
+        block={pageHeader}
+        values={headerValues}
+        className="print-page-header-template compact"
+      />
+      {settings.name_field_enabled ? (
+        <TemplateBlock
+          block={nameField}
+          values={headerValues}
+          className="print-name-template compact"
+        />
+      ) : null}
+    </div>
+  );
+
   const pageSizeForPrint = settings.page_size === "a4" ? "A4" : settings.page_size;
   const printStyle = {
     "--print-font-size": `${settings.font_size_pt}pt`,
@@ -516,8 +893,8 @@ function TestPrintPreview({ testId, onClose }: TestPrintPreviewProps) {
   const scrollPreviewPage = (direction: -1 | 1) => {
     const viewport = previewViewportRef.current;
     if (!viewport) return;
-    const page = viewport.querySelector<HTMLElement>(".print-page");
-    const distance = page ? page.getBoundingClientRect().height + 24 : viewport.clientHeight * 0.85;
+    const page = viewport.querySelector<HTMLElement>(".print-page-wrapper");
+    const distance = page ? page.getBoundingClientRect().height : viewport.clientHeight * 0.85;
     viewport.scrollBy({ top: direction * distance, behavior: "smooth" });
   };
 
@@ -537,6 +914,18 @@ function TestPrintPreview({ testId, onClose }: TestPrintPreviewProps) {
             Asset previews unavailable ({assetError}). The test below prints without figures.
           </span>
         ) : null}
+        {printError ? (
+          <span className="print-preview-warning" role="status">
+            {printError}
+          </span>
+        ) : null}
+        {oversizeBlockLabels.length > 0 ? (
+          <span className="print-preview-warning" role="status">
+            {oversizeBlockLabels.length === 1 ? "1 question is" : `${oversizeBlockLabels.length} questions are`}{" "}
+            taller than one column and will be cut off: {oversizeBlockLabels.join(", ")}. Shorten the
+            prompt, trim response lines, or use fewer columns.
+          </span>
+        ) : null}
         <div className="print-preview-actions">
           <button type="button" onClick={() => scrollPreviewPage(-1)}>
             Previous Page
@@ -554,188 +943,61 @@ function TestPrintPreview({ testId, onClose }: TestPrintPreviewProps) {
       </div>
 
       <div ref={previewViewportRef} className="print-preview-viewport">
-        <main className={`print-page page-${settings.page_size}`}>
-          {settings.cover_sheet_enabled ? (
-            <section className="print-cover-sheet">
-              <TemplateBlock
-                block={pageHeader}
-                values={headerValues}
-                className="print-page-header-template"
-              />
-              {settings.name_field_enabled ? (
-                <TemplateBlock
-                  block={nameField}
-                  values={headerValues}
-                  className="print-name-template"
-                />
-              ) : null}
-            </section>
-          ) : (
-            <>
-              <TemplateBlock
-                block={pageHeader}
-                values={headerValues}
-                className="print-page-header-template compact"
-              />
-              {settings.name_field_enabled ? (
-                <TemplateBlock
-                  block={nameField}
-                  values={headerValues}
-                  className="print-name-template compact"
-                />
-              ) : null}
-            </>
-          )}
+        {/* Hidden measuring pass: the same blocks at the exact width they will
+            print at, so their heights decide where the pages break. */}
+        <div className="print-measure" aria-hidden="true">
+          <div
+            ref={measureLeadRef}
+            className="print-measure-lead"
+            style={{ width: `${pageGeometry.contentWidth}px` }}
+          >
+            {leadContent}
+          </div>
+          <div
+            ref={measureBlocksRef}
+            className="print-measure-blocks"
+            style={{ width: `${pageGeometry.columnWidth}px` }}
+          >
+            {blocks.map((block, index) => (
+              <div className="print-measure-block" key={block.key ?? index}>
+                {block}
+              </div>
+            ))}
+          </div>
+        </div>
 
-          <section className="print-question-flow">
-            {(() => {
-              let questionNumber = 0;
-              let previousQuestionType: QuestionType | null = null;
-              let manualSectionQuestionType: QuestionType | null = null;
-              let suppressAutoAfterManualSection = false;
-
-              return selectedTest.test.items.map((item, index) => {
-                if (isSectionItem(item)) {
-                  const sectionRun = getManualSectionRun(selectedTest, index, questionsById);
-                  const linkedSection = item.question_type
-                    ? getInstructionSection(settings, item.question_type)
-                    : null;
-                  const firstQuestion = sectionRun[0] ?? null;
-                  const title = item.title || linkedSection?.title || "Section";
-                  const instructions =
-                    item.instructions ||
-                    (linkedSection && firstQuestion
-                      ? getSectionInstruction(linkedSection, firstQuestion)
-                      : linkedSection?.instructions) ||
-                    "";
-                  const sectionMetadata = getManualSectionMetadata(item, instructionOptions, sectionRun);
-                  previousQuestionType = null;
-                  manualSectionQuestionType = item.question_type ?? null;
-                  suppressAutoAfterManualSection = true;
-
-                  return (
-                    <article
-                      key={`${item.section_id ?? item.title ?? "section"}-${index}`}
-                      className="print-section-item"
-                    >
-                      <TemplateBlock
-                        block={{
-                          template:
-                            item.header_template ??
-                            linkedSection?.header_template ??
-                            "{{section_title}}\n{{instructions}}\n{{topic}}\n{{standards}}\n{{time}}",
-                          alignment: instructionOptions.alignment,
-                          horizontal_line: instructionOptions.horizontal_line,
-                          spacing_after_lines: instructionOptions.spacing_after_lines,
-                        }}
-                        values={{
-                          section_title: title,
-                          instructions,
-                          ...sectionMetadata,
-                        }}
-                        className="print-instruction-section"
-                      />
-                    </article>
-                  );
-                }
-
-                const question = item.question_id ? questionsById[item.question_id] : null;
-                const suppressAutoHeader =
-                  !!question &&
-                  suppressAutoAfterManualSection &&
-                  (!manualSectionQuestionType || manualSectionQuestionType === question.type);
-                const showSectionHeader =
-                  !!question && !suppressAutoHeader && previousQuestionType !== question.type;
-                const section = question
-                  ? getInstructionSection(settings, question.type)
-                  : null;
-                const sectionRun = question
-                  ? getSectionRun(selectedTest, index, questionsById)
-                  : [];
-                const sectionMetadata = section
-                  ? getSectionMetadata(section, instructionOptions, sectionRun)
-                  : {};
-                const choices = question ? getChoices(question) : [];
-                const responseLines =
-                  item.response_space_lines ?? settings.default_response_space_lines;
-
-                if (question) {
-                  questionNumber += 1;
-                  if (
-                    suppressAutoAfterManualSection &&
-                    (!manualSectionQuestionType || manualSectionQuestionType !== question.type)
-                  ) {
-                    suppressAutoAfterManualSection = false;
-                    manualSectionQuestionType = null;
-                  }
-                  if (suppressAutoAfterManualSection && !manualSectionQuestionType) {
-                    suppressAutoAfterManualSection = false;
-                  }
-                  previousQuestionType = question.type;
-                }
-
-                return (
-                  <article key={`${item.question_id ?? "question"}-${index}`} className="print-question-item">
-                    {showSectionHeader && section && question ? (
-                      <TemplateBlock
-                        block={{
-                          template:
-                            section.header_template ??
-                            "{{section_title}}\n{{instructions}}\n{{topic}}\n{{standards}}\n{{time}}",
-                          alignment: instructionOptions.alignment,
-                          horizontal_line: instructionOptions.horizontal_line,
-                          spacing_after_lines: instructionOptions.spacing_after_lines,
-                        }}
-                        values={{
-                          section_title: section.title,
-                          instructions: getSectionInstruction(section, question),
-                          ...sectionMetadata,
-                        }}
-                        className="print-instruction-section"
-                      />
-                    ) : null}
-
-                    {/* Number and prompt share one flex row so the text starts
-                        beside the number rather than beneath it. */}
-                    <div className="print-question-header">
-                      <strong className="print-question-number">{questionNumber}.</strong>
-                      {question ? (
-                        <MathTextPreview text={question.prompt} className="print-question-prompt" />
-                      ) : (
-                        <p className="print-missing-question">
-                          Question not found: {item.question_id}
-                        </p>
-                      )}
-                    </div>
-
-                    {question ? (
-                      <>
-                        <QuestionAssetFigures question={question} renders={assetRenders} />
-                        {choices.length > 0 ? (
-                          <ol className="print-choice-list">
-                            {choices.map((choice, choiceIndex) => (
-                              <li key={`${choice}-${choiceIndex}`}>
-                                <span>{CHOICE_LABELS[choiceIndex] ?? `${choiceIndex + 1}`}</span>
-                                <MathTextPreview text={choice} preferWholeExpression />
-                              </li>
-                            ))}
-                          </ol>
-                        ) : null}
-                        {responseLines > 0 ? (
-                          <div className="print-response-space">
-                            {Array.from({ length: responseLines }).map((_, lineIndex) => (
-                              <i key={lineIndex} />
-                            ))}
-                          </div>
-                        ) : null}
-                      </>
-                    ) : null}
-                  </article>
-                );
-              });
-            })()}
-          </section>
-        </main>
+        {(pages ?? [[blocks.map((_, index) => index)]]).map((page, pageIndex, allPages) => (
+          <div className="print-page-wrapper" key={`page-${pageIndex}`}>
+            <main
+              className={`print-page page-${settings.page_size}${
+                pageIndex === allPages.length - 1 ? " print-page-last" : ""
+              }`}
+              style={{ width: `${pageGeometry.pageWidth}px`, height: `${pageGeometry.pageHeight}px` }}
+            >
+              {/* Dotted rule showing where the margin actually falls. */}
+              <div className="print-page-margin-guide" aria-hidden="true" />
+              {pageIndex === 0 ? leadContent : null}
+              <div
+                className="print-page-columns"
+                style={{
+                  gap: `${pageGeometry.columnGap}px`,
+                  gridTemplateColumns: `repeat(${pageGeometry.columns}, minmax(0, 1fr))`,
+                }}
+              >
+                {page.map((columnBlocks, columnIndex) => (
+                  <div className="print-page-column" key={`column-${columnIndex}`}>
+                    {columnBlocks.map((blockIndex) => blocks[blockIndex])}
+                  </div>
+                ))}
+              </div>
+            </main>
+            <div className="print-page-break" aria-hidden="true">
+              <span>
+                Page {pageIndex + 1} of {allPages.length}
+              </span>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );

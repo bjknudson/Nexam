@@ -5,10 +5,12 @@ import type {
   AssetModel,
   AssetUploadResponseModel,
   BankSummaryModel,
+  CourseDetailModel,
   CourseListResponseModel,
   CourseModel,
   CreateQuestionsFromJsonResponse,
   CreateStandardsManuallyRequest,
+  StandardImportInspectionModel,
   QuestionImportListResponseModel,
   QuestionImportPromoteResponseModel,
   QuestionImportStageModel,
@@ -113,16 +115,40 @@ export async function listStandards(params?: {
   source_list_id?: string;
   search?: string;
   course_id?: string;
+  strand?: string;
+  sort?: string;
 }): Promise<StandardSearchResponseModel> {
   const searchParams = new URLSearchParams();
   if (params?.source_list_id) searchParams.set("source_list_id", params.source_list_id);
   if (params?.search) searchParams.set("search", params.search);
   if (params?.course_id) searchParams.set("course_id", params.course_id);
+  if (params?.strand) searchParams.set("strand", params.strand);
+  if (params?.sort) searchParams.set("sort", params.sort);
   return handleResponse(await fetch(buildApiUrl(`/api/standards?${searchParams.toString()}`)));
 }
 
 export async function listCourses(): Promise<CourseListResponseModel> {
   return handleResponse(await fetch(buildApiUrl("/api/courses")));
+}
+
+export async function getCourseDetail(courseId: string): Promise<CourseDetailModel> {
+  return handleResponse(
+    await fetch(buildApiUrl(`/api/courses/${encodeURIComponent(courseId)}`)),
+  );
+}
+
+export async function deleteCourse(courseId: string): Promise<void> {
+  const response = await fetch(buildApiUrl(`/api/courses/${encodeURIComponent(courseId)}`), {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({ detail: "Request failed." }));
+    const detail =
+      typeof payload.detail === "string"
+        ? payload.detail
+        : JSON.stringify(payload.detail ?? "Request failed.");
+    throw new Error(detail);
+  }
 }
 
 export async function upsertCourse(
@@ -132,6 +158,23 @@ export async function upsertCourse(
   return handleResponse(
     await fetch(buildApiUrl(`/api/courses/${encodeURIComponent(courseId)}`), {
       method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+export async function seedCourseFrom(
+  courseId: string,
+  payload: {
+    source_course_id: string;
+    include_standards: boolean;
+    include_tests: boolean;
+  },
+): Promise<CourseDetailModel> {
+  return handleResponse(
+    await fetch(buildApiUrl(`/api/courses/${encodeURIComponent(courseId)}/seed`), {
+      method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     }),
@@ -185,6 +228,19 @@ export async function importStandards(payload: {
   if (payload.description) formData.append("description", payload.description);
   return handleResponse(
     await fetch(buildApiUrl("/api/standards/import"), {
+      method: "POST",
+      body: formData,
+    }),
+  );
+}
+
+export async function inspectStandardImport(
+  file: File,
+): Promise<StandardImportInspectionModel> {
+  const formData = new FormData();
+  formData.append("file", file);
+  return handleResponse(
+    await fetch(buildApiUrl("/api/standards/import/inspect"), {
       method: "POST",
       body: formData,
     }),
@@ -310,6 +366,7 @@ export async function listTestDrafts(): Promise<TestDraftListResponseModel> {
 export async function createTestDraft(payload: {
   title: string;
   version?: string;
+  course_ids?: string[];
 }): Promise<TestDraftDetailModel> {
   return handleResponse(
     await fetch(buildApiUrl("/api/tests"), {
@@ -318,7 +375,41 @@ export async function createTestDraft(payload: {
       body: JSON.stringify({
         title: payload.title,
         version: payload.version || "A",
+        course_ids: payload.course_ids ?? [],
       }),
+    }),
+  );
+}
+
+export async function setTestCourses(
+  testId: string,
+  courseIds: string[],
+): Promise<TestDraftDetailModel> {
+  return handleResponse(
+    await fetch(buildApiUrl(`/api/tests/${encodeURIComponent(testId)}/courses`), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ course_ids: courseIds }),
+    }),
+  );
+}
+
+export async function copyTestDraft(
+  testId: string,
+  payload: {
+    title?: string;
+    version?: string;
+    course_ids?: string[];
+    detach_courses_from_source?: boolean;
+    /** Pre-edit snapshot to write back over the original, if it should revert. */
+    source_restore?: TestDraftModel | null;
+  },
+): Promise<TestDraftDetailModel> {
+  return handleResponse(
+    await fetch(buildApiUrl(`/api/tests/${encodeURIComponent(testId)}/copy`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
     }),
   );
 }

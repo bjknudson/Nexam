@@ -2,22 +2,24 @@ import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  attachStandardToCourse,
   createStandardsManually,
-  detachStandardFromCourse,
   importStandards,
-  listCourses,
+  inspectStandardImport,
   listSourceStandardLists,
   listStandards,
   updateStandard,
-  upsertCourse,
 } from "./api";
-import type { CourseModel, SourceStandardListModel, StandardRecordModel } from "./types";
+import type {
+  SourceStandardListModel,
+  StandardImportInspectionModel,
+  StandardRecordModel,
+} from "./types";
 
 const PANE_SYNC_CHANNEL = "nexzam-pane-sync";
-const NEW_SOURCE_LIST_OPTION = "__new__";
+const NEW_SOURCE_OPTION = "__new__";
 
 type StandardsWorkspaceMode = "workspace" | "picker";
+type StandardSortMode = "source" | "code" | "strand" | "id";
 
 interface QuestionStandardsSnapshot {
   questionId: string | null;
@@ -42,30 +44,51 @@ interface StandardEditDraft {
   code: string;
   statement: string;
   subject: string;
+  strand: string;
   grade_band: string;
   tagsText: string;
 }
 
+/**
+ * A standard being typed in by hand, including the source it belongs to.
+ *
+ * Every standard has a source, so each row either points at a source already in
+ * the library or carries the details of a new one.
+ */
 interface ManualStandardRow {
   key: string;
+  sourceListId: string;
+  sourceTitle: string;
+  sourceIssuer: string;
+  sourceSubject: string;
+  sourceVersion: string;
+  sourceDescription: string;
   id: string;
   code: string;
   statement: string;
   subject: string;
+  strand: string;
   grade_band: string;
   tagsText: string;
 }
 
 let manualRowSerial = 0;
 
-function buildManualStandardRow(): ManualStandardRow {
+function buildManualStandardRow(sourceListId = ""): ManualStandardRow {
   manualRowSerial += 1;
   return {
     key: `manual-row-${manualRowSerial}`,
+    sourceListId,
+    sourceTitle: "",
+    sourceIssuer: "",
+    sourceSubject: "",
+    sourceVersion: "",
+    sourceDescription: "",
     id: "",
     code: "",
     statement: "",
     subject: "",
+    strand: "",
     grade_band: "",
     tagsText: "",
   };
@@ -77,6 +100,7 @@ function isManualRowEmpty(row: ManualStandardRow): boolean {
     row.code.trim() ||
     row.statement.trim() ||
     row.subject.trim() ||
+    row.strand.trim() ||
     row.grade_band.trim() ||
     row.tagsText.trim()
   );
@@ -92,7 +116,7 @@ function StandardTableRow({
   children,
 }: {
   standard: StandardRecordModel;
-  sourceLabel?: string;
+  sourceLabel: string;
   children: ReactNode;
 }) {
   return (
@@ -102,6 +126,10 @@ function StandardTableRow({
       </span>
       <span className="standards-cell-code">{standard.code}</span>
       <span className="standards-cell-statement">{standard.statement}</span>
+      <span className="standards-cell-source" title={sourceLabel}>
+        {sourceLabel}
+      </span>
+      <span className="standards-cell-strand">{standard.strand ?? "-"}</span>
       <span className="standards-cell-subject">{standard.subject ?? "-"}</span>
       <span className="standards-cell-grade">{standard.grade_band ?? "-"}</span>
       <span className="standards-cell-tags">
@@ -114,7 +142,6 @@ function StandardTableRow({
         ) : (
           <span className="standards-cell-muted">-</span>
         )}
-        {sourceLabel ? <span className="standards-cell-source">{sourceLabel}</span> : null}
       </span>
       <span className="standards-cell-actions">{children}</span>
     </div>
@@ -127,6 +154,8 @@ function StandardTableHead() {
       <span>Standard ID</span>
       <span>Short Name</span>
       <span>Standard Text</span>
+      <span>Source</span>
+      <span>Strand</span>
       <span>Subject</span>
       <span>Grade Band</span>
       <span>Topic Tags</span>
@@ -142,6 +171,7 @@ function buildStandardEditDraft(standard: StandardRecordModel): StandardEditDraf
     code: standard.code,
     statement: standard.statement,
     subject: standard.subject ?? "",
+    strand: standard.strand ?? "",
     grade_band: standard.grade_band ?? "",
     tagsText: standard.tags.join(", "),
   };
@@ -171,27 +201,20 @@ export default function StandardsWorkspace({
   const pickerMode = mode === "picker";
   const [sourceLists, setSourceLists] = useState<SourceStandardListModel[]>([]);
   const [standards, setStandards] = useState<StandardRecordModel[]>([]);
-  const [courses, setCourses] = useState<CourseModel[]>([]);
   const [selectedSourceListId, setSelectedSourceListId] = useState("");
-  const [selectedCourseId, setSelectedCourseId] = useState("");
-  const [sourceSearch, setSourceSearch] = useState("");
-  const [courseSearch, setCourseSearch] = useState("");
-  const [courseDraftTitle, setCourseDraftTitle] = useState("");
-  const [courseDraftDescription, setCourseDraftDescription] = useState("");
+  const [selectedStrand, setSelectedStrand] = useState("");
+  const [sortMode, setSortMode] = useState<StandardSortMode>("source");
+  const [search, setSearch] = useState("");
   const [importFile, setImportFile] = useState<File | null>(null);
+  const [importInspection, setImportInspection] =
+    useState<StandardImportInspectionModel | null>(null);
+  const [inspecting, setInspecting] = useState(false);
   const [importSourceListId, setImportSourceListId] = useState("");
   const [importTitle, setImportTitle] = useState("");
   const [importIssuer, setImportIssuer] = useState("");
   const [importSubject, setImportSubject] = useState("");
   const [importVersion, setImportVersion] = useState("");
   const [importDescription, setImportDescription] = useState("");
-  const [manualSourceListId, setManualSourceListId] = useState(NEW_SOURCE_LIST_OPTION);
-  const [manualListId, setManualListId] = useState("");
-  const [manualTitle, setManualTitle] = useState("");
-  const [manualIssuer, setManualIssuer] = useState("");
-  const [manualSubject, setManualSubject] = useState("");
-  const [manualVersion, setManualVersion] = useState("");
-  const [manualDescription, setManualDescription] = useState("");
   const [manualRows, setManualRows] = useState<ManualStandardRow[]>([buildManualStandardRow()]);
   const [editingStandardId, setEditingStandardId] = useState<string | null>(null);
   const [standardEditDraft, setStandardEditDraft] = useState<StandardEditDraft | null>(null);
@@ -201,8 +224,6 @@ export default function StandardsWorkspace({
   const [errorMessage, setErrorMessage] = useState("");
   const [showImportPanel, setShowImportPanel] = useState(false);
   const [showManualPanel, setShowManualPanel] = useState(false);
-  const [showSourceDrawer, setShowSourceDrawer] = useState(false);
-  const [showSourceListsPanel, setShowSourceListsPanel] = useState(false);
   const [questionStandardsState, setQuestionStandardsState] = useState<QuestionStandardsSnapshot>({
     questionId: null,
     attachedStandardIds: [],
@@ -213,14 +234,12 @@ export default function StandardsWorkspace({
   async function refreshData() {
     setLoading(true);
     try {
-      const [sourceListResponse, standardsResponse, coursesResponse] = await Promise.all([
+      const [sourceListResponse, standardsResponse] = await Promise.all([
         listSourceStandardLists(),
         listStandards(),
-        listCourses(),
       ]);
       setSourceLists(sourceListResponse.items);
       setStandards(standardsResponse.items);
-      setCourses(coursesResponse.items);
       setErrorMessage("");
     } catch (error) {
       setErrorMessage((error as Error).message);
@@ -274,26 +293,6 @@ export default function StandardsWorkspace({
   }, [pickerMode]);
 
   useEffect(() => {
-    if (!selectedCourseId) {
-      setCourseDraftTitle("");
-      setCourseDraftDescription("");
-      return;
-    }
-
-    const course = courses.find((item) => item.id === selectedCourseId);
-    if (!course) return;
-    setCourseDraftTitle(course.title);
-    setCourseDraftDescription(course.description ?? "");
-  }, [courses, selectedCourseId]);
-
-  useEffect(() => {
-    if (pickerMode) return;
-    if (selectedCourseId) return;
-    if (courses.length === 0) return;
-    setSelectedCourseId(courses[0].id);
-  }, [courses, pickerMode, selectedCourseId]);
-
-  useEffect(() => {
     if (!importTitle.trim()) return;
     if (importSourceListId.trim()) return;
     setImportSourceListId(normalizeId(importTitle));
@@ -305,154 +304,114 @@ export default function StandardsWorkspace({
     return () => window.clearTimeout(timer);
   }, [statusMessage]);
 
-  const selectedCourse = courses.find((course) => course.id === selectedCourseId) ?? null;
-  const selectedCourseStandardIds = new Set(
-    selectedCourse?.standard_refs.map((reference) => reference.standard_id) ?? [],
-  );
   const selectedQuestionStandardIds = new Set(questionStandardsState.attachedStandardIds);
-  const selectedSourceList = sourceLists.find((item) => item.id === selectedSourceListId) ?? null;
-  const computedCourseId = normalizeId(courseDraftTitle);
   const standardsById = useMemo(
     () => Object.fromEntries(standards.map((standard) => [standard.id, standard])),
     [standards],
   );
+  const sourceTitleById = useMemo(
+    () => Object.fromEntries(sourceLists.map((sourceList) => [sourceList.id, sourceList.title])),
+    [sourceLists],
+  );
 
-  const filteredSourceStandards = useMemo(() => {
-    const needle = sourceSearch.trim().toLowerCase();
-    return standards.filter((standard) => {
-      if (selectedSourceListId && standard.source_list_id !== selectedSourceListId) {
-        return false;
-      }
+  function sourceLabel(standard: StandardRecordModel): string {
+    return sourceTitleById[standard.source_list_id] ?? standard.source_list_id;
+  }
+
+  const availableStrands = useMemo(() => {
+    const found = new Set<string>();
+    for (const standard of standards) {
+      const strand = (standard.strand ?? "").trim();
+      if (strand) found.add(strand);
+    }
+    return Array.from(found).sort((left, right) => left.localeCompare(right));
+  }, [standards]);
+
+  /** The library, narrowed by the current filters and ordered by the sort mode. */
+  const visibleStandards = useMemo(() => {
+    const labelOf = (standard: StandardRecordModel) =>
+      sourceTitleById[standard.source_list_id] ?? standard.source_list_id;
+    const needle = search.trim().toLowerCase();
+    const filtered = standards.filter((standard) => {
+      if (selectedSourceListId && standard.source_list_id !== selectedSourceListId) return false;
+      if (selectedStrand && (standard.strand ?? "").trim() !== selectedStrand) return false;
       if (!needle) return true;
       const haystack = [
         standard.id,
         standard.code,
         standard.statement,
         standard.subject ?? "",
+        standard.strand ?? "",
         standard.grade_band ?? "",
         standard.tags.join(" "),
+        labelOf(standard),
       ]
         .join(" ")
         .toLowerCase();
       return haystack.includes(needle);
     });
-  }, [selectedSourceListId, sourceSearch, standards]);
 
-  const curatedStandards = useMemo(() => {
-    if (!selectedCourse) return [];
-
-    const needle = courseSearch.trim().toLowerCase();
-    return selectedCourse.standard_refs
-      .map((reference) => standardsById[reference.standard_id])
-      .filter((standard): standard is StandardRecordModel => Boolean(standard))
-      .filter((standard) => {
-        if (!needle) return true;
-        const haystack = [
-          standard.id,
-          standard.code,
-          standard.statement,
-          standard.subject ?? "",
-          standard.grade_band ?? "",
-          standard.tags.join(" "),
-        ]
-          .join(" ")
-          .toLowerCase();
-        return haystack.includes(needle);
-      });
-  }, [courseSearch, selectedCourse, standardsById]);
-
-  function handleNewCourse() {
-    setSelectedCourseId("");
-    setCourseDraftTitle("");
-    setCourseDraftDescription("");
-    setErrorMessage("");
-    setStatusMessage("Started a new course library draft.");
-  }
-
-  async function persistCourse(courseId: string, title: string) {
-    const saved = await upsertCourse(courseId, {
-      title,
-      description: courseDraftDescription || null,
-      standard_refs: selectedCourse?.standard_refs ?? [],
-    });
-    setSelectedCourseId(saved.id);
-    setStatusMessage(`Saved ${saved.title}.`);
-    channelRef.current?.postMessage({ type: "standards-data-changed" });
-    await refreshData();
-  }
-
-  async function handleSaveCourse() {
-    if (!courseDraftTitle.trim()) {
-      setErrorMessage("Course title is required.");
-      return;
-    }
-
-    const targetCourseId = selectedCourseId || computedCourseId;
-    if (!targetCourseId) {
-      setErrorMessage("Course title must produce a valid library id.");
-      return;
-    }
-
-    setBusy(true);
-    try {
-      await persistCourse(targetCourseId, courseDraftTitle.trim());
-      setErrorMessage("");
-    } catch (error) {
-      setErrorMessage((error as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleSaveCourseAs() {
-    const defaultTitle = courseDraftTitle.trim() || `${selectedCourse?.title ?? "New Course"} Copy`;
-    const requestedTitle = window.prompt("Save course library as", defaultTitle);
-    if (requestedTitle === null) return;
-
-    const nextTitle = requestedTitle.trim();
-    const nextCourseId = normalizeId(nextTitle);
-    if (!nextTitle || !nextCourseId) {
-      setErrorMessage("Provide a course title that produces a valid library id.");
-      return;
-    }
-    if (courses.some((course) => course.id === nextCourseId && course.id !== selectedCourseId)) {
-      setErrorMessage(`A course library already exists for ${nextTitle}. Choose a different title.`);
-      return;
-    }
-
-    setBusy(true);
-    try {
-      setCourseDraftTitle(nextTitle);
-      await persistCourse(nextCourseId, nextTitle);
-      setErrorMessage("");
-    } catch (error) {
-      setErrorMessage((error as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleToggleCourseStandard(standardId: string) {
-    if (!selectedCourse) {
-      setErrorMessage("Select or create a course before curating standards.");
-      return;
-    }
-
-    setBusy(true);
-    try {
-      if (selectedCourseStandardIds.has(standardId)) {
-        await detachStandardFromCourse(selectedCourse.id, standardId);
-        setStatusMessage(`Removed ${standardId} from ${selectedCourse.id}.`);
-      } else {
-        await attachStandardToCourse(selectedCourse.id, standardId);
-        setStatusMessage(`Added ${standardId} to ${selectedCourse.id}.`);
+    const byText = (left: string, right: string) => left.localeCompare(right);
+    return [...filtered].sort((left, right) => {
+      if (sortMode === "code") return byText(left.code, right.code) || byText(left.id, right.id);
+      if (sortMode === "id") return byText(left.id, right.id);
+      if (sortMode === "strand") {
+        // Standards without a strand sort last rather than first.
+        return byText(left.strand ?? "~", right.strand ?? "~") || byText(left.code, right.code);
       }
-      channelRef.current?.postMessage({ type: "standards-data-changed" });
-      await refreshData();
+      return (
+        byText(labelOf(left), labelOf(right)) ||
+        byText(left.strand ?? "", right.strand ?? "") ||
+        byText(left.code, right.code)
+      );
+    });
+  }, [search, selectedSourceListId, selectedStrand, sortMode, sourceTitleById, standards]);
+
+  function resetImportForm() {
+    setImportFile(null);
+    setImportInspection(null);
+    setImportSourceListId("");
+    setImportTitle("");
+    setImportIssuer("");
+    setImportSubject("");
+    setImportVersion("");
+    setImportDescription("");
+  }
+
+  /**
+   * Read the chosen file's own source information before asking for any.
+   *
+   * A file that names a source for every standard needs nothing more from the
+   * teacher; only the gaps get a form.
+   */
+  async function handleChooseImportFile(file: File | null) {
+    setImportFile(file);
+    setImportInspection(null);
+    setErrorMessage("");
+    if (!file) return;
+
+    setInspecting(true);
+    try {
+      const inspection = await inspectStandardImport(file);
+      setImportInspection(inspection);
+
+      const detectedFallback = inspection.detected_sources.find(
+        (source) => !source.matches_existing_source,
+      );
+      if (inspection.needs_source_input && detectedFallback) {
+        // The file gestured at a source but left something out; prefill what it
+        // did say so the teacher only fills the gaps.
+        setImportSourceListId(detectedFallback.id ?? "");
+        setImportTitle(detectedFallback.title ?? "");
+        setImportIssuer(detectedFallback.issuer ?? "");
+        setImportSubject(detectedFallback.subject ?? "");
+        setImportVersion(detectedFallback.version ?? "");
+        setImportDescription(detectedFallback.description ?? "");
+      }
     } catch (error) {
       setErrorMessage((error as Error).message);
     } finally {
-      setBusy(false);
+      setInspecting(false);
     }
   }
 
@@ -473,17 +432,15 @@ export default function StandardsWorkspace({
         version: importVersion || undefined,
         description: importDescription || undefined,
       });
+      const sourceNames = response.source_lists.map((item) => item.title).join(", ");
       setStatusMessage(
-        `Imported ${response.imported_count} standards into ${response.source_list.title}.`,
+        `Imported ${response.imported_count} standards into ${sourceNames || response.source_list.title}.`,
       );
-      setSelectedSourceListId(response.source_list.id);
-      setImportFile(null);
-      setImportSourceListId("");
-      setImportTitle("");
-      setImportIssuer("");
-      setImportSubject("");
-      setImportVersion("");
-      setImportDescription("");
+      setSelectedSourceListId(
+        response.source_lists.length === 1 ? response.source_list.id : "",
+      );
+      resetImportForm();
+      setShowImportPanel(false);
       channelRef.current?.postMessage({ type: "standards-data-changed" });
       await refreshData();
     } catch (error) {
@@ -504,7 +461,13 @@ export default function StandardsWorkspace({
   }
 
   function handleAddManualRow() {
-    setManualRows((rows) => [...rows, buildManualStandardRow()]);
+    setManualRows((rows) => {
+      // Most standards typed in one sitting share a source, so carry the last
+      // row's choice forward. A half-typed new source is not carried, since the
+      // new row would inherit the dropdown without any of the details behind it.
+      const previous = rows[rows.length - 1]?.sourceListId ?? "";
+      return [...rows, buildManualStandardRow(previous === NEW_SOURCE_OPTION ? "" : previous)];
+    });
   }
 
   function handleRemoveManualRow(key: string) {
@@ -515,13 +478,6 @@ export default function StandardsWorkspace({
   }
 
   function resetManualStandards() {
-    setManualSourceListId(NEW_SOURCE_LIST_OPTION);
-    setManualListId("");
-    setManualTitle("");
-    setManualIssuer("");
-    setManualSubject("");
-    setManualVersion("");
-    setManualDescription("");
     setManualRows([buildManualStandardRow()]);
   }
 
@@ -556,36 +512,54 @@ export default function StandardsWorkspace({
       return;
     }
 
-    const creatingSourceList = manualSourceListId === NEW_SOURCE_LIST_OPTION;
-    if (creatingSourceList && !(manualListId.trim() && manualTitle.trim() && manualIssuer.trim())) {
-      setErrorMessage("A new source list needs an id, a title, and an issuer.");
+    const missingSource = filledRows.find((row) => !row.sourceListId);
+    if (missingSource) {
+      setErrorMessage("Every standard needs a source. Pick one or add a new source.");
+      return;
+    }
+
+    const incompleteSource = filledRows.find(
+      (row) =>
+        row.sourceListId === NEW_SOURCE_OPTION &&
+        !(row.sourceTitle.trim() && row.sourceIssuer.trim()),
+    );
+    if (incompleteSource) {
+      setErrorMessage("A new source needs a title and an issuer.");
       return;
     }
 
     setBusy(true);
     try {
       const response = await createStandardsManually({
-        source_list_id: creatingSourceList ? manualListId : manualSourceListId,
-        title: creatingSourceList ? manualTitle : undefined,
-        issuer: creatingSourceList ? manualIssuer : undefined,
-        subject: creatingSourceList ? manualSubject || undefined : undefined,
-        version: creatingSourceList ? manualVersion || undefined : undefined,
-        description: creatingSourceList ? manualDescription || undefined : undefined,
-        standards: filledRows.map((row) => ({
-          id: row.id.trim(),
-          code: row.code.trim() || undefined,
-          statement: row.statement.trim(),
-          subject: row.subject.trim() || undefined,
-          grade_band: row.grade_band.trim() || undefined,
-          tags: parseTags(row.tagsText),
-        })),
+        standards: filledRows.map((row) => {
+          const creatingSource = row.sourceListId === NEW_SOURCE_OPTION;
+          return {
+            id: row.id.trim(),
+            code: row.code.trim() || undefined,
+            statement: row.statement.trim(),
+            subject: row.subject.trim() || undefined,
+            strand: row.strand.trim() || undefined,
+            grade_band: row.grade_band.trim() || undefined,
+            tags: parseTags(row.tagsText),
+            source_list_id: creatingSource
+              ? normalizeId(row.sourceTitle)
+              : row.sourceListId,
+            source_title: creatingSource ? row.sourceTitle.trim() : undefined,
+            source_issuer: creatingSource ? row.sourceIssuer.trim() : undefined,
+            source_subject: creatingSource ? row.sourceSubject.trim() || undefined : undefined,
+            source_version: creatingSource ? row.sourceVersion.trim() || undefined : undefined,
+            source_description: creatingSource
+              ? row.sourceDescription.trim() || undefined
+              : undefined,
+          };
+        }),
       });
 
+      const sourceNames = response.source_lists.map((item) => item.title).join(", ");
       setStatusMessage(
-        `Added ${response.imported_count} standards to ${response.source_list.title}.`,
+        `Added ${response.imported_count} standards to ${sourceNames || response.source_list.title}.`,
       );
       setErrorMessage("");
-      setSelectedSourceListId(response.source_list.id);
       resetManualStandards();
       setShowManualPanel(false);
       channelRef.current?.postMessage({ type: "standards-data-changed" });
@@ -637,11 +611,12 @@ export default function StandardsWorkspace({
       code: standardEditDraft.code.trim(),
       statement: standardEditDraft.statement.trim(),
       subject: standardEditDraft.subject.trim() || null,
+      strand: standardEditDraft.strand.trim() || null,
       grade_band: standardEditDraft.grade_band.trim() || null,
       tags: parseTags(standardEditDraft.tagsText),
     };
     if (!payload.id || !payload.source_list_id || !payload.code || !payload.statement) {
-      setErrorMessage("Standard id, source list, short name, and text are required.");
+      setErrorMessage("Standard id, source, short name, and text are required.");
       return;
     }
 
@@ -659,7 +634,6 @@ export default function StandardsWorkspace({
           newStandardId: saved.id,
         });
       }
-      setSelectedSourceListId(saved.source_list_id);
       setEditingStandardId(saved.id);
       setStandardEditDraft(buildStandardEditDraft(saved));
       setStatusMessage(`Saved ${saved.code}.`);
@@ -673,23 +647,23 @@ export default function StandardsWorkspace({
     }
   }
 
+  const importNeedsSource = importInspection?.needs_source_input ?? true;
+
   return (
     <div className={`standards-workspace ${pickerMode ? "picker" : ""}`}>
       <header className="standards-header">
         <div>
-          <h1>{pickerMode ? "Question Standards" : "Standards"}</h1>
+          <h1>{pickerMode ? "Question Standards" : "Standards Library"}</h1>
           <p>
             {pickerMode
               ? "Attach standards to the currently selected question without crowding the main editor."
-              : "Manage course libraries first, then pull in standards from imported source lists as needed."}
+              : "Every standard in this bank, grouped by the source it came from. Courses draw their standards from here."}
           </p>
           {!pickerMode ? (
             <div className="standards-header-summary">
+              <span className="bank-assets-count">{standards.length} standards</span>
               <span className="bank-assets-count">
-                {selectedCourse ? selectedCourse.title : "No course library selected"}
-              </span>
-              <span className="bank-assets-count">
-                {selectedCourse?.standard_refs.length ?? 0} curated
+                {sourceLists.length} {sourceLists.length === 1 ? "source" : "sources"}
               </span>
             </div>
           ) : null}
@@ -702,28 +676,18 @@ export default function StandardsWorkspace({
             <>
               <button
                 type="button"
-                onClick={() => setShowSourceListsPanel((current) => !current)}
-              >
-                {showSourceListsPanel ? "Hide Source Lists" : "Manage Source Lists"}
-              </button>
-              <button
-                type="button"
                 onClick={() => {
                   setShowManualPanel(false);
-                  setShowImportPanel((current) => !current);
+                  setShowImportPanel((current) => {
+                    if (current) resetImportForm();
+                    return !current;
+                  });
                 }}
               >
-                {showImportPanel ? "Close Upload" : "Upload Standards"}
+                {showImportPanel ? "Close Import" : "Import Standards"}
               </button>
               <button type="button" onClick={handleOpenManualPanel}>
-                {showManualPanel ? "Close Manual Entry" : "Input Manually"}
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowSourceDrawer(true)}
-                disabled={showSourceDrawer}
-              >
-                Show Sources
+                {showManualPanel ? "Close Manual Entry" : "Add Manually"}
               </button>
             </>
           ) : null}
@@ -732,78 +696,12 @@ export default function StandardsWorkspace({
         </div>
       </header>
 
-      {!pickerMode ? (
-        <section className="standards-course-bar standards-panel">
-          {courses.length === 0 ? (
-            <div className="standards-library-empty">
-              <strong>No course libraries yet</strong>
-              <p>
-                A library is the set of standards you actually teach in one course, picked out of
-                the larger lists you import. It stores references, so editing a standard once
-                updates it everywhere it is used.
-              </p>
-              <p>
-                Type a title below and choose Save to create your first one, then use Show Sources
-                to pull standards into it. Standards themselves come from Upload Standards or Input
-                Manually and do not need a library to exist.
-              </p>
-            </div>
-          ) : null}
-          <label>
-            Library
-            <select
-              value={selectedCourseId}
-              onChange={(event) => setSelectedCourseId(event.target.value)}
-            >
-              <option value="">Select a course library</option>
-              {courses.map((course) => (
-                <option key={course.id} value={course.id}>
-                  {course.title}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Title
-            <input
-              value={courseDraftTitle}
-              onChange={(event) => setCourseDraftTitle(event.target.value)}
-              placeholder="Physics 1"
-            />
-          </label>
-          <div className="standards-course-id-preview">
-            <span className="meta-label">Library ID</span>
-            <strong>{selectedCourseId || computedCourseId || "set by title"}</strong>
-          </div>
-          <label className="standards-course-description-field">
-            Description
-            <textarea
-              className="standards-description-input"
-              value={courseDraftDescription}
-              onChange={(event) => setCourseDraftDescription(event.target.value)}
-              placeholder="Course library notes"
-            />
-          </label>
-          <div className="standards-course-actions">
-            <button type="button" onClick={handleNewCourse}>
-              New
-            </button>
-            <button type="button" onClick={() => void handleSaveCourseAs()} disabled={busy}>
-              Save As
-            </button>
-            <button type="button" onClick={() => void handleSaveCourse()} disabled={busy}>
-              {busy ? "Saving..." : "Save"}
-            </button>
-          </div>
-        </section>
-      ) : null}
-
       {standardEditDraft ? (
         <section className="standards-panel standards-edit-panel">
           <div className="standards-panel-header">
             <div>
               <h2>Edit Standard</h2>
-              <p>Changes to a standard id are applied to saved questions and course libraries.</p>
+              <p>Changes to a standard id are applied to saved questions and courses.</p>
             </div>
             <div className="standards-course-actions">
               <button type="button" onClick={handleCancelStandardEdit} disabled={busy}>
@@ -832,7 +730,7 @@ export default function StandardsWorkspace({
               />
             </label>
             <label>
-              Source List
+              Source
               <select
                 value={standardEditDraft.source_list_id}
                 onChange={(event) => updateStandardEditDraft("source_list_id", event.target.value)}
@@ -843,6 +741,14 @@ export default function StandardsWorkspace({
                   </option>
                 ))}
               </select>
+            </label>
+            <label>
+              Strand
+              <input
+                value={standardEditDraft.strand}
+                onChange={(event) => updateStandardEditDraft("strand", event.target.value)}
+                placeholder="Reading: Literature"
+              />
             </label>
             <label>
               Subject
@@ -882,87 +788,142 @@ export default function StandardsWorkspace({
       ) : null}
 
       {!pickerMode && showImportPanel ? (
-      <section className="standards-import-panel">
-        <div className="standards-import-copy">
-          <h2>Upload Standards</h2>
-          <p>
-            CSV headers: <code>id</code> or <code>standard_id</code>, <code>code</code>,{" "}
-            <code>statement</code>, optional <code>subject</code>, <code>grade_band</code>,{" "}
-            <code>tags</code>.
-          </p>
-          <p>
-            JSON may be an array of standards, an <code>{"{ items: [...] }"}</code> object, or
-            an object with <code>source_list</code> and <code>standards</code>.
-          </p>
-          {showCloseHint ? <p>Close this window when finished. The main editor can keep working separately.</p> : null}
-        </div>
+        <section className="standards-import-panel">
+          <div className="standards-import-copy">
+            <h2>Import Standards</h2>
+            <p>
+              CSV headers: <code>id</code> or <code>standard_id</code>, <code>code</code>,{" "}
+              <code>statement</code>, optional <code>strand</code>, <code>subject</code>,{" "}
+              <code>grade_band</code>, <code>tags</code>.
+            </p>
+            <p>
+              To keep standards with their own sources, add a <code>source</code> (or{" "}
+              <code>source_title</code>) column, optionally with <code>source_id</code> and{" "}
+              <code>issuer</code>. JSON may be an array, an{" "}
+              <code>{"{ items: [...] }"}</code> object, or an object with{" "}
+              <code>source_list</code> and <code>standards</code>.
+            </p>
+            {showCloseHint ? (
+              <p>Close this window when finished. The main editor can keep working separately.</p>
+            ) : null}
+          </div>
 
-        <div className="standards-import-grid">
-          <label>
-            Source List ID
-            <input
-              value={importSourceListId}
-              onChange={(event) => setImportSourceListId(normalizeId(event.target.value))}
-              placeholder="physics-core-2026"
-            />
-          </label>
-          <label>
-            Title
-            <input
-              value={importTitle}
-              onChange={(event) => setImportTitle(event.target.value)}
-              placeholder="Physics Core Standards"
-            />
-          </label>
-          <label>
-            Issuer
-            <input
-              value={importIssuer}
-              onChange={(event) => setImportIssuer(event.target.value)}
-              placeholder="State Curriculum Office"
-            />
-          </label>
-          <label>
-            Subject
-            <input
-              value={importSubject}
-              onChange={(event) => setImportSubject(event.target.value)}
-              placeholder="Physics"
-            />
-          </label>
-          <label>
-            Version
-            <input
-              value={importVersion}
-              onChange={(event) => setImportVersion(event.target.value)}
-              placeholder="2026.1"
-            />
-          </label>
-          <label className="metadata-span-full">
-            Description
-            <input
-              value={importDescription}
-              onChange={(event) => setImportDescription(event.target.value)}
-              placeholder="Complete imported standards reference set"
-            />
-          </label>
-          <label className="metadata-span-full">
-            Import File
-            <input
-              type="file"
-              accept=".json,.csv,application/json,text/csv"
-              onChange={(event) => setImportFile(event.target.files?.[0] ?? null)}
-            />
-          </label>
-        </div>
+          <div className="standards-import-grid">
+            <label className="metadata-span-full">
+              Import File
+              <input
+                type="file"
+                accept=".json,.csv,application/json,text/csv"
+                onChange={(event) =>
+                  void handleChooseImportFile(event.target.files?.[0] ?? null)
+                }
+              />
+            </label>
+          </div>
 
-        <div className="standards-import-actions">
-          <button type="button" onClick={() => void handleImportStandards()} disabled={busy}>
-            {busy ? "Importing..." : "Import Standards"}
-          </button>
-          {importFile ? <span>{importFile.name}</span> : null}
-        </div>
-      </section>
+          {inspecting ? <p className="metadata-help-text">Reading the file...</p> : null}
+
+          {importInspection ? (
+            <div className="standards-import-detection">
+              <p>
+                <strong>{importInspection.total_rows}</strong> standards found.{" "}
+                {importInspection.rows_with_source > 0
+                  ? `${importInspection.rows_with_source} name their own source.`
+                  : "None name their own source."}
+              </p>
+              {importInspection.detected_sources.length > 0 ? (
+                <ul className="standards-detected-sources">
+                  {importInspection.detected_sources.map((source, index) => (
+                    <li key={source.id ?? source.title ?? index}>
+                      <strong>{source.title ?? source.id ?? "Unnamed source"}</strong>
+                      <span>
+                        {source.standard_count}{" "}
+                        {source.standard_count === 1 ? "standard" : "standards"}
+                      </span>
+                      {source.matches_existing_source ? (
+                        <span className="asset-badge">already in library</span>
+                      ) : null}
+                      {!source.complete && !source.matches_existing_source ? (
+                        <span className="asset-badge">needs details</span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          ) : null}
+
+          {importInspection && importNeedsSource ? (
+            <>
+              <p className="metadata-help-text">
+                {importInspection.rows_with_source > 0
+                  ? "Some standards in this file do not name a source. Describe the source that covers them."
+                  : "This file does not name a source. Describe the source that applies to every standard in it."}
+              </p>
+              <div className="standards-import-grid">
+                <label>
+                  Source ID
+                  <input
+                    value={importSourceListId}
+                    onChange={(event) => setImportSourceListId(normalizeId(event.target.value))}
+                    placeholder="physics-core-2026"
+                  />
+                </label>
+                <label>
+                  Title
+                  <input
+                    value={importTitle}
+                    onChange={(event) => setImportTitle(event.target.value)}
+                    placeholder="Physics Core Standards"
+                  />
+                </label>
+                <label>
+                  Issuer
+                  <input
+                    value={importIssuer}
+                    onChange={(event) => setImportIssuer(event.target.value)}
+                    placeholder="State Curriculum Office"
+                  />
+                </label>
+                <label>
+                  Subject
+                  <input
+                    value={importSubject}
+                    onChange={(event) => setImportSubject(event.target.value)}
+                    placeholder="Physics"
+                  />
+                </label>
+                <label>
+                  Version
+                  <input
+                    value={importVersion}
+                    onChange={(event) => setImportVersion(event.target.value)}
+                    placeholder="2026.1"
+                  />
+                </label>
+                <label className="metadata-span-full">
+                  Description
+                  <input
+                    value={importDescription}
+                    onChange={(event) => setImportDescription(event.target.value)}
+                    placeholder="Complete imported standards reference set"
+                  />
+                </label>
+              </div>
+            </>
+          ) : null}
+
+          <div className="standards-import-actions">
+            <button
+              type="button"
+              onClick={() => void handleImportStandards()}
+              disabled={busy || inspecting || !importFile}
+            >
+              {busy ? "Importing..." : "Import Standards"}
+            </button>
+            {importFile ? <span>{importFile.name}</span> : null}
+          </div>
+        </section>
       ) : null}
 
       {!pickerMode && showManualPanel ? (
@@ -971,8 +932,8 @@ export default function StandardsWorkspace({
             <div>
               <h2>Add Standards Manually</h2>
               <p>
-                Type one standard per row. Leave Short Name blank to reuse the standard id, and
-                separate topic tags with commas.
+                Type one standard per row and pick the source it came from. Leave Short Name blank
+                to reuse the standard id, and separate topic tags with commas.
               </p>
             </div>
             <div className="standards-course-actions">
@@ -989,133 +950,157 @@ export default function StandardsWorkspace({
             </div>
           </div>
 
-          <div className="standards-import-grid">
-            <label>
-              Source List
-              <select
-                value={manualSourceListId}
-                onChange={(event) => setManualSourceListId(event.target.value)}
-              >
-                <option value={NEW_SOURCE_LIST_OPTION}>Create a new source list</option>
-                {sourceLists.map((sourceList) => (
-                  <option key={sourceList.id} value={sourceList.id}>
-                    {sourceList.title}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {manualSourceListId === NEW_SOURCE_LIST_OPTION ? (
-              <>
-                <label>
-                  Source List ID
-                  <input
-                    value={manualListId}
-                    onChange={(event) => setManualListId(normalizeId(event.target.value))}
-                    placeholder="physics-core-2026"
-                  />
-                </label>
-                <label>
-                  Title
-                  <input
-                    value={manualTitle}
-                    onChange={(event) => setManualTitle(event.target.value)}
-                    placeholder="Physics Core Standards"
-                  />
-                </label>
-                <label>
-                  Issuer
-                  <input
-                    value={manualIssuer}
-                    onChange={(event) => setManualIssuer(event.target.value)}
-                    placeholder="State Curriculum Office"
-                  />
-                </label>
-                <label>
-                  Subject
-                  <input
-                    value={manualSubject}
-                    onChange={(event) => setManualSubject(event.target.value)}
-                    placeholder="Physics"
-                  />
-                </label>
-                <label>
-                  Version
-                  <input
-                    value={manualVersion}
-                    onChange={(event) => setManualVersion(event.target.value)}
-                    placeholder="2026.1"
-                  />
-                </label>
-                <label className="metadata-span-full">
-                  Description
-                  <input
-                    value={manualDescription}
-                    onChange={(event) => setManualDescription(event.target.value)}
-                    placeholder="Standards typed in by hand"
-                  />
-                </label>
-              </>
-            ) : null}
-          </div>
-
           <div className="standards-manual-scroll">
             <div className="standards-manual-rows">
               <div className="standards-manual-row standards-manual-head">
+                <span>Source</span>
                 <span>Standard ID</span>
                 <span>Short Name</span>
                 <span>Standard Text</span>
+                <span>Strand</span>
                 <span>Subject</span>
                 <span>Grade Band</span>
                 <span>Topic Tags</span>
                 <span />
               </div>
               {manualRows.map((row, index) => (
-                <div className="standards-manual-row" key={row.key}>
-                  <input
-                    value={row.id}
-                    onChange={(event) => updateManualRow(row.key, "id", event.target.value)}
-                    placeholder="PHY-KIN-01"
-                    aria-label={`Standard id for row ${index + 1}`}
-                  />
-                  <input
-                    value={row.code}
-                    onChange={(event) => updateManualRow(row.key, "code", event.target.value)}
-                    placeholder="PHY-KIN-01"
-                    aria-label={`Short name for row ${index + 1}`}
-                  />
-                  <textarea
-                    value={row.statement}
-                    onChange={(event) => updateManualRow(row.key, "statement", event.target.value)}
-                    placeholder="Full standard text"
-                    rows={2}
-                    aria-label={`Standard text for row ${index + 1}`}
-                  />
-                  <input
-                    value={row.subject}
-                    onChange={(event) => updateManualRow(row.key, "subject", event.target.value)}
-                    placeholder="Physics"
-                    aria-label={`Subject for row ${index + 1}`}
-                  />
-                  <input
-                    value={row.grade_band}
-                    onChange={(event) => updateManualRow(row.key, "grade_band", event.target.value)}
-                    placeholder="9-12"
-                    aria-label={`Grade band for row ${index + 1}`}
-                  />
-                  <input
-                    value={row.tagsText}
-                    onChange={(event) => updateManualRow(row.key, "tagsText", event.target.value)}
-                    placeholder="mechanics, kinematics"
-                    aria-label={`Topic tags for row ${index + 1}`}
-                  />
-                  <button
-                    type="button"
-                    className="standards-manual-remove"
-                    onClick={() => handleRemoveManualRow(row.key)}
-                    disabled={busy}
-                  >
-                    Remove
-                  </button>
+                <div className="standards-manual-entry" key={row.key}>
+                  <div className="standards-manual-row">
+                    <select
+                      value={row.sourceListId}
+                      onChange={(event) =>
+                        updateManualRow(row.key, "sourceListId", event.target.value)
+                      }
+                      aria-label={`Source for row ${index + 1}`}
+                    >
+                      <option value="">Select a source</option>
+                      {sourceLists.map((sourceList) => (
+                        <option key={sourceList.id} value={sourceList.id}>
+                          {sourceList.title}
+                        </option>
+                      ))}
+                      <option value={NEW_SOURCE_OPTION}>Add new source...</option>
+                    </select>
+                    <input
+                      value={row.id}
+                      onChange={(event) => updateManualRow(row.key, "id", event.target.value)}
+                      placeholder="PHY-KIN-01"
+                      aria-label={`Standard id for row ${index + 1}`}
+                    />
+                    <input
+                      value={row.code}
+                      onChange={(event) => updateManualRow(row.key, "code", event.target.value)}
+                      placeholder="PHY-KIN-01"
+                      aria-label={`Short name for row ${index + 1}`}
+                    />
+                    <textarea
+                      value={row.statement}
+                      onChange={(event) =>
+                        updateManualRow(row.key, "statement", event.target.value)
+                      }
+                      placeholder="Full standard text"
+                      rows={2}
+                      aria-label={`Standard text for row ${index + 1}`}
+                    />
+                    <input
+                      value={row.strand}
+                      onChange={(event) => updateManualRow(row.key, "strand", event.target.value)}
+                      placeholder="Mechanics"
+                      aria-label={`Strand for row ${index + 1}`}
+                    />
+                    <input
+                      value={row.subject}
+                      onChange={(event) => updateManualRow(row.key, "subject", event.target.value)}
+                      placeholder="Physics"
+                      aria-label={`Subject for row ${index + 1}`}
+                    />
+                    <input
+                      value={row.grade_band}
+                      onChange={(event) =>
+                        updateManualRow(row.key, "grade_band", event.target.value)
+                      }
+                      placeholder="9-12"
+                      aria-label={`Grade band for row ${index + 1}`}
+                    />
+                    <input
+                      value={row.tagsText}
+                      onChange={(event) =>
+                        updateManualRow(row.key, "tagsText", event.target.value)
+                      }
+                      placeholder="mechanics, kinematics"
+                      aria-label={`Topic tags for row ${index + 1}`}
+                    />
+                    <button
+                      type="button"
+                      className="standards-manual-remove"
+                      onClick={() => handleRemoveManualRow(row.key)}
+                      disabled={busy}
+                    >
+                      Remove
+                    </button>
+                  </div>
+
+                  {row.sourceListId === NEW_SOURCE_OPTION ? (
+                    <div className="standards-manual-source-expansion">
+                      <div className="standards-import-grid">
+                        <label>
+                          Source Title
+                          <input
+                            value={row.sourceTitle}
+                            onChange={(event) =>
+                              updateManualRow(row.key, "sourceTitle", event.target.value)
+                            }
+                            placeholder="Physics Core Standards"
+                          />
+                        </label>
+                        <label>
+                          Issuer
+                          <input
+                            value={row.sourceIssuer}
+                            onChange={(event) =>
+                              updateManualRow(row.key, "sourceIssuer", event.target.value)
+                            }
+                            placeholder="State Curriculum Office"
+                          />
+                        </label>
+                        <label>
+                          Source Subject
+                          <input
+                            value={row.sourceSubject}
+                            onChange={(event) =>
+                              updateManualRow(row.key, "sourceSubject", event.target.value)
+                            }
+                            placeholder="Physics"
+                          />
+                        </label>
+                        <label>
+                          Version
+                          <input
+                            value={row.sourceVersion}
+                            onChange={(event) =>
+                              updateManualRow(row.key, "sourceVersion", event.target.value)
+                            }
+                            placeholder="2026.1"
+                          />
+                        </label>
+                        <label className="metadata-span-full">
+                          Source Description
+                          <input
+                            value={row.sourceDescription}
+                            onChange={(event) =>
+                              updateManualRow(row.key, "sourceDescription", event.target.value)
+                            }
+                            placeholder="Standards typed in by hand"
+                          />
+                        </label>
+                      </div>
+                      <p className="metadata-help-text">
+                        Source ID{" "}
+                        <strong>{normalizeId(row.sourceTitle) || "set by title"}</strong>. Later
+                        rows can pick this source once it is saved.
+                      </p>
+                    </div>
+                  ) : null}
                 </div>
               ))}
             </div>
@@ -1132,285 +1117,147 @@ export default function StandardsWorkspace({
         </section>
       ) : null}
 
-
-      <div
-        className={`standards-layout ${pickerMode ? "picker" : showSourceDrawer ? "drawer-open" : "drawer-closed"}`}
-      >
-        {!pickerMode ? (
-        <aside
-          className={`standards-sidebar-column standards-source-drawer ${showSourceDrawer ? "open" : "closed"}`}
-        >
-          {showSourceDrawer ? (
-            <section className="standards-panel standards-results-panel">
-              <div className="pane-header standards-drawer-header">
-                <h2>Source Standards</h2>
-                <div className="pane-header-actions">
-                  <button type="button" onClick={() => setShowSourceDrawer(false)}>
-                    Hide
-                  </button>
-                </div>
-              </div>
-
-              {showSourceListsPanel ? (
-                <section className="standards-inline-section">
-                  <div className="standards-panel-header">
-                    <h2>Source Lists</h2>
-                    <span className="bank-assets-count">{sourceLists.length}</span>
-                  </div>
-                  {sourceLists.length === 0 ? (
-                    <div className="standards-library-empty">
-                      <strong>No standards imported yet</strong>
-                      <p>
-                        A source list is where standards came from, such as a state framework or a
-                        published set. Use Upload Standards for a CSV or JSON file, or Input
-                        Manually to type them in.
-                      </p>
-                    </div>
-                  ) : null}
-                  <div className="standards-source-list">
-                    <button
-                      type="button"
-                      className={`standards-list-row ${selectedSourceListId === "" ? "selected" : ""}`}
-                      onClick={() => setSelectedSourceListId("")}
-                    >
-                      <strong>All Sources</strong>
-                      <span>{standards.length} standards</span>
-                    </button>
-                    {sourceLists.map((sourceList) => {
-                      const count = standards.filter(
-                        (standard) => standard.source_list_id === sourceList.id,
-                      ).length;
-                      return (
-                        <button
-                          key={sourceList.id}
-                          type="button"
-                          className={`standards-list-row ${
-                            selectedSourceListId === sourceList.id ? "selected" : ""
-                          }`}
-                          onClick={() => setSelectedSourceListId(sourceList.id)}
-                        >
-                          <strong>{sourceList.title}</strong>
-                          <span>{sourceList.issuer}</span>
-                          <span>{count} standards</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </section>
-              ) : null}
-
-              <div className="standards-panel-header">
-                <div>
-                  <p>
-                    {selectedSourceList
-                      ? `Showing ${selectedSourceList.title}.`
-                      : "Browse imported source lists and add standards into the current course library."}
-                  </p>
-                </div>
-                <span className="bank-assets-count">{filteredSourceStandards.length}</span>
-              </div>
-
-              <div
-                className={`standards-filter-row ${showSourceListsPanel ? "course-library" : "source-drawer"}`}
-              >
-                <input
-                  value={sourceSearch}
-                  onChange={(event) => setSourceSearch(event.target.value)}
-                  placeholder="Search imported standards"
-                />
-                {!showSourceListsPanel ? (
-                  <select
-                    value={selectedSourceListId}
-                    onChange={(event) => setSelectedSourceListId(event.target.value)}
-                  >
-                    <option value="">Current or all sources</option>
-                    {sourceLists.map((sourceList) => (
-                      <option key={sourceList.id} value={sourceList.id}>
-                        {sourceList.title}
-                      </option>
-                    ))}
-                  </select>
-                ) : null}
-              </div>
-
-              <div className="standards-record-list standards-table compact">
-                <StandardTableHead />
-                {filteredSourceStandards.map((standard) => {
-                  const inCourse = selectedCourseStandardIds.has(standard.id);
-                  return (
-                    <StandardTableRow
-                      key={standard.id}
-                      standard={standard}
-                      sourceLabel={
-                        sourceLists.find((item) => item.id === standard.source_list_id)?.title ??
-                        standard.source_list_id
-                      }
-                    >
-                      <button
-                        type="button"
-                        onClick={() => handleStartStandardEdit(standard)}
-                        disabled={busy}
-                      >
-                        Edit
-                      </button>
-                      {selectedCourse ? (
-                        <button
-                          type="button"
-                          onClick={() => void handleToggleCourseStandard(standard.id)}
-                          disabled={busy}
-                        >
-                          {inCourse ? "Remove" : "Add"}
-                        </button>
-                      ) : null}
-                    </StandardTableRow>
-                  );
-                })}
-              </div>
-            </section>
-          ) : (
-            <div className="standards-drawer-tab-shell">
-              <button
-                className="standards-drawer-tab"
-                type="button"
-                onClick={() => setShowSourceDrawer(true)}
-              >
-                Sources
-              </button>
-            </div>
-          )}
-        </aside>
-        ) : null}
-
+      <div className={`standards-layout ${pickerMode ? "picker" : "library"}`}>
         <section className="standards-panel standards-results-panel">
           <div className="standards-panel-header">
             <div>
-              <h2>{pickerMode ? "Standards Picker" : "Current Course Standards"}</h2>
+              <h2>{pickerMode ? "Standards Picker" : "Library"}</h2>
               <p>
                 {pickerMode
                   ? questionStandardsState.questionId
                     ? `Attaching standards for ${questionStandardsState.questionId}.`
                     : "Select a question in the main window to attach standards."
-                  : selectedCourse
-                    ? `Showing the curated standards in ${selectedCourse.title}.`
-                    : "Create or select a course library to see curated standards here."}
+                  : "Search, filter by source or strand, and edit any standard in place."}
               </p>
             </div>
-            <span className="bank-assets-count">
-              {pickerMode
-                ? filteredSourceStandards.length
-                : selectedCourse
-                  ? curatedStandards.length
-                  : 0}
-            </span>
+            <span className="bank-assets-count">{visibleStandards.length}</span>
           </div>
 
-          {!pickerMode ? (
-            <div className="standards-filter-row course-library">
-              <input
-                value={courseSearch}
-                onChange={(event) => setCourseSearch(event.target.value)}
-                placeholder="Search current course library"
-              />
-            </div>
-          ) : (
-            <div className="standards-filter-row">
-              <input
-                value={sourceSearch}
-                onChange={(event) => setSourceSearch(event.target.value)}
-                placeholder="Search standards"
-              />
-              <select
-                value={selectedSourceListId}
-                onChange={(event) => setSelectedSourceListId(event.target.value)}
-              >
-                <option value="">All sources</option>
-                {sourceLists.map((sourceList) => (
-                  <option key={sourceList.id} value={sourceList.id}>
-                    {sourceList.title}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
+          <div className="standards-filter-row library">
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search standards, strands, and sources"
+            />
+            <select
+              value={selectedSourceListId}
+              onChange={(event) => setSelectedSourceListId(event.target.value)}
+              aria-label="Filter by source"
+            >
+              <option value="">All sources</option>
+              {sourceLists.map((sourceList) => (
+                <option key={sourceList.id} value={sourceList.id}>
+                  {sourceList.title}
+                </option>
+              ))}
+            </select>
+            <select
+              value={selectedStrand}
+              onChange={(event) => setSelectedStrand(event.target.value)}
+              aria-label="Filter by strand"
+            >
+              <option value="">All strands</option>
+              {availableStrands.map((strand) => (
+                <option key={strand} value={strand}>
+                  {strand}
+                </option>
+              ))}
+            </select>
+            <select
+              value={sortMode}
+              onChange={(event) => setSortMode(event.target.value as StandardSortMode)}
+              aria-label="Sort standards"
+            >
+              <option value="source">Sort by source</option>
+              <option value="strand">Sort by strand</option>
+              <option value="code">Sort by short name</option>
+              <option value="id">Sort by standard id</option>
+            </select>
+          </div>
 
           <div className="standards-record-list standards-table compact">
             <StandardTableHead />
-            {(pickerMode ? filteredSourceStandards : curatedStandards).map((standard) => {
-              const inCourse = selectedCourseStandardIds.has(standard.id);
-              return (
-                <StandardTableRow key={standard.id} standard={standard}>
+            {visibleStandards.map((standard) => (
+              <StandardTableRow
+                key={standard.id}
+                standard={standard}
+                sourceLabel={sourceLabel(standard)}
+              >
+                <button
+                  type="button"
+                  onClick={() => handleStartStandardEdit(standard)}
+                  disabled={busy}
+                >
+                  Edit
+                </button>
+                {pickerMode ? (
                   <button
                     type="button"
-                    onClick={() => handleStartStandardEdit(standard)}
-                    disabled={busy}
+                    onClick={() => handleQuestionStandardToggle(standard.id)}
+                    disabled={!questionStandardsState.questionId}
                   >
-                    Edit
+                    {selectedQuestionStandardIds.has(standard.id) ? "Remove" : "Attach"}
                   </button>
-                  {pickerMode ? (
-                    <button
-                      type="button"
-                      onClick={() => handleQuestionStandardToggle(standard.id)}
-                      disabled={!questionStandardsState.questionId}
-                    >
-                      {selectedQuestionStandardIds.has(standard.id) ? "Remove" : "Attach"}
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => void handleToggleCourseStandard(standard.id)}
-                      disabled={busy}
-                    >
-                      Remove
-                    </button>
-                  )}
-                </StandardTableRow>
-              );
-            })}
-            {!pickerMode && selectedCourse && curatedStandards.length === 0 ? (
-              <p className="asset-empty">
-                This course library has no curated standards yet. Open Pull From Sources to add some.
-              </p>
+                ) : null}
+              </StandardTableRow>
+            ))}
+            {visibleStandards.length === 0 ? (
+              <div className="standards-library-empty">
+                <strong>
+                  {standards.length === 0 ? "No standards yet" : "Nothing matches these filters"}
+                </strong>
+                <p>
+                  {standards.length === 0
+                    ? "Use Import Standards for a CSV or JSON file, or Add Manually to type them in. Every standard is filed under the source it came from."
+                    : "Clear the search or pick a different source or strand."}
+                </p>
+              </div>
             ) : null}
           </div>
         </section>
 
-        {!pickerMode ? null : (
-        <aside className="standards-sidebar-column">
-          <section className="standards-panel">
-            <div className="standards-panel-header">
-              <h2>Attached To Question</h2>
-              <span className="bank-assets-count">{questionStandardsState.attachedStandardIds.length}</span>
-            </div>
-            {questionStandardsState.questionId ? (
-              <div className="standards-source-list">
-                {questionStandardsState.attachedStandardIds.map((standardId) => {
-                  const standard = standardsById[standardId];
-                  return (
-                    <div key={standardId} className="standards-curated-row">
-                      <div>
-                        <strong>{standard?.code ?? standardId}</strong>
-                        <span>{standard?.statement ?? "Standard not found."}</span>
-                      </div>
-                      <div className="standards-card-actions">
-                        {standard ? (
-                          <button type="button" onClick={() => handleStartStandardEdit(standard)}>
-                            Edit
-                          </button>
-                        ) : null}
-                        <button type="button" onClick={() => handleQuestionStandardToggle(standardId)}>
-                          Remove
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
+        {pickerMode ? (
+          <aside className="standards-sidebar-column">
+            <section className="standards-panel">
+              <div className="standards-panel-header">
+                <h2>Attached To Question</h2>
+                <span className="bank-assets-count">
+                  {questionStandardsState.attachedStandardIds.length}
+                </span>
               </div>
-            ) : (
-              <p className="asset-empty">No question selected in the main window.</p>
-            )}
-          </section>
-        </aside>
-        )}
+              {questionStandardsState.questionId ? (
+                <div className="standards-source-list">
+                  {questionStandardsState.attachedStandardIds.map((standardId) => {
+                    const standard = standardsById[standardId];
+                    return (
+                      <div key={standardId} className="standards-curated-row">
+                        <div>
+                          <strong>{standard?.code ?? standardId}</strong>
+                          <span>{standard?.statement ?? "Standard not found."}</span>
+                        </div>
+                        <div className="standards-card-actions">
+                          {standard ? (
+                            <button type="button" onClick={() => handleStartStandardEdit(standard)}>
+                              Edit
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={() => handleQuestionStandardToggle(standardId)}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="asset-empty">No question selected in the main window.</p>
+              )}
+            </section>
+          </aside>
+        ) : null}
       </div>
     </div>
   );

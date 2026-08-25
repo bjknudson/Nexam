@@ -63,6 +63,7 @@ export interface StandardRecordModel {
   code: string;
   statement: string;
   subject?: string | null;
+  strand?: string | null;
   grade_band?: string | null;
   tags: string[];
 }
@@ -86,10 +87,67 @@ export interface CourseListResponseModel {
   items: CourseModel[];
 }
 
+export interface CourseStandardCoverageModel {
+  standard_id: string;
+  code?: string | null;
+  statement?: string | null;
+  source_list_id?: string | null;
+  strand?: string | null;
+  in_course: boolean;
+  question_count: number;
+  test_count: number;
+  test_ids: string[];
+}
+
+/** One test lineage: every version of a test reported as a single test, so
+ *  versions made for security or retakes do not multiply coverage. */
+export interface CourseTestSummaryModel {
+  test_id: string;
+  title: string;
+  version: string;
+  versions: string[];
+  test_ids: string[];
+  /** The largest version, not the sum across versions. */
+  question_count: number;
+  course_standard_count: number;
+  extra_standard_count: number;
+}
+
+export interface CourseDetailModel {
+  course: CourseModel;
+  tests: CourseTestSummaryModel[];
+  covered_standards: CourseStandardCoverageModel[];
+  uncovered_standards: CourseStandardCoverageModel[];
+  extra_standards: CourseStandardCoverageModel[];
+  question_count: number;
+}
+
 export interface StandardImportResponseModel {
   source_list: SourceStandardListModel;
+  source_lists: SourceStandardListModel[];
   imported_count: number;
   imported_path?: string | null;
+}
+
+export interface DetectedImportSourceModel {
+  id?: string | null;
+  title?: string | null;
+  issuer?: string | null;
+  subject?: string | null;
+  version?: string | null;
+  description?: string | null;
+  standard_count: number;
+  matches_existing_source: boolean;
+  complete: boolean;
+}
+
+export interface StandardImportInspectionModel {
+  filename: string;
+  total_rows: number;
+  rows_with_source: number;
+  detected_sources: DetectedImportSourceModel[];
+  needs_source_input: boolean;
+  detected_columns: string[];
 }
 
 export interface ManualStandardRowModel {
@@ -97,8 +155,15 @@ export interface ManualStandardRowModel {
   code?: string | null;
   statement: string;
   subject?: string | null;
+  strand?: string | null;
   grade_band?: string | null;
   tags: string[];
+  source_list_id?: string | null;
+  source_title?: string | null;
+  source_issuer?: string | null;
+  source_subject?: string | null;
+  source_version?: string | null;
+  source_description?: string | null;
 }
 
 export interface CreateStandardsManuallyRequest {
@@ -305,6 +370,7 @@ export interface TestDraftModel {
   id: string;
   title: string;
   version: string;
+  course_ids: string[];
   items: TestItemModel[];
   print_settings: TestPrintSettingsModel;
   performance_runs: TestPerformanceRunModel[];
@@ -322,6 +388,7 @@ export interface TestDraftSummaryModel {
   id: string;
   title: string;
   version: string;
+  course_ids: string[];
   standard_ids: string[];
   question_type_counts: Record<string, number>;
   difficulty_counts: Record<string, number>;

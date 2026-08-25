@@ -16,6 +16,7 @@ from .models import (
     AssetInspectionBatchRequest,
     AssetInspectionRequest,
     AddQuestionToTestRequest,
+    CopyTestDraftRequest,
     CreateBankRequest,
     CreateStandardPlaceholdersRequest,
     CreateStandardsManuallyRequest,
@@ -30,6 +31,8 @@ from .models import (
     QuestionModel,
     QuestionType,
     SaveBankRequest,
+    SeedCourseRequest,
+    SetTestCoursesRequest,
     StandardRecordModel,
     TestDraftModel,
     UpdateBankDetailsRequest,
@@ -147,17 +150,31 @@ def list_standards(
     source_list_id: str | None = Query(default=None),
     search: str | None = Query(default=None),
     course_id: str | None = Query(default=None),
+    strand: str | None = Query(default=None),
+    sort: str | None = Query(default=None),
 ):
     return service.list_standards(
         source_list_id=source_list_id,
         search=search,
         course_id=course_id,
+        strand=strand,
+        sort=sort,
     )
+
+
+@app.get("/api/standards/strands")
+def list_standard_strands():
+    return {"items": service.list_standard_strands()}
 
 
 @app.get("/api/courses")
 def list_courses():
     return service.list_courses()
+
+
+@app.get("/api/courses/{course_id}")
+def get_course_detail(course_id: str):
+    return service.get_course_detail(course_id)
 
 
 @app.put("/api/courses/{course_id}")
@@ -168,6 +185,21 @@ def upsert_course(course_id: str, request: UpsertCourseRequest):
         description=request.description,
         standard_refs=request.standard_refs,
     )
+
+
+@app.post("/api/courses/{course_id}/seed")
+def seed_course(course_id: str, request: SeedCourseRequest):
+    return service.seed_course_from(
+        course_id,
+        request.source_course_id,
+        include_standards=request.include_standards,
+        include_tests=request.include_tests,
+    )
+
+
+@app.delete("/api/courses/{course_id}", status_code=204)
+def delete_course(course_id: str):
+    service.delete_course(course_id)
 
 
 @app.post("/api/courses/{course_id}/standards/{standard_id}")
@@ -199,6 +231,14 @@ async def import_standards(
         subject=subject,
         version=version,
         description=description,
+    )
+
+
+@app.post("/api/standards/import/inspect")
+async def inspect_standard_import(file: UploadFile = File(...)):
+    return service.inspect_standard_import(
+        filename=file.filename or "",
+        content=await file.read(),
     )
 
 
@@ -265,7 +305,11 @@ def list_test_drafts():
 
 @app.post("/api/tests")
 def create_test_draft(request: CreateTestDraftRequest):
-    return service.create_test_draft(title=request.title, version=request.version)
+    return service.create_test_draft(
+        title=request.title,
+        version=request.version,
+        course_ids=request.course_ids,
+    )
 
 
 @app.get("/api/tests/{test_id}")
@@ -276,6 +320,23 @@ def get_test_draft(test_id: str):
 @app.put("/api/tests/{test_id}")
 def update_test_draft(test_id: str, payload: TestDraftModel):
     return service.update_test_draft(test_id, payload)
+
+
+@app.put("/api/tests/{test_id}/courses")
+def set_test_courses(test_id: str, request: SetTestCoursesRequest):
+    return service.set_test_courses(test_id, request.course_ids)
+
+
+@app.post("/api/tests/{test_id}/copy")
+def copy_test_draft(test_id: str, request: CopyTestDraftRequest):
+    return service.copy_test_draft(
+        test_id,
+        title=request.title,
+        version=request.version,
+        course_ids=request.course_ids,
+        detach_courses_from_source=request.detach_courses_from_source,
+        source_restore=request.source_restore,
+    )
 
 
 @app.post("/api/tests/{test_id}/items")

@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -7,6 +8,7 @@ import {
   createQuestionFromJson,
   createQuestionsFromJson,
   getBackendHealth,
+  copyTestDraft as copyTestDraftApi,
   createTestDraft,
   deleteQuestion,
   getCurrentBank,
@@ -58,6 +60,7 @@ import {
   QuestionMathSummaryPreview,
 } from "./MathPreview";
 import BankPropertiesDialog, { type BankPropertiesMode } from "./BankPropertiesDialog";
+import CoursesWorkspace from "./CoursesWorkspace";
 import QuestionImportWorkspace from "./QuestionImportWorkspace";
 import Settings from "./Settings";
 import { SETTINGS_KEYS, usePersistedBoolean, usePersistedString } from "./appSettings";
@@ -89,22 +92,25 @@ type PaneKind =
   | "questions"
   | "assets"
   | "standards"
+  | "courses"
   | "test-preview"
   | "editor"
   | "tests";
-type WorkspacePage = "questions" | "tests" | "standards";
+type WorkspacePage = "questions" | "tests" | "standards" | "courses";
 
-// The three top-level views, and the pop-out window each one opens.
-const WORKSPACE_PAGES: WorkspacePage[] = ["standards", "questions", "tests"];
+// The top-level views, and the pop-out window each one opens.
+const WORKSPACE_PAGES: WorkspacePage[] = ["standards", "courses", "questions", "tests"];
 const WORKSPACE_PAGE_PANE: Record<WorkspacePage, PaneKind> = {
   questions: "editor",
   tests: "tests",
   standards: "standards",
+  courses: "courses",
 };
 const WORKSPACE_PAGE_LABEL: Record<WorkspacePage, string> = {
   questions: "Question Editor",
   tests: "Test Builder",
-  standards: "Standards",
+  standards: "Library",
+  courses: "Courses",
 };
 
 interface QuestionPaneSnapshot {
@@ -147,6 +153,7 @@ type PaneMessage =
   | { type: "assets-search"; value: string }
   | { type: "assets-attach"; path: string }
   | { type: "standards-data-changed" }
+  | { type: "courses-data-changed" }
   | { type: "standard-id-changed"; oldStandardId: string; newStandardId: string }
   | { type: "request-question-standards-state" }
   | { type: "question-standards-state"; state: QuestionStandardsSnapshot }
@@ -292,6 +299,7 @@ const PANE_KINDS: PaneKind[] = [
   "questions",
   "assets",
   "standards",
+  "courses",
   "test-preview",
   "editor",
   "tests",
@@ -958,6 +966,7 @@ function App() {
   const [backendVersionWarning, setBackendVersionWarning] = useState("");
   const [newTestDialogOpen, setNewTestDialogOpen] = useState(false);
   const [newTestTitle, setNewTestTitle] = useState("");
+  const [newTestCourseIds, setNewTestCourseIds] = useState<string[]>([]);
   const [newTestError, setNewTestError] = useState("");
   const [rawJson, setRawJson] = useState("");
   const [search, setSearch] = useState("");
@@ -989,9 +998,16 @@ function App() {
     questions: false,
     tests: false,
     standards: false,
+    courses: false,
   });
   const activeWorkspacePage: WorkspacePage =
-    paneMode === "editor" ? "questions" : paneMode === "tests" ? "tests" : workspacePage;
+    paneMode === "editor"
+      ? "questions"
+      : paneMode === "tests"
+        ? "tests"
+        : paneMode === "courses"
+          ? "courses"
+          : workspacePage;
   const activePageIsPoppedOut = isMainWindow && poppedOutPages[activeWorkspacePage];
   const [testDrafts, setTestDrafts] = useState<TestDraftDetailModel[]>([]);
   const [selectedTestId, setSelectedTestId] = useState<string | null>(null);
@@ -1408,6 +1424,13 @@ function App() {
     }
   }
 
+  /** Courses and tests reference each other, so a change to either reloads both. */
+  async function handleCoursesChanged() {
+    await refreshStandardsData();
+    await refreshTestDrafts();
+    setWorkspaceDirty(true);
+  }
+
   async function refreshAssetList() {
     try {
       const response = await listAssets();
@@ -1799,8 +1822,17 @@ function App() {
   function handleOpenNewTestDialog() {
     if (!bank) return;
     setNewTestTitle(suggestNewTestTitle());
+    setNewTestCourseIds([]);
     setNewTestError("");
     setNewTestDialogOpen(true);
+  }
+
+  function toggleNewTestCourse(courseId: string) {
+    setNewTestCourseIds((current) =>
+      current.includes(courseId)
+        ? current.filter((item) => item !== courseId)
+        : [...current, courseId],
+    );
   }
 
   /** A new test needs its own title; further versions come from New Version. */
@@ -1825,6 +1857,7 @@ function App() {
       const detail = await createTestDraft({
         title: trimmed,
         version: "A",
+        course_ids: newTestCourseIds,
       });
       replaceTestDraft(detail);
       handleOpenTest(detail.test.id);
@@ -1910,6 +1943,39 @@ function App() {
       setWorkspaceDirty(true);
       setStatusMessage(
         `Duplicated ${source.test.id} as ${detail.test.id} (version ${detail.test.version}).`,
+      );
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage((error as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleCopyTestDraft(
+    testId: string,
+    payload: {
+      title: string;
+      version: string;
+      course_ids: string[];
+      detach_courses_from_source: boolean;
+      source_restore: TestDraftModel | null;
+    },
+  ) {
+    setLoading(true);
+    try {
+      const detail = await copyTestDraftApi(testId, payload);
+      // The original may have been reverted or had courses moved off it, so
+      // take the server's word for both drafts.
+      const refreshed = await listTestDrafts();
+      setTestDrafts(refreshed.items);
+      replaceTestDraft(detail);
+      handleOpenTest(detail.test.id);
+      setWorkspaceDirty(true);
+      setStatusMessage(
+        payload.source_restore
+          ? `Copied ${testId} to ${detail.test.id} and restored ${testId}.`
+          : `Copied ${testId} to ${detail.test.id}.`,
       );
       setErrorMessage("");
     } catch (error) {
@@ -2789,6 +2855,10 @@ function App() {
           void refreshStandardsData();
           return;
         }
+        if (message.type === "courses-data-changed") {
+          void handleCoursesChanged();
+          return;
+        }
         if (message.type === "standard-id-changed") {
           replaceStandardIdOnDraftQuestion(message.oldStandardId, message.newStandardId);
           return;
@@ -2956,9 +3026,11 @@ function App() {
         : paneMode === "assets"
           ? "Assets - Nexzam"
           : paneMode === "standards"
-            ? "Standards - Nexzam"
-            : paneMode === "test-preview"
-              ? "Printable Test Preview - Nexzam"
+            ? "Library - Nexzam"
+            : paneMode === "courses"
+              ? "Courses - Nexzam"
+              : paneMode === "test-preview"
+                ? "Printable Test Preview - Nexzam"
           : "Nexzam";
   }, [paneMode]);
 
@@ -3087,6 +3159,14 @@ function App() {
     );
   }
 
+  if (paneMode === "courses") {
+    return (
+      <div className="pane-window-shell standards-window-shell">
+        <CoursesWorkspace />
+      </div>
+    );
+  }
+
   if (paneMode === "test-preview") {
     const testId = new URLSearchParams(window.location.search).get("mode");
     return (
@@ -3164,6 +3244,36 @@ function App() {
                   Starts at version A. To make another version of an existing test, use New Version
                   on that test instead.
                 </p>
+
+                <div className="new-test-courses">
+                  <span className="meta-label">Courses</span>
+                  {courses.length === 0 ? (
+                    <p className="metadata-help-text">
+                      No courses yet. Create one in the Courses view to track which standards your
+                      tests cover.
+                    </p>
+                  ) : (
+                    <>
+                      <div className="new-test-course-options">
+                        {courses.map((course) => (
+                          <label key={course.id} className="new-test-course-option">
+                            <input
+                              type="checkbox"
+                              checked={newTestCourseIds.includes(course.id)}
+                              onChange={() => toggleNewTestCourse(course.id)}
+                            />
+                            {course.title}
+                          </label>
+                        ))}
+                      </div>
+                      <p className="metadata-help-text">
+                        A test can belong to more than one course, and you can change this later
+                        from the Courses view.
+                      </p>
+                    </>
+                  )}
+                </div>
+
                 {newTestError ? <p className="bank-properties-error">{newTestError}</p> : null}
               </section>
             </div>
@@ -3269,7 +3379,12 @@ function App() {
 
         <div className="topbar-page-slot">
           {isMainWindow ? (
-              <div className="topbar-page-toggle" role="tablist" aria-label="Workspace view">
+              <div
+                className="topbar-page-toggle"
+                role="tablist"
+                aria-label="Workspace view"
+                style={{ "--page-count": WORKSPACE_PAGES.length } as CSSProperties}
+              >
                 <span
                   className="topbar-page-thumb"
                   style={{
@@ -3406,9 +3521,11 @@ function App() {
       <div
         className={`workspace ${activeWorkspacePage === "tests" ? "test-builder-workspace" : ""} ${
           activeWorkspacePage === "standards" ? "standards-page-workspace" : ""
-        }`}
+        } ${activeWorkspacePage === "courses" ? "courses-page-workspace" : ""}`}
       >
-        {activeWorkspacePage !== "standards" && !questionPanePoppedOut ? (
+        {activeWorkspacePage !== "standards" &&
+        activeWorkspacePage !== "courses" &&
+        !questionPanePoppedOut ? (
           <QuestionPane
             open={questionDrawerOpen}
             poppedOut={false}
@@ -4182,6 +4299,7 @@ function App() {
                 selectedTestId={selectedTestId}
                 tests={testDrafts}
                 openTestIds={openTestIds}
+                courses={courses}
                 onOpen={() => undefined}
                 onClose={() =>
                   isMainWindow
@@ -4195,8 +4313,20 @@ function App() {
                 onArchiveTest={handleArchiveTest}
                 onOpenPrintPreview={() => void handleOpenTestPrintPreview()}
                 onUpdateTest={(test) => void handleUpdateTestDraft(test)}
+                onCopyTest={(testId, payload) => void handleCopyTestDraft(testId, payload)}
                 onApplyTestJson={(testId, raw) => void handleApplyTestJson(testId, raw)}
               />
+            </main>
+          )
+        ) : activeWorkspacePage === "courses" ? (
+          activePageIsPoppedOut ? (
+            <PoppedOutPagePlaceholder
+              label={WORKSPACE_PAGE_LABEL.courses}
+              onDock={() => void handleDockWorkspacePage("courses")}
+            />
+          ) : (
+            <main className="courses-page-pane">
+              <CoursesWorkspace onChanged={() => void handleCoursesChanged()} />
             </main>
           )
         ) : activePageIsPoppedOut ? (

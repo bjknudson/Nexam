@@ -72,6 +72,50 @@ fn pick_directory_dialog(initial_directory: Option<String>) -> Option<String> {
     dialog.pick_folder().map(|path| path.display().to_string())
 }
 
+/// Paper sizes in points (72 per inch), matching the frontend's page sizes.
+fn paper_size_points(page_size: &str) -> (f64, f64) {
+    match page_size {
+        "legal" => (612.0, 1008.0),
+        "a4" => (595.28, 841.89),
+        _ => (612.0, 792.0),
+    }
+}
+
+/// Tell the macOS print system what paper the test was laid out for.
+///
+/// The print panel reads the shared `NSPrintInfo`, so setting it here is what
+/// carries the test's page size across. Margins go to zero on purpose: each
+/// sheet already contains its own margin as padding, and letting the print
+/// system add more would shrink the content a second time.
+#[cfg(target_os = "macos")]
+fn apply_print_info(page_size: &str) {
+    use objc2_app_kit::NSPrintInfo;
+    use objc2_foundation::NSSize;
+
+    let (width, height) = paper_size_points(page_size);
+    let info = NSPrintInfo::sharedPrintInfo();
+    info.setPaperSize(NSSize::new(width, height));
+    info.setTopMargin(0.0);
+    info.setBottomMargin(0.0);
+    info.setLeftMargin(0.0);
+    info.setRightMargin(0.0);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn apply_print_info(_page_size: &str) {}
+
+/// Open the system print dialog for the window that asked for it.
+///
+/// `window.print()` is a no-op inside the macOS webview, so the button has to
+/// come back through the shell to reach the print panel at all.
+#[tauri::command]
+fn print_current_window(webview_window: tauri::WebviewWindow, page_size: Option<String>) -> Result<(), String> {
+    apply_print_info(page_size.as_deref().unwrap_or("letter"));
+    webview_window
+        .print()
+        .map_err(|error| format!("Could not open the print dialog: {error}"))
+}
+
 #[tauri::command]
 fn set_archive_dirty(state: tauri::State<'_, Arc<AppRuntimeState>>, dirty: bool) {
     state.set_archive_dirty(dirty);
@@ -328,7 +372,8 @@ fn main() {
             save_bank_dialog,
             pick_directory_dialog,
             set_archive_dirty,
-            check_for_updates
+            check_for_updates,
+            print_current_window
         ])
         .build(tauri::generate_context!())
         .expect("error while running Nexzam");
@@ -372,4 +417,48 @@ fn main() {
             }
             _ => {}
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::paper_size_points;
+
+    #[test]
+    fn paper_sizes_match_the_preview_page_sizes() {
+        // 72 points per inch, the same sheets the preview lays out.
+        assert_eq!(paper_size_points("letter"), (612.0, 792.0)); // 8.5 x 11
+        assert_eq!(paper_size_points("legal"), (612.0, 1008.0)); // 8.5 x 14
+        let (a4_width, a4_height) = paper_size_points("a4"); // 210 x 297 mm
+        assert!((a4_width - 595.28).abs() < 0.01);
+        assert!((a4_height - 841.89).abs() < 0.01);
+    }
+
+    #[test]
+    fn an_unknown_paper_size_falls_back_to_letter() {
+        assert_eq!(paper_size_points("tabloid"), (612.0, 792.0));
+        assert_eq!(paper_size_points(""), (612.0, 792.0));
+    }
+
+    /// The print panel reads the shared `NSPrintInfo`, so this is the handoff
+    /// that actually carries the page size to the print system.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn applying_print_info_sets_the_shared_paper_size_and_clears_margins() {
+        use objc2_app_kit::NSPrintInfo;
+
+        super::apply_print_info("legal");
+        let info = NSPrintInfo::sharedPrintInfo();
+        let size = info.paperSize();
+        assert!((size.width - 612.0).abs() < 0.01, "width was {}", size.width);
+        assert!((size.height - 1008.0).abs() < 0.01, "height was {}", size.height);
+        // Each sheet already carries its own margin as padding.
+        assert_eq!(info.topMargin(), 0.0);
+        assert_eq!(info.bottomMargin(), 0.0);
+        assert_eq!(info.leftMargin(), 0.0);
+        assert_eq!(info.rightMargin(), 0.0);
+
+        super::apply_print_info("a4");
+        let a4 = NSPrintInfo::sharedPrintInfo().paperSize();
+        assert!((a4.width - 595.28).abs() < 0.01, "width was {}", a4.width);
+    }
 }

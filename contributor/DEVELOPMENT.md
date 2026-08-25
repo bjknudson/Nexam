@@ -44,7 +44,8 @@ nexzam/
 │       │   ├── App.tsx                  # top-level shell, question editor pane
 │       │   ├── BankPropertiesDialog.tsx # new/edit bank title+description
 │       │   ├── QuestionImportWorkspace.tsx # bulk JSON/CSV question staging
-│       │   ├── StandardsWorkspace.tsx   # standards import + course curation
+│       │   ├── StandardsWorkspace.tsx   # standards library: browse, import, manual entry
+│       │   ├── CoursesWorkspace.tsx     # courses: standards, tests, coverage gaps
 │       │   ├── TestBuilderPane.tsx      # test draft assembly
 │       │   ├── TestPrintPreview.tsx     # print/PDF preview
 │       │   ├── MathPreview.tsx          # KaTeX rendering helpers
@@ -61,7 +62,9 @@ nexzam/
 │   └── tauri.conf.json
 ├── samples/
 │   ├── demo-bank/
-│   └── demo-bank.bok
+│   ├── demo-bank.bok
+│   ├── sample-import.csv            # bulk question import example
+│   └── sample-standards-import.csv  # standards import with per-standard sources
 └── scripts/
     ├── build_backend_binary.sh
     └── build_demo_bok.py
@@ -225,11 +228,16 @@ POST   /api/question-imports/{import_id}/promote
 GET    /api/standards/source-lists
 GET    /api/standards
 POST   /api/standards/import
+POST   /api/standards/import/inspect
+POST   /api/standards/manual
 PUT    /api/standards/{standard_id}
 POST   /api/standards/placeholders
 
 GET    /api/courses
+GET    /api/courses/{course_id}
 PUT    /api/courses/{course_id}
+DELETE /api/courses/{course_id}
+POST   /api/courses/{course_id}/seed
 POST   /api/courses/{course_id}/standards/{standard_id}
 DELETE /api/courses/{course_id}/standards/{standard_id}
 
@@ -237,6 +245,8 @@ GET    /api/tests
 POST   /api/tests
 GET    /api/tests/{test_id}
 PUT    /api/tests/{test_id}
+PUT    /api/tests/{test_id}/courses
+POST   /api/tests/{test_id}/copy
 POST   /api/tests/{test_id}/items
 
 GET    /api/assets

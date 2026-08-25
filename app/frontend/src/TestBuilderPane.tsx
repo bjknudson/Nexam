@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type {
+  CourseModel,
+  QuestionModel,
   QuestionType,
   TestDraftDetailModel,
   TestItemModel,
@@ -19,6 +21,8 @@ interface TestBuilderPaneProps {
   tests: TestDraftDetailModel[];
   /** Ids of the tests currently "on the desk". Others stay archived. */
   openTestIds: string[];
+  /** Courses this bank knows about, for assigning the open test to some of them. */
+  courses: CourseModel[];
   pageMode?: boolean;
   onOpen: () => void;
   onClose: () => void;
@@ -29,6 +33,17 @@ interface TestBuilderPaneProps {
   onArchiveTest: (testId: string) => void;
   onOpenPrintPreview: () => void;
   onUpdateTest: (test: TestDraftModel) => void;
+  /** Fork the open test into a new draft, optionally reverting the original. */
+  onCopyTest: (
+    testId: string,
+    payload: {
+      title: string;
+      version: string;
+      course_ids: string[];
+      detach_courses_from_source: boolean;
+      source_restore: TestDraftModel | null;
+    },
+  ) => void;
   onApplyTestJson: (testId: string, raw: string) => void;
 }
 
@@ -46,6 +61,152 @@ function isQuestionItem(item: TestItemModel) {
 
 function isSectionItem(item: TestItemModel) {
   return item.item_type === "section";
+}
+
+/** Item sorting. Manual-order fields let the teacher say what "first" means
+ *  (Mechanics before Waves); the numeric ones only need a direction. */
+type SortField = "topic" | "subtopic" | "difficulty" | "type" | "time";
+
+interface SortRule {
+  field: SortField;
+  direction: "asc" | "desc";
+  /** Value order for manual-order fields, most significant first. */
+  order: string[];
+}
+
+const SORT_FIELDS: SortField[] = ["topic", "subtopic", "difficulty", "type", "time"];
+
+const SORT_FIELD_LABEL: Record<SortField, string> = {
+  topic: "Topic",
+  subtopic: "Subtopic",
+  difficulty: "Difficulty",
+  type: "Type",
+  time: "Time",
+};
+
+const MANUAL_ORDER_FIELDS: SortField[] = ["topic", "subtopic", "type"];
+
+function isManualOrderField(field: SortField) {
+  return MANUAL_ORDER_FIELDS.includes(field);
+}
+
+const NO_VALUE = "";
+
+function sortValueFor(field: SortField, question: QuestionModel | undefined): string {
+  if (!question) return NO_VALUE;
+  if (field === "topic") return question.topic ?? NO_VALUE;
+  if (field === "subtopic") return question.subtopic ?? NO_VALUE;
+  if (field === "type") return question.type;
+  return NO_VALUE;
+}
+
+function sortNumberFor(field: SortField, question: QuestionModel | undefined): number {
+  if (!question) return Number.MAX_SAFE_INTEGER;
+  if (field === "difficulty") return question.difficulty ?? 0;
+  if (field === "time") return question.estimated_time_sec ?? 0;
+  return 0;
+}
+
+/** Distinct values for a manual-order field, in the order they appear in the test. */
+function distinctSortValues(
+  field: SortField,
+  items: TestItemModel[],
+  questionById: Record<string, QuestionModel>,
+): string[] {
+  const seen: string[] = [];
+  for (const item of items) {
+    if (!isQuestionItem(item)) continue;
+    const value = sortValueFor(field, item.question_id ? questionById[item.question_id] : undefined);
+    if (!seen.includes(value)) seen.push(value);
+  }
+  return seen;
+}
+
+/** A rule's stored order, refreshed against what the test actually holds now. */
+function effectiveSortOrder(
+  rule: SortRule,
+  items: TestItemModel[],
+  questionById: Record<string, QuestionModel>,
+): string[] {
+  if (!isManualOrderField(rule.field)) return [];
+  const present = distinctSortValues(rule.field, items, questionById);
+  const kept = rule.order.filter((value) => present.includes(value));
+  const added = present.filter((value) => !kept.includes(value));
+  return [...kept, ...added];
+}
+
+function compareByRule(
+  rule: SortRule,
+  order: string[],
+  left: TestItemModel,
+  right: TestItemModel,
+  questionById: Record<string, QuestionModel>,
+): number {
+  const leftQuestion = left.question_id ? questionById[left.question_id] : undefined;
+  const rightQuestion = right.question_id ? questionById[right.question_id] : undefined;
+
+  if (isManualOrderField(rule.field)) {
+    const leftIndex = order.indexOf(sortValueFor(rule.field, leftQuestion));
+    const rightIndex = order.indexOf(sortValueFor(rule.field, rightQuestion));
+    // A value the rule does not mention sorts after the ones it does.
+    const leftRank = leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex;
+    const rightRank = rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex;
+    return leftRank - rightRank;
+  }
+
+  const difference =
+    sortNumberFor(rule.field, leftQuestion) - sortNumberFor(rule.field, rightQuestion);
+  return rule.direction === "desc" ? -difference : difference;
+}
+
+/** Sort question items inside each section, leaving section headers where they are. */
+function sortTestItems(
+  items: TestItemModel[],
+  rules: SortRule[],
+  questionById: Record<string, QuestionModel>,
+): TestItemModel[] {
+  if (rules.length === 0) return items;
+
+  const orders = rules.map((rule) => effectiveSortOrder(rule, items, questionById));
+  const sortRun = (run: TestItemModel[]) =>
+    run
+      .map((item, index) => ({ item, index }))
+      .sort((left, right) => {
+        for (let ruleIndex = 0; ruleIndex < rules.length; ruleIndex += 1) {
+          const result = compareByRule(
+            rules[ruleIndex],
+            orders[ruleIndex],
+            left.item,
+            right.item,
+            questionById,
+          );
+          if (result !== 0) return result;
+        }
+        // Ties keep the order the teacher already arranged.
+        return left.index - right.index;
+      })
+      .map((entry) => entry.item);
+
+  const sorted: TestItemModel[] = [];
+  let run: TestItemModel[] = [];
+  const flushRun = () => {
+    if (run.length > 0) {
+      sorted.push(...sortRun(run));
+      run = [];
+    }
+  };
+
+  for (const item of items) {
+    if (isSectionItem(item)) {
+      flushRun();
+      sorted.push(item);
+      continue;
+    }
+    run.push(item);
+  }
+  flushRun();
+
+  return sorted;
 }
 
 function parseStandardText(value: string): string[] {
@@ -230,6 +391,7 @@ function TestBuilderPane({
   selectedTestId,
   tests,
   openTestIds,
+  courses,
   pageMode = false,
   onOpen,
   onClose,
@@ -240,6 +402,7 @@ function TestBuilderPane({
   onArchiveTest,
   onOpenPrintPreview,
   onUpdateTest,
+  onCopyTest,
   onApplyTestJson,
 }: TestBuilderPaneProps) {
   const [testSearch, setTestSearch] = useState("");
@@ -247,6 +410,18 @@ function TestBuilderPane({
   const [jsonDraft, setJsonDraft] = useState("");
   const [jsonDirty, setJsonDirty] = useState(false);
   const [jsonCopied, setJsonCopied] = useState(false);
+  const [courseMenuOpen, setCourseMenuOpen] = useState(false);
+  const [sharedNoticeDismissed, setSharedNoticeDismissed] = useState(false);
+  const [copyDialogOpen, setCopyDialogOpen] = useState(false);
+  const [copyTitle, setCopyTitle] = useState("");
+  const [copyVersion, setCopyVersion] = useState("");
+  const [copyCourseIds, setCopyCourseIds] = useState<string[]>([]);
+  const [copyDetachFromSource, setCopyDetachFromSource] = useState(true);
+  const [copyRestoreOriginal, setCopyRestoreOriginal] = useState(true);
+  const [sortRules, setSortRules] = useState<SortRule[]>([]);
+  // How the open test looked when it was opened, so a shared test can be put
+  // back the way the other courses had it after a fork.
+  const snapshotRef = useRef<TestDraftModel | null>(null);
   if (!open) {
     return (
       <section className="test-builder-collapsed">
@@ -294,6 +469,110 @@ function TestBuilderPane({
     setJsonCopied(false);
   }, [selectedTest?.test.id, jsonMode]);
   const questionItemCount = selectedTest?.test.items.filter(isQuestionItem).length ?? 0;
+
+  // Snapshot the test as opened, and reset the per-test UI that hangs off it.
+  useEffect(() => {
+    snapshotRef.current = selectedTest ? structuredClone(selectedTest.test) : null;
+    setSharedNoticeDismissed(false);
+    setCourseMenuOpen(false);
+    setCopyDialogOpen(false);
+    setSortRules([]);
+    // Only when a different test is put on the desk, not on every edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTest?.test.id]);
+
+  const assignedCourses = selectedTest
+    ? courses.filter((course) => selectedTest.test.course_ids.includes(course.id))
+    : [];
+  const unassignedCourses = selectedTest
+    ? courses.filter((course) => !selectedTest.test.course_ids.includes(course.id))
+    : [];
+
+  const toggleCourse = (courseId: string) => {
+    if (!selectedTest) return;
+    onUpdateTest({
+      ...selectedTest.test,
+      course_ids: selectedTest.test.course_ids.includes(courseId)
+        ? selectedTest.test.course_ids.filter((id) => id !== courseId)
+        : [...selectedTest.test.course_ids, courseId],
+    });
+  };
+
+  // Course membership on its own is not an edit to the test's contents, so it
+  // does not raise the shared-test notice.
+  const contentsOf = (test: TestDraftModel) =>
+    JSON.stringify({ ...test, course_ids: [] });
+  const testEdited = Boolean(
+    selectedTest &&
+      snapshotRef.current &&
+      contentsOf(selectedTest.test) !== contentsOf(snapshotRef.current),
+  );
+  const sharedNotice =
+    selectedTest && assignedCourses.length > 1 && testEdited && !sharedNoticeDismissed
+      ? assignedCourses.map((course) => course.title).join(" and ")
+      : null;
+
+  const openCopyDialog = () => {
+    if (!selectedTest) return;
+    setCopyTitle(`${selectedTest.test.title} (Copy)`);
+    setCopyVersion(selectedTest.test.version);
+    setCopyCourseIds([...selectedTest.test.course_ids]);
+    setCopyDetachFromSource(selectedTest.test.course_ids.length > 1);
+    setCopyRestoreOriginal(testEdited);
+    setCopyDialogOpen(true);
+  };
+
+  const submitCopy = () => {
+    if (!selectedTest) return;
+    onCopyTest(selectedTest.test.id, {
+      title: copyTitle.trim() || selectedTest.test.title,
+      version: copyVersion.trim() || selectedTest.test.version,
+      course_ids: copyCourseIds,
+      detach_courses_from_source: copyDetachFromSource,
+      source_restore: copyRestoreOriginal ? snapshotRef.current : null,
+    });
+    setCopyDialogOpen(false);
+    setSharedNoticeDismissed(true);
+  };
+
+  const usedSortFields = sortRules.map((rule) => rule.field);
+  const availableSortFields = SORT_FIELDS.filter((field) => !usedSortFields.includes(field));
+
+  const addSortRule = () => {
+    const field = availableSortFields[0];
+    if (!field) return;
+    setSortRules((rules) => [...rules, { field, direction: "asc", order: [] }]);
+  };
+
+  const updateSortRule = (index: number, patch: Partial<SortRule>) => {
+    setSortRules((rules) =>
+      rules.map((rule, ruleIndex) => (ruleIndex === index ? { ...rule, ...patch } : rule)),
+    );
+  };
+
+  const removeSortRule = (index: number) => {
+    setSortRules((rules) => rules.filter((_, ruleIndex) => ruleIndex !== index));
+  };
+
+  const moveSortValue = (ruleIndex: number, valueIndex: number, direction: -1 | 1) => {
+    if (!selectedTest) return;
+    const rule = sortRules[ruleIndex];
+    const order = effectiveSortOrder(rule, selectedTest.test.items, questionById);
+    const nextIndex = valueIndex + direction;
+    if (nextIndex < 0 || nextIndex >= order.length) return;
+    const reordered = [...order];
+    const [value] = reordered.splice(valueIndex, 1);
+    reordered.splice(nextIndex, 0, value);
+    updateSortRule(ruleIndex, { order: reordered });
+  };
+
+  const applySortRules = () => {
+    if (!selectedTest || sortRules.length === 0) return;
+    onUpdateTest({
+      ...selectedTest.test,
+      items: sortTestItems(selectedTest.test.items, sortRules, questionById),
+    });
+  };
 
   const updateItem = (index: number, patch: Partial<TestDraftModel["items"][number]>) => {
     if (!selectedTest) return;
@@ -365,6 +644,14 @@ function TestBuilderPane({
             title="Copy this test's settings and items into the next version"
           >
             New Version
+          </button>
+          <button
+            type="button"
+            onClick={openCopyDialog}
+            disabled={loading || !selectedTest}
+            title="Fork this test into a separate draft"
+          >
+            Save as Copy
           </button>
           {pageMode ? null : (
             <button type="button" onClick={onClose}>
@@ -492,6 +779,78 @@ function TestBuilderPane({
                 Preview Print
               </button>
             </section>
+
+            {courses.length > 0 ? (
+              <section className="test-course-tags">
+                {assignedCourses.map((course) => (
+                  <span key={course.id} className="test-course-tag">
+                    {course.title}
+                    <button
+                      type="button"
+                      aria-label={`Remove ${course.title}`}
+                      title={`Remove ${course.title}`}
+                      onClick={() => toggleCourse(course.id)}
+                      disabled={loading}
+                    >
+                      &times;
+                    </button>
+                  </span>
+                ))}
+                {unassignedCourses.length > 0 ? (
+                  <div className="test-course-picker">
+                    <button
+                      type="button"
+                      className="test-course-add"
+                      aria-expanded={courseMenuOpen}
+                      onClick={() => setCourseMenuOpen((open) => !open)}
+                      disabled={loading}
+                    >
+                      + Course
+                    </button>
+                    {courseMenuOpen ? (
+                      <div className="test-course-menu" role="menu">
+                        {unassignedCourses.map((course) => (
+                          <button
+                            key={course.id}
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              toggleCourse(course.id);
+                              setCourseMenuOpen(false);
+                            }}
+                          >
+                            {course.title}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+                {assignedCourses.length === 0 ? (
+                  <span className="test-course-empty">No course assigned</span>
+                ) : null}
+              </section>
+            ) : null}
+
+            {sharedNotice ? (
+              <section className="test-shared-notice">
+                <p>
+                  Edited a test shared with {sharedNotice}. Those courses see this change too.
+                </p>
+                <div className="test-shared-notice-actions">
+                  <button type="button" onClick={openCopyDialog} disabled={loading}>
+                    Save as Copy
+                  </button>
+                  <button
+                    type="button"
+                    className="test-shared-notice-dismiss"
+                    onClick={() => setSharedNoticeDismissed(true)}
+                  >
+                    Keep Shared
+                  </button>
+                </div>
+              </section>
+            ) : null}
 
             <section className="test-summary-grid">
               <div>
@@ -1026,7 +1385,122 @@ function TestBuilderPane({
             </details>
 
             <section className="test-item-list">
-              <h3>Items</h3>
+              <div className="test-item-list-header">
+                <h3>Items</h3>
+                <div className="test-sort-actions">
+                  <button
+                    type="button"
+                    onClick={addSortRule}
+                    disabled={availableSortFields.length === 0}
+                    title={
+                      availableSortFields.length === 0
+                        ? "Every sort option is already in use"
+                        : "Add a sort level"
+                    }
+                  >
+                    Add Sort
+                  </button>
+                  {sortRules.length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={applySortRules}
+                      disabled={loading || questionItemCount === 0}
+                    >
+                      Apply Sort
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+
+              {sortRules.length > 0 ? (
+                <div className="test-sort-rules">
+                  {sortRules.map((rule, ruleIndex) => {
+                    const order = effectiveSortOrder(
+                      rule,
+                      selectedTest.test.items,
+                      questionById,
+                    );
+                    return (
+                      <div key={`${rule.field}-${ruleIndex}`} className="test-sort-rule">
+                        <span className="test-sort-rank">{ruleIndex === 0 ? "Sort by" : "then by"}</span>
+                        <select
+                          value={rule.field}
+                          onChange={(event) =>
+                            updateSortRule(ruleIndex, {
+                              field: event.target.value as SortField,
+                              order: [],
+                            })
+                          }
+                        >
+                          {SORT_FIELDS.filter(
+                            (field) => field === rule.field || availableSortFields.includes(field),
+                          ).map((field) => (
+                            <option key={field} value={field}>
+                              {SORT_FIELD_LABEL[field]}
+                            </option>
+                          ))}
+                        </select>
+
+                        {isManualOrderField(rule.field) ? (
+                          <div className="test-sort-manual">
+                            {order.length === 0 ? (
+                              <span className="test-sort-manual-empty">
+                                No values in this test yet
+                              </span>
+                            ) : (
+                              order.map((value, valueIndex) => (
+                                <span key={value || "(none)"} className="test-sort-value">
+                                  {value || "(none)"}
+                                  <button
+                                    type="button"
+                                    aria-label="Move earlier"
+                                    onClick={() => moveSortValue(ruleIndex, valueIndex, -1)}
+                                    disabled={valueIndex === 0}
+                                  >
+                                    &uarr;
+                                  </button>
+                                  <button
+                                    type="button"
+                                    aria-label="Move later"
+                                    onClick={() => moveSortValue(ruleIndex, valueIndex, 1)}
+                                    disabled={valueIndex === order.length - 1}
+                                  >
+                                    &darr;
+                                  </button>
+                                </span>
+                              ))
+                            )}
+                          </div>
+                        ) : (
+                          <select
+                            value={rule.direction}
+                            onChange={(event) =>
+                              updateSortRule(ruleIndex, {
+                                direction: event.target.value as "asc" | "desc",
+                              })
+                            }
+                          >
+                            <option value="asc">Increasing</option>
+                            <option value="desc">Decreasing</option>
+                          </select>
+                        )}
+
+                        <button
+                          type="button"
+                          className="test-sort-remove"
+                          onClick={() => removeSortRule(ruleIndex)}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    );
+                  })}
+                  <p className="test-sort-hint">
+                    Apply Sort rewrites the item order. Questions stay inside their section.
+                  </p>
+                </div>
+              ) : null}
+
               {selectedTest.test.items.length === 0 ? (
                 <p className="test-builder-empty">Add questions from the question list.</p>
               ) : (
@@ -1203,6 +1677,77 @@ function TestBuilderPane({
           )}
         </div>
       )}
+
+      {copyDialogOpen && selectedTest ? (
+        <div className="test-copy-backdrop" role="dialog" aria-modal="true" aria-label="Save test as copy">
+          <div className="test-copy-dialog">
+            <h3>Save as Copy</h3>
+            <p>
+              Makes a new test draft from what is on screen now. Use it when a test shared
+              with another course needs to change for only one of them.
+            </p>
+
+            <label>
+              Title
+              <input value={copyTitle} onChange={(event) => setCopyTitle(event.target.value)} />
+            </label>
+            <label className="test-version-field">
+              Version
+              <input value={copyVersion} onChange={(event) => setCopyVersion(event.target.value)} />
+            </label>
+
+            {selectedTest.test.course_ids.length > 0 ? (
+              <fieldset className="test-copy-courses">
+                <legend>Courses for the copy</legend>
+                {assignedCourses.map((course) => (
+                  <label key={course.id}>
+                    <input
+                      type="checkbox"
+                      checked={copyCourseIds.includes(course.id)}
+                      onChange={() =>
+                        setCopyCourseIds((ids) =>
+                          ids.includes(course.id)
+                            ? ids.filter((id) => id !== course.id)
+                            : [...ids, course.id],
+                        )
+                      }
+                    />
+                    {course.title}
+                  </label>
+                ))}
+              </fieldset>
+            ) : null}
+
+            <label className="test-copy-toggle">
+              <input
+                type="checkbox"
+                checked={copyDetachFromSource}
+                onChange={(event) => setCopyDetachFromSource(event.target.checked)}
+              />
+              Move those courses off the original
+            </label>
+            <label className="test-copy-toggle">
+              <input
+                type="checkbox"
+                checked={copyRestoreOriginal}
+                onChange={(event) => setCopyRestoreOriginal(event.target.checked)}
+                disabled={!testEdited}
+              />
+              Put the original back the way it was when opened
+              {testEdited ? null : <span className="test-copy-note"> (no edits yet)</span>}
+            </label>
+
+            <div className="test-copy-actions">
+              <button type="button" onClick={() => setCopyDialogOpen(false)}>
+                Cancel
+              </button>
+              <button type="button" onClick={submitCopy} disabled={loading}>
+                Create Copy
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

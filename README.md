@@ -14,8 +14,8 @@ tests, and attached images — not a proprietary blob.
 mybank.bok
 ├── manifest.json     # bank title, description
 ├── questions/        # one JSON file per question
-├── standards/        # imported standards you align questions to
-├── courses/          # curated standard sets per course
+├── standards/        # your standards library, filed by source
+├── courses/          # named sets of the standards each course teaches
 ├── tests/            # test drafts assembled from your questions
 └── assets/           # images and SVG diagrams attached to questions
 ```
@@ -118,13 +118,43 @@ the ones you want. This is the fastest way to bring in AI-generated or
 spreadsheet-authored questions in bulk — see [Generating questions
 with AI](#generating-questions-with-ai) below.
 
-### Standards
+### Library
 
-Import a set of standards from CSV or JSON, then align questions and
-courses to them. CSV needs `id` (or `standard_id`), `code`, and
-`statement` columns, plus optional `subject`, `grade_band`, and `tags`
-columns. JSON can be a plain array of standard objects, `{ "items":
-[...] }`, or `{ "source_list": {...}, "standards": [...] }`.
+The library is every standard in your bank. Each standard is filed
+under the source it came from — a state framework, a published set,
+your own district list — and you browse the library sorted by source,
+filtered by source or strand, and searched by anything the standard
+says.
+
+Import a set of standards from CSV or JSON, or type them in by hand.
+CSV needs `id` (or `standard_id`), `code`, and `statement` columns,
+plus optional `strand`, `subject`, `grade_band`, and `tags`. JSON can
+be a plain array of standard objects, `{ "items": [...] }`, or
+`{ "source_list": {...}, "standards": [...] }`.
+
+Nexzam reads the source out of the file first. Add a `source` (or
+`source_title`) column — optionally with `source_id` and `issuer` — and
+one file can bring in standards from several sources at once, each
+kept with its own. Only when the file cannot name a source for every
+standard does Nexzam ask you for one to cover the rest.
+
+When you add a standard by hand you pick its source from the ones
+already in the library, or choose **Add new source...** and describe a
+new one right there.
+
+### Courses
+
+A course is a named set of standards you actually teach, plus the
+tests that assess them. Pull standards into it from the library and
+attach tests to it — a test can belong to more than one course, so
+reusing a midterm when a course is retaught does not take it away from
+anywhere else.
+
+The course view then shows you what your tests actually cover: which
+of the course's standards are assessed and how many times, which are
+not assessed at all (the blind spots), and which standards the tests
+reach that the course never listed — reading and writing standards
+often turn up that way.
 
 ### Test Builder
 
@@ -140,11 +170,13 @@ formatted, paginated result and export it to PDF.
    app menu.
 2. Browse and edit questions in the **Question Editor**.
 3. Attach images or SVG diagrams to a question from its asset panel.
-4. Import a standards list and align questions to it under
-   **Standards**.
-5. Build a test in **Test Builder**, then open Print Preview and
+4. Import a standards list into the **Library** and align questions to
+   it.
+5. Create a course under **Courses**, pull in the standards it teaches,
+   and attach its tests.
+6. Build a test in **Test Builder**, then open Print Preview and
    **Print** to save it as a PDF.
-6. Click **Save Bank** to write your changes back into the `.bok`
+7. Click **Save Bank** to write your changes back into the `.bok`
    file. (Nexzam autosaves form edits to a local working copy as you
    go; raw JSON edits and the `.bok` archive itself are saved
    explicitly.)

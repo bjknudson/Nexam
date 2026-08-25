@@ -1015,3 +1015,462 @@ def test_multiple_choice_indices_still_reject_unusable_values() -> None:
         QuestionModel.model_validate(
             {**base, "answer": {**base["answer"], "correct_choice_indices": ["0"]}}
         )
+
+
+def test_import_keeps_standards_with_their_own_sources(
+    bank_service: BankWorkspaceService,
+    demo_bok: Path,
+) -> None:
+    """A file that names a source per standard splits into one source each."""
+    bank_service.open_bank(str(demo_bok))
+    csv_text = (
+        "id,code,statement,strand,source_title,issuer\n"
+        "ELA-R-01,ELA-R-01,Cite textual evidence.,Reading,District ELA Standards,Local District\n"
+        "ELA-W-01,ELA-W-01,Write arguments with reasons.,Writing,District ELA Standards,Local District\n"
+        "SCI-01,SCI-01,Model energy transfer.,Energy,District Science Standards,Local District\n"
+    )
+
+    response = bank_service.import_standards(
+        filename="district.csv",
+        content=csv_text.encode("utf-8"),
+    )
+
+    assert response.imported_count == 3
+    assert {item.id for item in response.source_lists} == {
+        "district-ela-standards",
+        "district-science-standards",
+    }
+
+    saved = {item.id: item for item in bank_service.list_standards().items}
+    assert saved["ELA-R-01"].source_list_id == "district-ela-standards"
+    assert saved["ELA-R-01"].strand == "Reading"
+    assert saved["SCI-01"].source_list_id == "district-science-standards"
+
+
+def test_import_falls_back_to_supplied_source_when_file_is_silent(
+    bank_service: BankWorkspaceService,
+    demo_bok: Path,
+) -> None:
+    bank_service.open_bank(str(demo_bok))
+    csv_text = "id,code,statement\nGEO-01,GEO-01,Prove triangle congruence.\n"
+
+    # With no source in the file and none supplied, the import asks for one.
+    with pytest.raises(BankWorkspaceError) as exc_info:
+        bank_service.import_standards(filename="geo.csv", content=csv_text.encode("utf-8"))
+    assert exc_info.value.status_code == 422
+
+    response = bank_service.import_standards(
+        filename="geo.csv",
+        content=csv_text.encode("utf-8"),
+        source_list_id="geometry-2026",
+        title="Geometry Standards",
+        issuer="Local District",
+    )
+
+    assert response.imported_count == 1
+    assert response.source_list.id == "geometry-2026"
+    saved = {item.id: item for item in bank_service.list_standards().items}
+    assert saved["GEO-01"].source_list_id == "geometry-2026"
+
+
+def test_inspect_standard_import_reports_whether_a_source_is_needed(
+    bank_service: BankWorkspaceService,
+    demo_bok: Path,
+) -> None:
+    bank_service.open_bank(str(demo_bok))
+
+    silent = bank_service.inspect_standard_import(
+        filename="silent.csv",
+        content=b"id,code,statement\nX-01,X-01,Something.\n",
+    )
+    assert silent.total_rows == 1
+    assert silent.rows_with_source == 0
+    assert silent.needs_source_input is True
+
+    self_describing = bank_service.inspect_standard_import(
+        filename="described.csv",
+        content=(
+            "id,code,statement,source_title,issuer\n"
+            "Y-01,Y-01,Something else.,Y Standards,Y Board\n"
+        ).encode("utf-8"),
+    )
+    assert self_describing.rows_with_source == 1
+    assert self_describing.needs_source_input is False
+    assert self_describing.detected_sources[0].title == "Y Standards"
+    assert self_describing.detected_sources[0].complete is True
+
+
+def test_manual_standards_can_name_a_source_per_row(
+    bank_service: BankWorkspaceService,
+    demo_bok: Path,
+) -> None:
+    bank_service.open_bank(str(demo_bok))
+
+    response = bank_service.create_standards_manually(
+        CreateStandardsManuallyRequest(
+            standards=[
+                ManualStandardRowModel(
+                    id="ROW-EXISTING-01",
+                    statement="Filed under a source already in the library.",
+                    source_list_id="physics-core-2026",
+                ),
+                ManualStandardRowModel(
+                    id="ROW-NEW-01",
+                    statement="Filed under a brand new source.",
+                    strand="Measurement",
+                    source_list_id="site-lab-2026",
+                    source_title="Site Lab Standards",
+                    source_issuer="Local District",
+                ),
+            ]
+        )
+    )
+
+    assert response.imported_count == 2
+    saved = {item.id: item for item in bank_service.list_standards().items}
+    assert saved["ROW-EXISTING-01"].source_list_id == "physics-core-2026"
+    assert saved["ROW-NEW-01"].source_list_id == "site-lab-2026"
+    assert saved["ROW-NEW-01"].strand == "Measurement"
+    assert "site-lab-2026" in {item.id for item in bank_service.list_source_standard_lists().items}
+
+
+def test_list_standards_filters_by_strand_and_sorts_by_source(
+    bank_service: BankWorkspaceService,
+    demo_bok: Path,
+) -> None:
+    bank_service.open_bank(str(demo_bok))
+    bank_service.create_standards_manually(
+        CreateStandardsManuallyRequest(
+            source_list_id="physics-core-2026",
+            standards=[
+                ManualStandardRowModel(
+                    id="STRAND-01", statement="Waves strand.", strand="Waves"
+                ),
+                ManualStandardRowModel(
+                    id="STRAND-02", statement="Optics strand.", strand="Optics"
+                ),
+            ],
+        )
+    )
+
+    assert "Optics" in bank_service.list_standard_strands()
+    # Filtering by strand returns everything on that strand, including the demo
+    # standards already carrying it.
+    waves = {item.id for item in bank_service.list_standards(strand="Waves").items}
+    assert "STRAND-01" in waves
+    assert "STRAND-02" not in waves
+    assert all(item.strand == "Waves" for item in bank_service.list_standards(strand="Waves").items)
+
+    # Searching reaches the strand text, not just the statement.
+    assert any(
+        item.id == "STRAND-02" for item in bank_service.list_standards(search="optics").items
+    )
+
+    by_source = bank_service.list_standards(sort="source").items
+    source_titles = {
+        item.id: item.title for item in bank_service.list_source_standard_lists().items
+    }
+    ordered = [source_titles[item.source_list_id].lower() for item in by_source]
+    assert ordered == sorted(ordered)
+
+
+def test_course_detail_reports_coverage_blind_spots_and_extras(
+    bank_service: BankWorkspaceService,
+    demo_bok: Path,
+) -> None:
+    bank_service.open_bank(str(demo_bok))
+    detail = bank_service.create_test_draft(
+        title="Physics Unit 1", version="A", course_ids=["physics-1"]
+    )
+    test_id = detail.test.id
+
+    # q_mc_0001 carries PHY-KIN-01, which the physics-1 course lists.
+    covered_question = next(
+        question
+        for question in bank_service._load_questions()
+        if any(reference.standard_id == "PHY-KIN-01" for reference in question.standards)
+    )
+    bank_service.add_question_to_test(test_id, covered_question.id)
+
+    # A question whose standards sit outside the course shows up as an extra.
+    extra_question = next(
+        question
+        for question in bank_service._load_questions()
+        if question.standards
+        and all(
+            reference.standard_id
+            not in {"PHY-KIN-01", "PHY-NEW-01", "PHY-WAV-02", "PHY-ELE-01"}
+            for reference in question.standards
+        )
+    )
+    bank_service.add_question_to_test(test_id, extra_question.id)
+
+    course = bank_service.get_course_detail("physics-1")
+
+    assert [item.test_id for item in course.tests] == [test_id]
+    assert course.question_count == 2
+    covered_ids = {item.standard_id for item in course.covered_standards}
+    uncovered_ids = {item.standard_id for item in course.uncovered_standards}
+    assert "PHY-KIN-01" in covered_ids
+    assert covered_ids.isdisjoint(uncovered_ids)
+    assert len(covered_ids) + len(uncovered_ids) == len(course.course.standard_refs)
+    assert all(item.question_count == 0 for item in course.uncovered_standards)
+    assert all(item.question_count > 0 for item in course.covered_standards)
+    assert course.extra_standards
+    assert all(not item.in_course for item in course.extra_standards)
+
+
+def test_tests_can_serve_several_courses_and_survive_a_deleted_one(
+    bank_service: BankWorkspaceService,
+    demo_bok: Path,
+) -> None:
+    bank_service.open_bank(str(demo_bok))
+    detail = bank_service.create_test_draft(
+        title="Shared Midterm", version="A", course_ids=["physics-1", "algebra-1"]
+    )
+
+    assert detail.test.course_ids == ["physics-1", "algebra-1"]
+    assert detail.summary.course_ids == ["physics-1", "algebra-1"]
+    assert [item.test_id for item in bank_service.get_course_detail("algebra-1").tests] == [
+        detail.test.id
+    ]
+
+    bank_service.delete_course("algebra-1")
+
+    reloaded = bank_service.get_test_draft(detail.test.id)
+    assert reloaded.test.course_ids == ["physics-1"]
+    with pytest.raises(BankWorkspaceError):
+        bank_service.get_course_detail("algebra-1")
+
+
+def test_test_draft_rejects_an_unknown_course(
+    bank_service: BankWorkspaceService,
+    demo_bok: Path,
+) -> None:
+    bank_service.open_bank(str(demo_bok))
+
+    with pytest.raises(BankWorkspaceError) as exc_info:
+        bank_service.create_test_draft(title="Orphan", version="A", course_ids=["not-a-course"])
+
+    assert exc_info.value.status_code == 422
+    assert "not-a-course" in exc_info.value.message
+
+
+def test_course_assignments_survive_a_save_and_reopen(
+    bank_service: BankWorkspaceService,
+    demo_bok: Path,
+    tmp_path: Path,
+) -> None:
+    bank_service.open_bank(str(demo_bok))
+    detail = bank_service.create_test_draft(
+        title="Persisted Test", version="A", course_ids=["physics-1"]
+    )
+    saved_path = tmp_path / "saved-bank.bok"
+    bank_service.save_bank(str(saved_path))
+
+    reopened = BankWorkspaceService()
+    reopened.open_bank(str(saved_path))
+
+    assert reopened.get_test_draft(detail.test.id).test.course_ids == ["physics-1"]
+
+
+def test_seeding_a_course_pulls_in_standards_and_associates_tests(
+    bank_service: BankWorkspaceService,
+    demo_bok: Path,
+) -> None:
+    bank_service.open_bank(str(demo_bok))
+    source = bank_service.get_course_detail("physics-1")
+    source_standard_ids = [ref.standard_id for ref in source.course.standard_refs]
+    shared = bank_service.create_test_draft(
+        title="Unit 1 Forces", version="A", course_ids=["physics-1"]
+    )
+
+    bank_service.upsert_course(
+        course_id="physics-1-2027",
+        title="Physics 1 (2027)",
+        description=None,
+        standard_refs=[],
+    )
+    detail = bank_service.seed_course_from("physics-1-2027", "physics-1")
+
+    assert [ref.standard_id for ref in detail.course.standard_refs] == source_standard_ids
+    assert [item.test_id for item in detail.tests] == [shared.test.id]
+    # Associated, not copied: one test now reports coverage for both courses.
+    assert bank_service.get_test_draft(shared.test.id).test.course_ids == [
+        "physics-1",
+        "physics-1-2027",
+    ]
+
+
+def test_seeding_a_course_can_take_standards_without_tests(
+    bank_service: BankWorkspaceService,
+    demo_bok: Path,
+) -> None:
+    bank_service.open_bank(str(demo_bok))
+    bank_service.create_test_draft(title="Unit 1", version="A", course_ids=["physics-1"])
+    bank_service.upsert_course(
+        course_id="physics-standards-only",
+        title="Physics (standards only)",
+        description=None,
+        standard_refs=[],
+    )
+
+    detail = bank_service.seed_course_from(
+        "physics-standards-only", "physics-1", include_tests=False
+    )
+
+    assert detail.course.standard_refs
+    assert detail.tests == []
+
+
+def test_seeding_a_course_is_idempotent_and_refuses_itself(
+    bank_service: BankWorkspaceService,
+    demo_bok: Path,
+) -> None:
+    bank_service.open_bank(str(demo_bok))
+    shared = bank_service.create_test_draft(
+        title="Unit 1", version="A", course_ids=["physics-1"]
+    )
+    bank_service.upsert_course(
+        course_id="physics-repeat", title="Physics Repeat", description=None, standard_refs=[]
+    )
+
+    first = bank_service.seed_course_from("physics-repeat", "physics-1")
+    second = bank_service.seed_course_from("physics-repeat", "physics-1")
+
+    assert [ref.standard_id for ref in first.course.standard_refs] == [
+        ref.standard_id for ref in second.course.standard_refs
+    ]
+    assert bank_service.get_test_draft(shared.test.id).test.course_ids == [
+        "physics-1",
+        "physics-repeat",
+    ]
+
+    with pytest.raises(BankWorkspaceError) as exc_info:
+        bank_service.seed_course_from("physics-repeat", "physics-repeat")
+    assert exc_info.value.status_code == 400
+
+
+def test_copying_a_shared_test_restores_the_original_for_the_other_course(
+    bank_service: BankWorkspaceService,
+    demo_bok: Path,
+) -> None:
+    bank_service.open_bank(str(demo_bok))
+    shared = bank_service.create_test_draft(
+        title="Unit 1 Forces", version="A", course_ids=["physics-1", "algebra-1"]
+    )
+    snapshot = bank_service.get_test_draft(shared.test.id).test.model_copy(deep=True)
+
+    # The teacher edits the shared test, which autosaves for both courses.
+    edited = bank_service.add_question_to_test(shared.test.id, "q_fr_0001").test
+    assert len(edited.items) == 1
+
+    copy = bank_service.copy_test_draft(
+        shared.test.id,
+        title="Unit 1 Forces (2027)",
+        course_ids=["algebra-1"],
+        detach_courses_from_source=True,
+        source_restore=snapshot,
+    )
+
+    # The copy keeps the edits and only the course it was forked for.
+    assert copy.test.id != shared.test.id
+    assert copy.test.title == "Unit 1 Forces (2027)"
+    assert [item.question_id for item in copy.test.items] == ["q_fr_0001"]
+    assert copy.test.course_ids == ["algebra-1"]
+
+    # The original goes back to what the other course had, and keeps that course.
+    original = bank_service.get_test_draft(shared.test.id).test
+    assert original.items == []
+    assert original.course_ids == ["physics-1"]
+
+
+def test_copying_a_test_defaults_to_the_source_courses_and_drops_results(
+    bank_service: BankWorkspaceService,
+    demo_bok: Path,
+) -> None:
+    bank_service.open_bank(str(demo_bok))
+    source = bank_service.create_test_draft(
+        title="Unit 2", version="B", course_ids=["physics-1"]
+    )
+    bank_service.add_question_to_test(source.test.id, "q_fr_0001")
+
+    copy = bank_service.copy_test_draft(source.test.id)
+
+    assert copy.test.course_ids == ["physics-1"]
+    assert copy.test.title == "Unit 2"
+    assert copy.test.version == "B"
+    assert [item.question_id for item in copy.test.items] == ["q_fr_0001"]
+    assert copy.test.performance_runs == []
+    # Untouched, because no restore snapshot was supplied.
+    assert bank_service.get_test_draft(source.test.id).test.course_ids == ["physics-1"]
+
+
+def test_course_coverage_counts_a_test_once_across_its_versions(
+    bank_service: BankWorkspaceService,
+    demo_bok: Path,
+) -> None:
+    bank_service.open_bank(str(demo_bok))
+    baseline = bank_service.get_course_detail("physics-1").question_count
+
+    version_a = bank_service.create_test_draft(
+        title="Kinematics Quiz", version="A", course_ids=["physics-1"]
+    )
+    for question_id in ("q_fr_0001", "q_fr_0002"):
+        bank_service.add_question_to_test(version_a.test.id, question_id)
+
+    after_one = bank_service.get_course_detail("physics-1")
+    assert after_one.question_count == baseline + 2
+
+    # Two more versions of the same test: security and retakes, not more assessment.
+    for version in ("B", "C"):
+        copy = bank_service.copy_test_draft(
+            version_a.test.id, version=version, course_ids=["physics-1"]
+        )
+        assert copy.test.title == "Kinematics Quiz"
+
+    detail = bank_service.get_course_detail("physics-1")
+    assert detail.question_count == baseline + 2
+
+    lineage = next(item for item in detail.tests if item.title == "Kinematics Quiz")
+    assert lineage.versions == ["A", "B", "C"]
+    assert len(lineage.test_ids) == 3
+    assert lineage.question_count == 2
+    # One row for the lineage, not one per version.
+    assert [item.title for item in detail.tests].count("Kinematics Quiz") == 1
+
+
+def test_course_coverage_takes_the_largest_version_when_versions_differ(
+    bank_service: BankWorkspaceService,
+    demo_bok: Path,
+) -> None:
+    bank_service.open_bank(str(demo_bok))
+    bank_service.upsert_course(
+        course_id="versions-course",
+        title="Versions Course",
+        description=None,
+        standard_refs=[],
+    )
+    version_a = bank_service.create_test_draft(
+        title="Retake Quiz", version="A", course_ids=["versions-course"]
+    )
+    bank_service.add_question_to_test(version_a.test.id, "q_fr_0001")
+
+    version_b = bank_service.copy_test_draft(
+        version_a.test.id, version="B", course_ids=["versions-course"]
+    )
+    bank_service.add_question_to_test(version_b.test.id, "q_fr_0002")
+
+    detail = bank_service.get_course_detail("versions-course")
+    lineage = next(item for item in detail.tests if item.title == "Retake Quiz")
+
+    # B is the longer sitting at two questions; A's single question is not added on.
+    assert lineage.question_count == 2
+    assert detail.question_count == 2
+    assert lineage.versions == ["A", "B"]
+
+    # A standard reached by both versions still counts once.
+    covered = {item.standard_id: item for item in detail.extra_standards}
+    for coverage in covered.values():
+        assert coverage.test_count == 1
+        assert coverage.question_count <= 2

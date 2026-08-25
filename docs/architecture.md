@@ -13,6 +13,9 @@
    - Launches and supervises a local Python backend process.
 
 2. **Frontend (React + TypeScript + Vite)**
+   - Four top-level views: Library, Courses, Question Editor, Test Builder.
+   - Library: every standard in the bank, grouped by source, with import and manual entry.
+   - Courses: a named set of standards plus its tests, with coverage and blind-spot reporting.
    - Question browser with filters.
    - Question editor with form mode and raw JSON mode.
    - KaTeX preview for LaTeX strings.

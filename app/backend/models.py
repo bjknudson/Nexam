@@ -77,6 +77,7 @@ class StandardRecordModel(BaseModel):
     code: str
     statement: str
     subject: str | None = None
+    strand: str | None = None
     grade_band: str | None = None
     tags: list[str] = Field(default_factory=list)
 
@@ -100,6 +101,55 @@ class CourseCollectionModel(BaseModel):
     items: list[CourseModel] = Field(default_factory=list)
 
 
+class CourseStandardCoverageModel(BaseModel):
+    """One standard as it appears in a course coverage report.
+
+    `question_count` is how many questions across the course's tests address the
+    standard, so a standard covered three times reads differently from one
+    covered once. Versions of the same test count once, not once per version.
+    """
+
+    standard_id: str
+    code: str | None = None
+    statement: str | None = None
+    source_list_id: str | None = None
+    strand: str | None = None
+    in_course: bool = True
+    question_count: int = 0
+    test_count: int = 0
+    test_ids: list[str] = Field(default_factory=list)
+
+
+class CourseTestSummaryModel(BaseModel):
+    """One test *lineage* -- every version of a test, reported as a single test.
+
+    Versions exist for test security and retakes, not to add assessment, so
+    three versions of a five-question test cover five questions, not fifteen.
+    `question_count` is therefore the largest version, never the sum.
+    """
+
+    test_id: str
+    title: str
+    version: str
+    # Every version in the lineage, so the UI can match any of them to this row.
+    versions: list[str] = Field(default_factory=list)
+    test_ids: list[str] = Field(default_factory=list)
+    question_count: int = 0
+    course_standard_count: int = 0
+    extra_standard_count: int = 0
+
+
+class CourseDetailModel(BaseModel):
+    """A course plus everything needed to spot coverage gaps in one view."""
+
+    course: CourseModel
+    tests: list[CourseTestSummaryModel] = Field(default_factory=list)
+    covered_standards: list[CourseStandardCoverageModel] = Field(default_factory=list)
+    uncovered_standards: list[CourseStandardCoverageModel] = Field(default_factory=list)
+    extra_standards: list[CourseStandardCoverageModel] = Field(default_factory=list)
+    question_count: int = 0
+
+
 class StandardListResponseModel(BaseModel):
     items: list[SourceStandardListModel] = Field(default_factory=list)
 
@@ -113,9 +163,41 @@ class CourseListResponseModel(BaseModel):
 
 
 class StandardImportResponseModel(BaseModel):
+    # `source_list` stays for callers written against the single-source import.
+    # `source_lists` carries every source touched when the file supplied its own
+    # per-standard source information.
     source_list: SourceStandardListModel
+    source_lists: list[SourceStandardListModel] = Field(default_factory=list)
     imported_count: int
     imported_path: str | None = None
+
+
+class DetectedImportSourceModel(BaseModel):
+    id: str | None = None
+    title: str | None = None
+    issuer: str | None = None
+    subject: str | None = None
+    version: str | None = None
+    description: str | None = None
+    standard_count: int = 0
+    matches_existing_source: bool = False
+    complete: bool = False
+
+
+class StandardImportInspectionModel(BaseModel):
+    """What a standards file says about where its standards came from.
+
+    The importer reads source information out of the file first. Only when the
+    file cannot name a source for every standard does the caller need to supply
+    one that applies to the whole import.
+    """
+
+    filename: str
+    total_rows: int = 0
+    rows_with_source: int = 0
+    detected_sources: list[DetectedImportSourceModel] = Field(default_factory=list)
+    needs_source_input: bool = True
+    detected_columns: list[str] = Field(default_factory=list)
 
 
 class CreateStandardPlaceholdersRequest(BaseModel):
@@ -127,8 +209,18 @@ class ManualStandardRowModel(BaseModel):
     code: str | None = None
     statement: str
     subject: str | None = None
+    strand: str | None = None
     grade_band: str | None = None
     tags: list[str] = Field(default_factory=list)
+    # Per-row source. A row either points at an existing source list by id or
+    # describes a new one; either way it falls back to the request-level source
+    # fields when left blank.
+    source_list_id: str | None = None
+    source_title: str | None = None
+    source_issuer: str | None = None
+    source_subject: str | None = None
+    source_version: str | None = None
+    source_description: str | None = None
 
 
 class CreateStandardsManuallyRequest(BaseModel):
@@ -350,9 +442,17 @@ class TestDraftModel(BaseModel):
     id: str
     title: str
     version: str = "A"
+    # A test can serve more than one course: the same midterm may be reused when
+    # a course is retaught, or shared between two courses that overlap.
+    course_ids: list[str] = Field(default_factory=list)
     items: list[TestItemModel] = Field(default_factory=list)
     print_settings: TestPrintSettingsModel = Field(default_factory=TestPrintSettingsModel)
     performance_runs: list[TestPerformanceRunModel] = Field(default_factory=list)
+
+    @field_validator("course_ids")
+    @classmethod
+    def normalize_course_ids(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(item.strip() for item in value if item.strip()))
 
     @field_validator("id", "title", "version")
     @classmethod
@@ -369,6 +469,27 @@ class TestDraftCollectionModel(BaseModel):
 class CreateTestDraftRequest(BaseModel):
     title: str
     version: str = "A"
+    course_ids: list[str] = Field(default_factory=list)
+
+
+class SetTestCoursesRequest(BaseModel):
+    course_ids: list[str] = Field(default_factory=list)
+
+
+class CopyTestDraftRequest(BaseModel):
+    """Fork a test draft into a new one.
+
+    Used when a test shared by several courses is edited and the teacher wants
+    the other courses to keep the version they actually gave. `source_restore`
+    carries the pre-edit snapshot to write back over the original; the copy
+    keeps the edits.
+    """
+
+    title: str | None = None
+    version: str | None = None
+    course_ids: list[str] | None = None
+    detach_courses_from_source: bool = False
+    source_restore: TestDraftModel | None = None
 
 
 class AddQuestionToTestRequest(BaseModel):
@@ -388,6 +509,7 @@ class TestDraftSummaryModel(BaseModel):
     id: str
     title: str
     version: str
+    course_ids: list[str] = Field(default_factory=list)
     standard_ids: list[str] = Field(default_factory=list)
     question_type_counts: dict[str, int] = Field(default_factory=dict)
     difficulty_counts: dict[str, int] = Field(default_factory=dict)
@@ -410,6 +532,19 @@ class UpsertCourseRequest(BaseModel):
     title: str
     description: str | None = None
     standard_refs: list[StandardReferenceModel] = Field(default_factory=list)
+
+
+class SeedCourseRequest(BaseModel):
+    """Pull another course's standards and/or tests into this one.
+
+    Seeding associates rather than copies: an imported test gains the new course
+    in its `course_ids`, so one test can report coverage for both the course it
+    was written for and the course reusing it.
+    """
+
+    source_course_id: str
+    include_standards: bool = True
+    include_tests: bool = True
 
 
 class RubricRowModel(BaseModel):

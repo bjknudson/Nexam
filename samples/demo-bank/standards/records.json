@@ -6,6 +6,7 @@
       "code": "PHY-KIN-01",
       "statement": "Apply constant-acceleration relationships to one-dimensional motion.",
       "subject": "Physics",
+      "strand": "Mechanics",
       "grade_band": "HS",
       "tags": [
         "mechanics",
@@ -18,6 +19,7 @@
       "code": "PHY-NEW-01",
       "statement": "Distinguish mass from weight and explain how forces relate to motion.",
       "subject": "Physics",
+      "strand": "Mechanics",
       "grade_band": "HS",
       "tags": [
         "mechanics",
@@ -30,6 +32,7 @@
       "code": "PHY-WAV-02",
       "statement": "Use wave speed, wavelength, and frequency relationships to solve problems.",
       "subject": "Physics",
+      "strand": "Waves",
       "grade_band": "HS",
       "tags": [
         "waves"
@@ -41,6 +44,7 @@
       "code": "PHY-ELE-00",
       "statement": "Identify charged particles and basic atomic charge relationships.",
       "subject": "Physics",
+      "strand": "Electricity",
       "grade_band": "HS",
       "tags": [
         "electricity",
@@ -53,6 +57,7 @@
       "code": "PHY-ELE-01",
       "statement": "Describe current, voltage, and resistance using Ohm's law.",
       "subject": "Physics",
+      "strand": "Electricity",
       "grade_band": "HS",
       "tags": [
         "electricity",
@@ -65,6 +70,7 @@
       "code": "CALC-DIFF-02",
       "statement": "Apply differentiation rules, including the power and exponential rules, to find derivatives and evaluate tangent lines.",
       "subject": "Calculus",
+      "strand": "Differentiation",
       "grade_band": "HS",
       "tags": [
         "calculus",
@@ -77,6 +83,7 @@
       "code": "CALC-LIM-01",
       "statement": "Use the formal definition of continuity and limits to analyze function behavior at a point.",
       "subject": "Calculus",
+      "strand": "Limits",
       "grade_band": "HS",
       "tags": [
         "calculus",
@@ -90,6 +97,7 @@
       "code": "HSMT-2.4",
       "statement": "Communicate clearly and professionally with patients, families, and members of the health care team, adjusting language and delivery for the audience and situation.",
       "subject": "Health Science and Medical Technology",
+      "strand": "Anchor",
       "grade_band": "HS",
       "tags": [
         "cte",
@@ -104,6 +112,7 @@
       "code": "HSMT-6.2",
       "statement": "Apply safe and healthful practices in a health care setting, including standard precautions and infection control procedures.",
       "subject": "Health Science and Medical Technology",
+      "strand": "Anchor",
       "grade_band": "HS",
       "tags": [
         "cte",
@@ -119,6 +128,7 @@
       "code": "HSMT-8.3",
       "statement": "Apply the legal and ethical responsibilities of health care workers, including patient confidentiality, informed consent, and scope of practice.",
       "subject": "Health Science and Medical Technology",
+      "strand": "Anchor",
       "grade_band": "HS",
       "tags": [
         "cte",
@@ -134,6 +144,7 @@
       "code": "HSMT-B1.2",
       "statement": "Obtain, record, and interpret basic patient measurements and clinical data used to support patient care.",
       "subject": "Health Science and Medical Technology",
+      "strand": "Pathway",
       "grade_band": "HS",
       "tags": [
         "cte",
@@ -148,6 +159,7 @@
       "code": "AME-A3.4",
       "statement": "Apply the elements of composition, framing, and shot selection to communicate meaning in visual media.",
       "subject": "Arts, Media, and Entertainment",
+      "strand": "Pathway",
       "grade_band": "HS",
       "tags": [
         "cte",
@@ -162,6 +174,7 @@
       "code": "AME-A5.2",
       "statement": "Use lighting instruments and techniques to establish mood and to meet the technical requirements of a production.",
       "subject": "Arts, Media, and Entertainment",
+      "strand": "Pathway",
       "grade_band": "HS",
       "tags": [
         "cte",
@@ -176,6 +189,7 @@
       "code": "AME-A7.3",
       "statement": "Apply industry technical specifications, including frame rate, aspect ratio, and exposure, when planning and capturing footage.",
       "subject": "Arts, Media, and Entertainment",
+      "strand": "Pathway",
       "grade_band": "HS",
       "tags": [
         "cte",
@@ -190,6 +204,7 @@
       "code": "AME-A9.1",
       "statement": "Use preproduction documents, such as storyboards, shot lists, and overhead diagrams, to plan a production and maintain continuity.",
       "subject": "Arts, Media, and Entertainment",
+      "strand": "Pathway",
       "grade_band": "HS",
       "tags": [
         "cte",
@@ -204,6 +219,7 @@
       "code": "HSA-REI.B.3",
       "statement": "Solve linear equations and inequalities in one variable, including equations with coefficients represented by letters.",
       "subject": "Mathematics",
+      "strand": "Algebra",
       "grade_band": "HS",
       "tags": [
         "algebra",
@@ -216,6 +232,7 @@
       "code": "HSA-REI.C.6",
       "statement": "Solve systems of linear equations exactly and approximately, focusing on pairs of linear equations in two variables.",
       "subject": "Mathematics",
+      "strand": "Algebra",
       "grade_band": "HS",
       "tags": [
         "algebra",
@@ -228,6 +245,7 @@
       "code": "HSA-CED.A.3",
       "statement": "Represent constraints by equations or inequalities, and by systems of equations or inequalities, and interpret solutions as viable or nonviable options in a modeling context.",
       "subject": "Mathematics",
+      "strand": "Algebra",
       "grade_band": "HS",
       "tags": [
         "algebra",
@@ -241,6 +259,7 @@
       "code": "HSF-IF.B.6",
       "statement": "Calculate and interpret the average rate of change of a function over a specified interval, and estimate the rate of change from a graph.",
       "subject": "Mathematics",
+      "strand": "Functions",
       "grade_band": "HS",
       "tags": [
         "functions",
@@ -254,6 +273,7 @@
       "code": "HSF-LE.B.5",
       "statement": "Interpret the parameters in a linear or exponential function in terms of a context.",
       "subject": "Mathematics",
+      "strand": "Functions",
       "grade_band": "HS",
       "tags": [
         "functions",
@@ -319,6 +339,7 @@
       "code": "HS-PS1-1",
       "statement": "Use the periodic table as a model to predict the relative properties of elements based on the patterns of electrons in the outermost energy level of atoms.",
       "subject": "Chemistry",
+      "strand": "Physical Science",
       "grade_band": "HS",
       "tags": [
         "ngss",
@@ -332,6 +353,7 @@
       "code": "HS-PS1-2",
       "statement": "Construct and revise an explanation for the outcome of a simple chemical reaction based on the outermost electron states of atoms, trends in the periodic table, and knowledge of the patterns of chemical properties.",
       "subject": "Chemistry",
+      "strand": "Physical Science",
       "grade_band": "HS",
       "tags": [
         "ngss",
@@ -345,6 +367,7 @@
       "code": "HS-PS1-4",
       "statement": "Develop a model to illustrate that the release or absorption of energy from a chemical reaction system depends upon the changes in total bond energy.",
       "subject": "Chemistry",
+      "strand": "Physical Science",
       "grade_band": "HS",
       "tags": [
         "ngss",
@@ -358,6 +381,7 @@
       "code": "HS-PS1-7",
       "statement": "Use mathematical representations to support the claim that atoms, and therefore mass, are conserved during a chemical reaction.",
       "subject": "Chemistry",
+      "strand": "Physical Science",
       "grade_band": "HS",
       "tags": [
         "ngss",
@@ -371,6 +395,7 @@
       "code": "HS-LS1-1",
       "statement": "Construct an explanation based on evidence for how the structure of DNA determines the structure of proteins, which carry out the essential functions of life through systems of specialized cells.",
       "subject": "Biology",
+      "strand": "Life Science",
       "grade_band": "HS",
       "tags": [
         "ngss",
@@ -384,6 +409,7 @@
       "code": "HS-LS1-3",
       "statement": "Plan and conduct an investigation to provide evidence that feedback mechanisms maintain homeostasis.",
       "subject": "Biology",
+      "strand": "Life Science",
       "grade_band": "HS",
       "tags": [
         "ngss",
@@ -397,6 +423,7 @@
       "code": "HS-LS3-3",
       "statement": "Apply concepts of statistics and probability to explain the variation and distribution of expressed traits in a population.",
       "subject": "Biology",
+      "strand": "Life Science",
       "grade_band": "HS",
       "tags": [
         "ngss",
@@ -410,6 +437,7 @@
       "code": "HS-LS4-3",
       "statement": "Apply concepts of statistics and probability to support explanations that organisms with an advantageous heritable trait tend to increase in proportion to organisms lacking this trait.",
       "subject": "Biology",
+      "strand": "Life Science",
       "grade_band": "HS",
       "tags": [
         "ngss",
@@ -423,6 +451,7 @@
       "code": "HS-LS4-4",
       "statement": "Construct an explanation based on evidence for how natural selection leads to adaptation of populations.",
       "subject": "Biology",
+      "strand": "Life Science",
       "grade_band": "HS",
       "tags": [
         "ngss",
@@ -436,6 +465,7 @@
       "code": "ACTFL-1.1",
       "statement": "Interpersonal Communication: Learners interact and negotiate meaning in spoken, signed, or written conversations to share information, reactions, feelings, and opinions.",
       "subject": "World Languages",
+      "strand": "Communication",
       "grade_band": "HS",
       "tags": [
         "actfl",
@@ -449,6 +479,7 @@
       "code": "ACTFL-1.2",
       "statement": "Interpretive Communication: Learners understand, interpret, and analyze what is heard, read, or viewed on a variety of topics.",
       "subject": "World Languages",
+      "strand": "Communication",
       "grade_band": "HS",
       "tags": [
         "actfl",
@@ -462,6 +493,7 @@
       "code": "ACTFL-1.3",
       "statement": "Presentational Communication: Learners present information, concepts, and ideas to inform, explain, persuade, and narrate on a variety of topics, adapting to various audiences of listeners, readers, or viewers.",
       "subject": "World Languages",
+      "strand": "Communication",
       "grade_band": "HS",
       "tags": [
         "actfl",
@@ -475,6 +507,7 @@
       "code": "ACTFL-2.1",
       "statement": "Relating Cultural Practices to Perspectives: Learners use the language to investigate, explain, and reflect on the relationship between the practices and perspectives of the cultures studied.",
       "subject": "World Languages",
+      "strand": "Cultures",
       "grade_band": "HS",
       "tags": [
         "actfl",
@@ -488,6 +521,7 @@
       "code": "ACTFL-4.1",
       "statement": "Language Comparisons: Learners use the language to investigate, explain, and reflect on the nature of language through comparisons of the language studied and their own.",
       "subject": "World Languages",
+      "strand": "Comparisons",
       "grade_band": "HS",
       "tags": [
         "actfl",
@@ -501,6 +535,7 @@
       "code": "APUSH-P1",
       "statement": "Developments and Processes: Identify and explain historical developments and processes.",
       "subject": "United States History",
+      "strand": "Reasoning Practices",
       "grade_band": "HS",
       "tags": [
         "ap",
@@ -513,6 +548,7 @@
       "code": "APUSH-P3",
       "statement": "Claims and Evidence in Sources: Analyze the claims, evidence, and reasoning found in primary and secondary sources.",
       "subject": "United States History",
+      "strand": "Reasoning Practices",
       "grade_band": "HS",
       "tags": [
         "ap",
@@ -526,6 +562,7 @@
       "code": "APUSH-P6",
       "statement": "Argumentation: Develop an argument supported by relevant historical evidence and historical reasoning.",
       "subject": "United States History",
+      "strand": "Reasoning Practices",
       "grade_band": "HS",
       "tags": [
         "ap",
@@ -539,6 +576,7 @@
       "code": "APUSH-KC-3.2.I",
       "statement": "Ideas about resistance to arbitrary authority and republican self-government produced a colonial independence movement and new experiments with forms of government.",
       "subject": "United States History",
+      "strand": "Key Concepts",
       "grade_band": "HS",
       "tags": [
         "ap",
@@ -553,6 +591,7 @@
       "code": "APUSH-KC-5.2.I",
       "statement": "Ideological and economic differences over slavery, especially its extension into new territories, deepened sectional divisions and pushed the nation toward civil war.",
       "subject": "United States History",
+      "strand": "Key Concepts",
       "grade_band": "HS",
       "tags": [
         "ap",
@@ -567,6 +606,7 @@
       "code": "APUSH-KC-7.1.III",
       "statement": "The Great Depression prompted a fundamental reassessment of the role of the federal government in the economy and in the lives of citizens.",
       "subject": "United States History",
+      "strand": "Key Concepts",
       "grade_band": "HS",
       "tags": [
         "ap",
@@ -581,6 +621,7 @@
       "code": "APUSH-KC-8.2.I",
       "statement": "Responding to the civil rights movement, the federal government expanded its role in protecting individual rights and dismantling legalized segregation.",
       "subject": "United States History",
+      "strand": "Key Concepts",
       "grade_band": "HS",
       "tags": [
         "ap",
