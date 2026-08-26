@@ -55,3 +55,10 @@ that zip.
 
 This build has no auto-update mechanism yet — a new build has to be sent
 manually for now.
+
+## A note on gradebook (.nxgb) files
+
+Grading (printing response sheets, scanning, scoring) uses a second file type, `.nxgb`, separate
+from a `.bok` bank on purpose — it holds roster names and scores, which a `.bok` never does. Share
+a `.bok` bank with other teachers as described above; **don't** share a `.nxgb` gradebook the same
+way, since it contains student data. See `docs/grading.md`.
