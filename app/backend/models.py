@@ -814,3 +814,162 @@ class UpsertStudentRequest(BaseModel):
 
 class StudentListResponseModel(BaseModel):
     items: list[StudentModel] = Field(default_factory=list)
+
+
+SheetRowKind = Literal["multiple_choice", "numeric_response", "manual_capture"]
+
+
+class AnswerKeyItemModel(BaseModel):
+    """One question item's grading key, derived at hand-off time.
+
+    `test_item_number` counts every question item in printed order (matches
+    the booklet's question numbering); `sheet_item_number` counts every
+    question item that gets a row on the response sheet. All three row kinds
+    get a sheet row today, so the two counters currently agree, but they are
+    kept distinct in case a future question type is excluded from the sheet.
+    """
+
+    question_id: str
+    test_item_number: int
+    sheet_item_number: int
+    row_kind: SheetRowKind
+    points: float
+    choice_count: int | None = None
+    correct_choice_indices: list[int] | None = None
+    numeric_value: float | None = None
+    numeric_tolerance: float | None = None
+    grid_digits: int | None = None
+    allow_decimal: bool = False
+    allow_negative: bool = False
+
+
+class AnswerKeyModel(BaseModel):
+    test_id: str
+    version: str
+    items: list[AnswerKeyItemModel] = Field(default_factory=list)
+    total_points: float
+
+
+class FiducialMarkerModel(BaseModel):
+    corner: Literal["top_left", "top_right", "bottom_left", "bottom_right"]
+    shape: Literal["square", "circle"]
+    center_x_pt: float
+    center_y_pt: float
+    size_pt: float
+
+
+class BubbleCellModel(BaseModel):
+    """One fillable bubble. `value` is a choice index for multiple_choice rows,
+    or a digit 0-9 (or -1/-2 for a sign/decimal-point bubble) for numeric_response rows."""
+
+    value: int
+    center_x_pt: float
+    center_y_pt: float
+    radius_pt: float
+
+
+class CaptureBoxModel(BaseModel):
+    x_pt: float
+    y_pt: float
+    width_pt: float
+    height_pt: float
+
+
+class SheetRowModel(BaseModel):
+    question_id: str
+    test_item_number: int
+    sheet_item_number: int
+    kind: SheetRowKind
+    label_x_pt: float
+    label_y_pt: float
+    # multiple_choice: one cell per choice. numeric_response: one column of
+    # cells (values 0-9, plus -1 for a sign bubble / -2 for a decimal point)
+    # per digit position, columns laid out left to right.
+    cells: list[BubbleCellModel] = Field(default_factory=list)
+    digit_columns: int | None = None
+    # manual_capture only.
+    capture_box: CaptureBoxModel | None = None
+
+
+class SheetPageModel(BaseModel):
+    page_index: int
+    fiducials: list[FiducialMarkerModel] = Field(default_factory=list)
+    qr_box: CaptureBoxModel
+    qr_payload: str
+    # name_box is always present; printed_name is set only in "pre_id" mode.
+    # A renderer draws a blank line in name_box when printed_name is absent,
+    # or centers printed_name inside that same box when it's present.
+    name_box: CaptureBoxModel | None = None
+    printed_name: str | None = None
+    rows: list[SheetRowModel] = Field(default_factory=list)
+
+
+class SheetLayoutModel(BaseModel):
+    """One frozen geometry template, in PDF points, for one printed sheet.
+
+    Generation and detection both read this same object -- generation draws
+    at these coordinates, detection expects marks at these coordinates after
+    perspective correction. It is captured at hand-off time and embedded in
+    an AdministeredTestSnapshotModel, never recomputed from a live test
+    draft, so a bank edit after printing cannot silently misalign a sheet
+    that is already on paper.
+    """
+
+    id: str
+    mode: Literal["blank", "pre_id"]
+    page_size: Literal["letter", "legal", "a4"]
+    page_width_pt: float
+    page_height_pt: float
+    pages: list[SheetPageModel] = Field(default_factory=list)
+
+
+class AdministeredTestSnapshotModel(BaseModel):
+    """A frozen copy of exactly what was printed and handed to students.
+
+    Captured once, at hand-off time, from the bank that was open at that
+    moment. Never edited in place -- a later re-print creates a new snapshot
+    with a new id and printed_at, so a gradebook can always show what WAS
+    given on a given date even if the source bank's test has since changed
+    or is gone.
+    """
+
+    id: str
+    source_bank_title: str | None = None
+    source_test_id: str
+    title: str
+    version: str
+    printed_at: datetime
+    items: list[TestItemModel]
+    questions: list["QuestionModel"]
+    answer_key: AnswerKeyModel
+    layout: SheetLayoutModel
+
+
+class AdministeredTestSnapshotCollectionModel(BaseModel):
+    items: list[AdministeredTestSnapshotModel] = Field(default_factory=list)
+
+
+class AdministeredTestSnapshotSummaryModel(BaseModel):
+    """A lightweight listing row -- omits the frozen items/questions payload."""
+
+    id: str
+    source_bank_title: str | None = None
+    source_test_id: str
+    title: str
+    version: str
+    printed_at: datetime
+    total_points: float
+    page_count: int
+    mode: Literal["blank", "pre_id"]
+
+
+class AdministeredTestSnapshotListResponseModel(BaseModel):
+    items: list[AdministeredTestSnapshotSummaryModel] = Field(default_factory=list)
+
+
+class CreateAdministeredTestRequest(BaseModel):
+    test_id: str
+    mode: Literal["blank", "pre_id"] = "blank"
+    page_size: Literal["letter", "legal", "a4"] = "letter"
+    blank_count: int | None = None
+    student_ids: list[str] | None = None

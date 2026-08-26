@@ -8,7 +8,7 @@ import zipfile
 from fastapi import FastAPI, File, Form, Query, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 
@@ -17,6 +17,7 @@ from .models import (
     AssetInspectionRequest,
     AddQuestionToTestRequest,
     CopyTestDraftRequest,
+    CreateAdministeredTestRequest,
     CreateBankRequest,
     CreateGradebookRequest,
     CreateStandardPlaceholdersRequest,
@@ -185,6 +186,34 @@ def create_student(request: UpsertStudentRequest):
 def delete_student(student_id: str):
     gradebook_service.delete_student(student_id)
     return None
+
+
+@app.post("/api/gradebook/administered-tests")
+def create_administered_test(request: CreateAdministeredTestRequest):
+    """The hand-off: reads the live test from the open bank, writes only into
+    the open gradebook. See docs/grading-plan.md."""
+    test_detail = service.get_test_draft(request.test_id)
+    source_bank_title = service.get_summary().manifest.title
+    return gradebook_service.create_snapshot_and_sheets(
+        test=test_detail.test,
+        questions=test_detail.questions,
+        source_bank_title=source_bank_title,
+        mode=request.mode,
+        page_size=request.page_size,
+        blank_count=request.blank_count,
+        student_ids=request.student_ids,
+    )
+
+
+@app.get("/api/gradebook/administered-tests")
+def list_administered_tests():
+    return gradebook_service.list_administered_tests()
+
+
+@app.get("/api/gradebook/sheets/{layout_id}/pdf")
+def get_sheet_pdf(layout_id: str):
+    pdf_bytes = gradebook_service.get_sheet_pdf_bytes(layout_id)
+    return Response(content=pdf_bytes, media_type="application/pdf")
 
 
 @app.get("/api/questions")

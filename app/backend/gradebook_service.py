@@ -6,12 +6,20 @@ import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .grading.answer_key import derive_answer_key
+from .grading.layout import SheetCopySpec, build_sheet_layout
+from .grading.pdf import render_sheet_layout_to_pdf
 from .models import (
+    AdministeredTestSnapshotListResponseModel,
+    AdministeredTestSnapshotModel,
+    AdministeredTestSnapshotSummaryModel,
     GradebookManifestModel,
     GradebookSummaryModel,
+    QuestionModel,
     StudentCollectionModel,
     StudentListResponseModel,
     StudentModel,
+    TestDraftModel,
     UpsertStudentRequest,
 )
 from .service import BankWorkspaceError
@@ -170,6 +178,118 @@ class GradebookService:
         students.items = remaining
         self._write_students(workspace_path, students)
 
+    # -- Hand-off / administered tests --------------------------------------
+
+    def create_snapshot_and_sheets(
+        self,
+        *,
+        test: TestDraftModel,
+        questions: list[QuestionModel],
+        source_bank_title: str | None,
+        mode: str,
+        page_size: str,
+        blank_count: int | None,
+        student_ids: list[str] | None,
+    ) -> AdministeredTestSnapshotModel:
+        _, workspace_path = self.ensure_open()
+
+        questions_by_id = {question.id: question for question in questions}
+        answer_key = derive_answer_key(test, questions_by_id)
+
+        copies = self._build_copies(mode, blank_count, student_ids)
+        layout_id = uuid.uuid4().hex
+        layout = build_sheet_layout(
+            layout_id=layout_id,
+            answer_key=answer_key,
+            mode=mode,
+            page_size=page_size,
+            copies=copies,
+        )
+
+        snapshot = AdministeredTestSnapshotModel(
+            id=uuid.uuid4().hex,
+            source_bank_title=source_bank_title,
+            source_test_id=test.id,
+            title=test.title,
+            version=test.version,
+            printed_at=datetime.now(UTC),
+            items=test.items,
+            questions=questions,
+            answer_key=answer_key,
+            layout=layout,
+        )
+
+        snapshot_dir = workspace_path / "snapshots" / snapshot.id
+        snapshot_dir.mkdir(parents=True, exist_ok=False)
+        (snapshot_dir / "snapshot.json").write_text(snapshot.model_dump_json(indent=2) + "\n")
+        (snapshot_dir / "sheet.pdf").write_bytes(render_sheet_layout_to_pdf(layout))
+
+        return snapshot
+
+    def _build_copies(
+        self, mode: str, blank_count: int | None, student_ids: list[str] | None
+    ) -> list[SheetCopySpec]:
+        if mode == "pre_id":
+            if not student_ids:
+                raise BankWorkspaceError(
+                    "pre_id mode requires at least one student_id.", status_code=400
+                )
+            students_by_id = {s.id: s for s in self._read_students().items}
+            copies = []
+            for student_id in student_ids:
+                student = students_by_id.get(student_id)
+                if student is None:
+                    raise BankWorkspaceError(f"Student not found: {student_id}", status_code=404)
+                copies.append(
+                    SheetCopySpec(
+                        sheet_id=uuid.uuid4().hex,
+                        student_id=student.id,
+                        printed_name=f"{student.first_name} {student.last_name}",
+                    )
+                )
+            return copies
+
+        count = blank_count if blank_count and blank_count > 0 else 1
+        return [SheetCopySpec(sheet_id=uuid.uuid4().hex) for _ in range(count)]
+
+    def list_administered_tests(self) -> AdministeredTestSnapshotListResponseModel:
+        summaries = [self._snapshot_summary(snapshot) for snapshot in self._read_all_snapshots()]
+        summaries.sort(key=lambda summary: summary.printed_at, reverse=True)
+        return AdministeredTestSnapshotListResponseModel(items=summaries)
+
+    def get_sheet_pdf_bytes(self, layout_id: str) -> bytes:
+        _, workspace_path = self.ensure_open()
+        for snapshot in self._read_all_snapshots():
+            if snapshot.layout.id == layout_id:
+                pdf_path = workspace_path / "snapshots" / snapshot.id / "sheet.pdf"
+                return pdf_path.read_bytes()
+        raise BankWorkspaceError(f"No sheet found for layout: {layout_id}", status_code=404)
+
+    def _snapshot_summary(
+        self, snapshot: AdministeredTestSnapshotModel
+    ) -> AdministeredTestSnapshotSummaryModel:
+        return AdministeredTestSnapshotSummaryModel(
+            id=snapshot.id,
+            source_bank_title=snapshot.source_bank_title,
+            source_test_id=snapshot.source_test_id,
+            title=snapshot.title,
+            version=snapshot.version,
+            printed_at=snapshot.printed_at,
+            total_points=snapshot.answer_key.total_points,
+            page_count=len(snapshot.layout.pages),
+            mode=snapshot.layout.mode,
+        )
+
+    def _read_all_snapshots(self) -> list[AdministeredTestSnapshotModel]:
+        _, workspace_path = self.ensure_open()
+        snapshots_dir = workspace_path / "snapshots"
+        if not snapshots_dir.exists():
+            return []
+        return [
+            AdministeredTestSnapshotModel.model_validate_json(snapshot_path.read_text())
+            for snapshot_path in sorted(snapshots_dir.glob("*/snapshot.json"))
+        ]
+
     # -- Internal helpers -----------------------------------------------------
 
     def _new_workspace_dir(self, stem: str) -> Path:
@@ -185,6 +305,8 @@ class GradebookService:
         students_path = roster_dir / "students.json"
         if not students_path.exists():
             students_path.write_text(StudentCollectionModel().model_dump_json(indent=2) + "\n")
+
+        (workspace_path / "snapshots").mkdir(parents=True, exist_ok=True)
 
     def _validate_workspace(self, workspace_path: Path) -> None:
         manifest_path = workspace_path / "manifest.json"
