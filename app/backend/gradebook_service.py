@@ -40,6 +40,26 @@ from .service import BankWorkspaceError
 _SCAN_RASTER_DPI = 300
 
 
+def _row_is_resolved(row: DetectedRowResultModel) -> bool:
+    if row.kind == "manual_capture":
+        return row.manual_score is not None
+    if row.override_choice_indices is not None or row.override_value is not None:
+        return True
+    return row.flag == "none"
+
+
+def _sheet_needs_review(sheet: ScannedSheetModel) -> bool:
+    """One rule, used both right after ingest and after every later
+    identity/row correction, so 'needs review' never means something
+    slightly different depending on when you ask."""
+
+    if sheet.identity_status not in ("pre_identified", "manually_resolved"):
+        return True
+    if sheet.fiducial_confidence is None:
+        return True
+    return any(not _row_is_resolved(row) for row in sheet.row_results)
+
+
 class GradebookService:
     """Owns the .nxgb package: roster today, snapshots/scans/scores in later phases.
 
@@ -345,6 +365,83 @@ class GradebookService:
         self._write_batch(workspace_path, batch)
         return batch
 
+    def get_review_queue(self, batch_id: str) -> list[ScannedSheetModel]:
+        return [sheet for sheet in self._read_batch(batch_id).sheets if sheet.needs_review]
+
+    def get_sheet_image_bytes(self, batch_id: str, sheet_id: str) -> bytes:
+        _, workspace_path = self.ensure_open()
+        batch = self._read_batch(batch_id)
+        sheet = self._find_sheet(batch, sheet_id)
+        return (workspace_path / sheet.source_image_path).read_bytes()
+
+    def resolve_sheet_identity(
+        self,
+        batch_id: str,
+        sheet_id: str,
+        *,
+        student_id: str | None = None,
+        free_text_name: str | None = None,
+    ) -> ScannedSheetModel:
+        if not student_id and not free_text_name:
+            raise BankWorkspaceError(
+                "resolve_sheet_identity requires student_id or free_text_name.", status_code=400
+            )
+        if student_id and not any(s.id == student_id for s in self._read_students().items):
+            raise BankWorkspaceError(f"Student not found: {student_id}", status_code=404)
+
+        _, workspace_path = self.ensure_open()
+        batch = self._read_batch(batch_id)
+        sheet = self._find_sheet(batch, sheet_id)
+
+        sheet.student_id = student_id
+        sheet.free_text_name = free_text_name
+        sheet.identity_status = "manually_resolved"
+        sheet.needs_review = _sheet_needs_review(sheet)
+
+        self._write_batch(workspace_path, batch)
+        return sheet
+
+    def override_row_result(
+        self,
+        batch_id: str,
+        sheet_id: str,
+        question_id: str,
+        *,
+        override_choice_indices: list[int] | None = None,
+        override_value: float | None = None,
+        override_note: str | None = None,
+        manual_score: float | None = None,
+        manual_score_max: float | None = None,
+        manual_grader_note: str | None = None,
+    ) -> ScannedSheetModel:
+        _, workspace_path = self.ensure_open()
+        batch = self._read_batch(batch_id)
+        sheet = self._find_sheet(batch, sheet_id)
+        row = next((r for r in sheet.row_results if r.question_id == question_id), None)
+        if row is None:
+            raise BankWorkspaceError(
+                f"No row result for question {question_id} on sheet {sheet_id}.", status_code=404
+            )
+
+        if row.kind == "manual_capture":
+            row.manual_score = manual_score
+            row.manual_score_max = manual_score_max
+            row.manual_grader_note = manual_grader_note
+        else:
+            row.override_choice_indices = override_choice_indices
+            row.override_value = override_value
+            row.override_note = override_note
+
+        sheet.needs_review = _sheet_needs_review(sheet)
+        self._write_batch(workspace_path, batch)
+        return sheet
+
+    def _find_sheet(self, batch: GradingBatchModel, sheet_id: str) -> ScannedSheetModel:
+        sheet = next((s for s in batch.sheets if s.id == sheet_id), None)
+        if sheet is None:
+            raise BankWorkspaceError(f"Sheet not found: {sheet_id}", status_code=404)
+        return sheet
+
     def _ingest_page(
         self,
         page_image: np.ndarray,
@@ -390,13 +487,7 @@ class GradebookService:
             page_image, page, snapshot.layout.page_width_pt, snapshot.layout.page_height_pt
         )
 
-        needs_review = (
-            identity_status not in ("pre_identified", "manually_resolved")
-            or fiducial_confidence is None
-            or any(row.flag != "none" or row.needs_manual_grade for row in row_results)
-        )
-
-        return ScannedSheetModel(
+        sheet = ScannedSheetModel(
             id=uuid.uuid4().hex,
             snapshot_id=snapshot.id,
             layout_id=snapshot.layout.id,
@@ -407,8 +498,9 @@ class GradebookService:
             identity_status=identity_status,
             fiducial_confidence=fiducial_confidence,
             row_results=row_results,
-            needs_review=needs_review,
         )
+        sheet.needs_review = _sheet_needs_review(sheet)
+        return sheet
 
     def _build_sheet_lookup(
         self,

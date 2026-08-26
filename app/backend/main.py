@@ -30,10 +30,12 @@ from .models import (
     NextQuestionIdResponse,
     OpenBankRequest,
     OpenGradebookRequest,
+    OverrideRowResultRequest,
     QuestionImportPromoteRequest,
     QuestionImportRowUpdateRequest,
     QuestionModel,
     QuestionType,
+    ResolveSheetIdentityRequest,
     SaveBankRequest,
     SaveGradebookRequest,
     SeedCourseRequest,
@@ -236,6 +238,44 @@ def get_scan_batch(batch_id: str):
 async def ingest_scan_batch(batch_id: str, files: list[UploadFile] = File(...)):
     uploaded = [(file.filename or "scan", await file.read()) for file in files]
     return gradebook_service.ingest_scan_batch(batch_id, uploaded)
+
+
+@app.get("/api/gradebook/batches/{batch_id}/review-queue")
+def get_review_queue(batch_id: str):
+    return {"items": gradebook_service.get_review_queue(batch_id)}
+
+
+@app.get("/api/gradebook/batches/{batch_id}/sheets/{sheet_id}/image")
+def get_sheet_image(batch_id: str, sheet_id: str):
+    image_bytes = gradebook_service.get_sheet_image_bytes(batch_id, sheet_id)
+    return Response(content=image_bytes, media_type="image/png")
+
+
+@app.put("/api/gradebook/batches/{batch_id}/sheets/{sheet_id}/identity")
+def resolve_sheet_identity(batch_id: str, sheet_id: str, request: ResolveSheetIdentityRequest):
+    return gradebook_service.resolve_sheet_identity(
+        batch_id,
+        sheet_id,
+        student_id=request.student_id,
+        free_text_name=request.free_text_name,
+    )
+
+
+@app.put("/api/gradebook/batches/{batch_id}/sheets/{sheet_id}/rows/{question_id}")
+def override_row_result(
+    batch_id: str, sheet_id: str, question_id: str, request: OverrideRowResultRequest
+):
+    return gradebook_service.override_row_result(
+        batch_id,
+        sheet_id,
+        question_id,
+        override_choice_indices=request.override_choice_indices,
+        override_value=request.override_value,
+        override_note=request.override_note,
+        manual_score=request.manual_score,
+        manual_score_max=request.manual_score_max,
+        manual_grader_note=request.manual_grader_note,
+    )
 
 
 @app.get("/api/questions")

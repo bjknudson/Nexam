@@ -1008,6 +1008,7 @@ class DetectedRowResultModel(BaseModel):
     manual_grader_note: str | None = None
 
     override_choice_indices: list[int] | None = None
+    override_value: float | None = None
     override_note: str | None = None
 
 
@@ -1045,3 +1046,21 @@ class CreateScanBatchRequest(BaseModel):
 
 class GradingBatchListResponseModel(BaseModel):
     items: list[GradingBatchModel] = Field(default_factory=list)
+
+
+class ResolveSheetIdentityRequest(BaseModel):
+    student_id: str | None = None
+    free_text_name: str | None = None
+
+
+class OverrideRowResultRequest(BaseModel):
+    """MC/numeric rows take override_choice_indices or override_value;
+    manual_capture rows take manual_score. A caller sends only the fields
+    that apply to the row's kind -- the rest stay None."""
+
+    override_choice_indices: list[int] | None = None
+    override_value: float | None = None
+    override_note: str | None = None
+    manual_score: float | None = None
+    manual_score_max: float | None = None
+    manual_grader_note: str | None = None
