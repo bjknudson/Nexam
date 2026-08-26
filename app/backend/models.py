@@ -736,3 +736,81 @@ class QuestionListResponseModel(BaseModel):
     items: list[QuestionListItemModel]
     available_topics: list[str]
     available_types: list[str]
+
+
+# ---------------------------------------------------------------------------
+# Gradebook (.nxgb) models
+#
+# A gradebook is a separate local package from a bank (.bok): it holds roster
+# and, in later phases, scan/score data that must never ride along inside a
+# bank shared between teachers. See docs/grading-plan.md.
+# ---------------------------------------------------------------------------
+
+
+class GradebookManifestModel(BaseModel):
+    schema_version: str
+    gradebook_id: str
+    title: str
+    description: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class GradebookSummaryModel(BaseModel):
+    source_path: str
+    workspace_path: str
+    manifest: GradebookManifestModel
+
+
+class OpenGradebookRequest(BaseModel):
+    path: str
+
+
+class CreateGradebookRequest(BaseModel):
+    title: str
+    description: str | None = None
+    destination_path: str
+
+
+class SaveGradebookRequest(BaseModel):
+    destination_path: str | None = None
+
+
+class UpdateGradebookDetailsRequest(BaseModel):
+    title: str
+    description: str | None = None
+
+
+class StudentModel(BaseModel):
+    """A roster entry. Lives only inside a gradebook, never inside a bank.
+
+    Deliberately minimal -- no SIS import, no attendance, no grade history of
+    its own. Grade history is computed from scan batches, not stored here.
+    """
+
+    id: str
+    first_name: str
+    last_name: str
+    external_id: str | None = None
+
+    @field_validator("id", "first_name", "last_name")
+    @classmethod
+    def validate_required_text(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError("field must not be empty")
+        return text
+
+
+class StudentCollectionModel(BaseModel):
+    items: list[StudentModel] = Field(default_factory=list)
+
+
+class UpsertStudentRequest(BaseModel):
+    first_name: str
+    last_name: str
+    external_id: str | None = None
+
+
+class StudentListResponseModel(BaseModel):
+    items: list[StudentModel] = Field(default_factory=list)

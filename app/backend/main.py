@@ -18,6 +18,7 @@ from .models import (
     AddQuestionToTestRequest,
     CopyTestDraftRequest,
     CreateBankRequest,
+    CreateGradebookRequest,
     CreateStandardPlaceholdersRequest,
     CreateStandardsManuallyRequest,
     CreateQuestionRequest,
@@ -26,24 +27,30 @@ from .models import (
     CreateTestDraftRequest,
     NextQuestionIdResponse,
     OpenBankRequest,
+    OpenGradebookRequest,
     QuestionImportPromoteRequest,
     QuestionImportRowUpdateRequest,
     QuestionModel,
     QuestionType,
     SaveBankRequest,
+    SaveGradebookRequest,
     SeedCourseRequest,
     SetTestCoursesRequest,
     StandardRecordModel,
     TestDraftModel,
     UpdateBankDetailsRequest,
+    UpdateGradebookDetailsRequest,
     UpsertCourseRequest,
+    UpsertStudentRequest,
 )
+from .gradebook_service import GradebookService
 from .service import BankWorkspaceError, BankWorkspaceService
 from .version import get_backend_version, is_frozen
 
 
 app = FastAPI(title="Nexzam Backend", version="0.1.0")
 service = BankWorkspaceService()
+gradebook_service = GradebookService()
 
 app.add_middleware(
     CORSMiddleware,
@@ -124,6 +131,60 @@ def update_bank_details(request: UpdateBankDetailsRequest):
 @app.post("/api/banks/save")
 def save_bank(request: SaveBankRequest):
     return {"saved_to": service.save_bank(request.destination_path)}
+
+
+@app.post("/api/gradebook/open")
+def open_gradebook(request: OpenGradebookRequest):
+    return gradebook_service.open_gradebook(request.path)
+
+
+@app.get("/api/gradebook/current")
+def get_current_gradebook():
+    return gradebook_service.get_summary()
+
+
+@app.post("/api/gradebook/create")
+def create_gradebook(request: CreateGradebookRequest):
+    return gradebook_service.create_gradebook(
+        request.title, request.description, request.destination_path
+    )
+
+
+@app.put("/api/gradebook/current")
+def update_gradebook_details(request: UpdateGradebookDetailsRequest):
+    return gradebook_service.update_gradebook_details(request.title, request.description)
+
+
+@app.post("/api/gradebook/save")
+def save_gradebook(request: SaveGradebookRequest):
+    return {"saved_to": gradebook_service.save_gradebook(request.destination_path)}
+
+
+@app.post("/api/gradebook/close")
+def close_gradebook():
+    gradebook_service.close_gradebook()
+    return {"closed": True}
+
+
+@app.get("/api/gradebook/students")
+def list_students():
+    return gradebook_service.list_students()
+
+
+@app.put("/api/gradebook/students/{student_id}")
+def upsert_student(student_id: str, request: UpsertStudentRequest):
+    return gradebook_service.upsert_student(student_id, request)
+
+
+@app.post("/api/gradebook/students")
+def create_student(request: UpsertStudentRequest):
+    return gradebook_service.upsert_student(None, request)
+
+
+@app.delete("/api/gradebook/students/{student_id}", status_code=204)
+def delete_student(student_id: str):
+    gradebook_service.delete_student(student_id)
+    return None
 
 
 @app.get("/api/questions")
