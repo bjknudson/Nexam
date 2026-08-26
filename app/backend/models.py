@@ -973,3 +973,75 @@ class CreateAdministeredTestRequest(BaseModel):
     page_size: Literal["letter", "legal", "a4"] = "letter"
     blank_count: int | None = None
     student_ids: list[str] | None = None
+
+
+DetectionFlag = Literal["none", "low_confidence", "multi_mark", "no_mark"]
+
+IdentityStatus = Literal[
+    "pre_identified", "unresolved", "manually_resolved", "qr_unreadable", "wrong_snapshot"
+]
+
+
+class DetectedRowResultModel(BaseModel):
+    """One row's read result. multiple_choice/numeric_response rows get a
+    confidence score and flag from the fill-ratio detector; manual_capture
+    rows never get an automated read -- they always need a human score.
+
+    `override_*` sits alongside the raw detection rather than replacing it,
+    so an audit or a re-score after a threshold change never loses the
+    detector's original reading.
+    """
+
+    question_id: str
+    sheet_item_number: int
+    kind: SheetRowKind
+
+    detected_choice_indices: list[int] = Field(default_factory=list)
+    detected_digits: str | None = None
+    detected_value: float | None = None
+    confidence: float | None = None
+    flag: DetectionFlag = "none"
+
+    needs_manual_grade: bool = False
+    manual_score: float | None = None
+    manual_score_max: float | None = None
+    manual_grader_note: str | None = None
+
+    override_choice_indices: list[int] | None = None
+    override_note: str | None = None
+
+
+class ScannedSheetModel(BaseModel):
+    id: str
+    snapshot_id: str | None = None
+    layout_id: str | None = None
+    sheet_id: str | None = None
+    source_image_path: str
+    page_index: int = 0
+    student_id: str | None = None
+    free_text_name: str | None = None
+    identity_status: IdentityStatus
+    fiducial_confidence: float | None = None
+    row_results: list[DetectedRowResultModel] = Field(default_factory=list)
+    needs_review: bool = False
+
+
+class GradingBatchModel(BaseModel):
+    id: str
+    snapshot_id: str
+    created_at: datetime
+    source_description: str | None = None
+    sheets: list[ScannedSheetModel] = Field(default_factory=list)
+
+
+class GradingBatchCollectionModel(BaseModel):
+    items: list[GradingBatchModel] = Field(default_factory=list)
+
+
+class CreateScanBatchRequest(BaseModel):
+    snapshot_id: str
+    source_description: str | None = None
+
+
+class GradingBatchListResponseModel(BaseModel):
+    items: list[GradingBatchModel] = Field(default_factory=list)

@@ -20,6 +20,7 @@ from .models import (
     CreateAdministeredTestRequest,
     CreateBankRequest,
     CreateGradebookRequest,
+    CreateScanBatchRequest,
     CreateStandardPlaceholdersRequest,
     CreateStandardsManuallyRequest,
     CreateQuestionRequest,
@@ -214,6 +215,27 @@ def list_administered_tests():
 def get_sheet_pdf(layout_id: str):
     pdf_bytes = gradebook_service.get_sheet_pdf_bytes(layout_id)
     return Response(content=pdf_bytes, media_type="application/pdf")
+
+
+@app.post("/api/gradebook/batches")
+def create_scan_batch(request: CreateScanBatchRequest):
+    return gradebook_service.create_scan_batch(request.snapshot_id, request.source_description)
+
+
+@app.get("/api/gradebook/batches")
+def list_scan_batches():
+    return gradebook_service.list_scan_batches()
+
+
+@app.get("/api/gradebook/batches/{batch_id}")
+def get_scan_batch(batch_id: str):
+    return gradebook_service.get_scan_batch(batch_id)
+
+
+@app.post("/api/gradebook/batches/{batch_id}/ingest")
+async def ingest_scan_batch(batch_id: str, files: list[UploadFile] = File(...)):
+    uploaded = [(file.filename or "scan", await file.read()) for file in files]
+    return gradebook_service.ingest_scan_batch(batch_id, uploaded)
 
 
 @app.get("/api/questions")

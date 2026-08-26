@@ -1,21 +1,34 @@
 from __future__ import annotations
 
+import io
+import json
 import tempfile
 import uuid
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 
+import cv2
+import numpy as np
+import pymupdf
+from PIL import Image
+
 from .grading.answer_key import derive_answer_key
+from .grading.detect import decode_qr_payload, read_sheet
 from .grading.layout import SheetCopySpec, build_sheet_layout
 from .grading.pdf import render_sheet_layout_to_pdf
 from .models import (
     AdministeredTestSnapshotListResponseModel,
     AdministeredTestSnapshotModel,
     AdministeredTestSnapshotSummaryModel,
+    DetectedRowResultModel,
     GradebookManifestModel,
     GradebookSummaryModel,
+    GradingBatchListResponseModel,
+    GradingBatchModel,
     QuestionModel,
+    ScannedSheetModel,
+    SheetPageModel,
     StudentCollectionModel,
     StudentListResponseModel,
     StudentModel,
@@ -23,6 +36,8 @@ from .models import (
     UpsertStudentRequest,
 )
 from .service import BankWorkspaceError
+
+_SCAN_RASTER_DPI = 300
 
 
 class GradebookService:
@@ -290,6 +305,170 @@ class GradebookService:
             for snapshot_path in sorted(snapshots_dir.glob("*/snapshot.json"))
         ]
 
+    # -- Scan batches / ingestion --------------------------------------------
+
+    def create_scan_batch(self, snapshot_id: str, source_description: str | None) -> GradingBatchModel:
+        _, workspace_path = self.ensure_open()
+        if not any(s.id == snapshot_id for s in self._read_all_snapshots()):
+            raise BankWorkspaceError(f"Snapshot not found: {snapshot_id}", status_code=404)
+
+        batch = GradingBatchModel(
+            id=uuid.uuid4().hex,
+            snapshot_id=snapshot_id,
+            created_at=datetime.now(UTC),
+            source_description=source_description,
+            sheets=[],
+        )
+        (workspace_path / "scans" / batch.id).mkdir(parents=True, exist_ok=True)
+        self._write_batch(workspace_path, batch)
+        return batch
+
+    def list_scan_batches(self) -> GradingBatchListResponseModel:
+        return GradingBatchListResponseModel(items=self._read_all_batches())
+
+    def get_scan_batch(self, batch_id: str) -> GradingBatchModel:
+        return self._read_batch(batch_id)
+
+    def ingest_scan_batch(
+        self, batch_id: str, files: list[tuple[str, bytes]]
+    ) -> GradingBatchModel:
+        _, workspace_path = self.ensure_open()
+        batch = self._read_batch(batch_id)
+        sheet_lookup = self._build_sheet_lookup()
+        scans_dir = workspace_path / "scans" / batch.id
+
+        for filename, content in files:
+            for page_image in self._rasterize_upload(filename, content):
+                sheet = self._ingest_page(page_image, batch, sheet_lookup, scans_dir)
+                batch.sheets.append(sheet)
+
+        self._write_batch(workspace_path, batch)
+        return batch
+
+    def _ingest_page(
+        self,
+        page_image: np.ndarray,
+        batch: GradingBatchModel,
+        sheet_lookup: dict[str, tuple[AdministeredTestSnapshotModel, SheetPageModel]],
+        scans_dir: Path,
+    ) -> ScannedSheetModel:
+        sheet_seq = len(list(scans_dir.glob("*.png")))
+        image_path = scans_dir / f"{sheet_seq:04d}.png"
+        cv2.imwrite(str(image_path), page_image)
+        relative_image_path = str(image_path.relative_to(scans_dir.parents[1]))
+
+        payload = decode_qr_payload(page_image)
+        if payload is None or not isinstance(payload.get("sheet_id"), str):
+            return ScannedSheetModel(
+                id=uuid.uuid4().hex,
+                source_image_path=relative_image_path,
+                identity_status="qr_unreadable",
+                needs_review=True,
+            )
+
+        sheet_id = payload["sheet_id"]
+        match = sheet_lookup.get(sheet_id)
+        if match is None:
+            return ScannedSheetModel(
+                id=uuid.uuid4().hex,
+                sheet_id=sheet_id,
+                source_image_path=relative_image_path,
+                identity_status="qr_unreadable",
+                needs_review=True,
+            )
+
+        snapshot, page = match
+        student_id = payload.get("student_id")
+        if snapshot.id != batch.snapshot_id:
+            identity_status = "wrong_snapshot"
+        elif student_id:
+            identity_status = "pre_identified"
+        else:
+            identity_status = "unresolved"
+
+        row_results, fiducial_confidence = read_sheet(
+            page_image, page, snapshot.layout.page_width_pt, snapshot.layout.page_height_pt
+        )
+
+        needs_review = (
+            identity_status not in ("pre_identified", "manually_resolved")
+            or fiducial_confidence is None
+            or any(row.flag != "none" or row.needs_manual_grade for row in row_results)
+        )
+
+        return ScannedSheetModel(
+            id=uuid.uuid4().hex,
+            snapshot_id=snapshot.id,
+            layout_id=snapshot.layout.id,
+            sheet_id=sheet_id,
+            source_image_path=relative_image_path,
+            page_index=payload.get("page_index", 0),
+            student_id=student_id,
+            identity_status=identity_status,
+            fiducial_confidence=fiducial_confidence,
+            row_results=row_results,
+            needs_review=needs_review,
+        )
+
+    def _build_sheet_lookup(
+        self,
+    ) -> dict[str, tuple[AdministeredTestSnapshotModel, SheetPageModel]]:
+        """Every sheet_id is unique across every snapshot ever printed in this
+        gradebook, so it alone is enough to resolve which snapshot and page a
+        scanned QR code belongs to -- no need to also encode layout/snapshot
+        ids in the QR payload itself."""
+
+        lookup: dict[str, tuple[AdministeredTestSnapshotModel, SheetPageModel]] = {}
+        for snapshot in self._read_all_snapshots():
+            for page in snapshot.layout.pages:
+                try:
+                    page_payload = json.loads(page.qr_payload)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                page_sheet_id = page_payload.get("sheet_id")
+                if isinstance(page_sheet_id, str):
+                    lookup[page_sheet_id] = (snapshot, page)
+        return lookup
+
+    def _rasterize_upload(self, filename: str, content: bytes) -> list[np.ndarray]:
+        is_pdf = filename.lower().endswith(".pdf") or content[:4] == b"%PDF"
+        if is_pdf:
+            document = pymupdf.open(stream=content, filetype="pdf")
+            images = []
+            for page in document:
+                pixmap = page.get_pixmap(dpi=_SCAN_RASTER_DPI)
+                array = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(
+                    pixmap.height, pixmap.width, pixmap.n
+                )
+                images.append(
+                    cv2.cvtColor(array, cv2.COLOR_RGB2GRAY) if pixmap.n >= 3 else array[:, :, 0]
+                )
+            return images
+
+        pil_image = Image.open(io.BytesIO(content)).convert("L")
+        return [np.array(pil_image)]
+
+    def _write_batch(self, workspace_path: Path, batch: GradingBatchModel) -> None:
+        batch_path = workspace_path / "batches" / f"{batch.id}.json"
+        batch_path.write_text(batch.model_dump_json(indent=2) + "\n")
+
+    def _read_batch(self, batch_id: str) -> GradingBatchModel:
+        _, workspace_path = self.ensure_open()
+        batch_path = workspace_path / "batches" / f"{batch_id}.json"
+        if not batch_path.exists():
+            raise BankWorkspaceError(f"Scan batch not found: {batch_id}", status_code=404)
+        return GradingBatchModel.model_validate_json(batch_path.read_text())
+
+    def _read_all_batches(self) -> list[GradingBatchModel]:
+        _, workspace_path = self.ensure_open()
+        batches_dir = workspace_path / "batches"
+        if not batches_dir.exists():
+            return []
+        return [
+            GradingBatchModel.model_validate_json(batch_path.read_text())
+            for batch_path in sorted(batches_dir.glob("*.json"))
+        ]
+
     # -- Internal helpers -----------------------------------------------------
 
     def _new_workspace_dir(self, stem: str) -> Path:
@@ -307,6 +486,8 @@ class GradebookService:
             students_path.write_text(StudentCollectionModel().model_dump_json(indent=2) + "\n")
 
         (workspace_path / "snapshots").mkdir(parents=True, exist_ok=True)
+        (workspace_path / "batches").mkdir(parents=True, exist_ok=True)
+        (workspace_path / "scans").mkdir(parents=True, exist_ok=True)
 
     def _validate_workspace(self, workspace_path: Path) -> None:
         manifest_path = workspace_path / "manifest.json"

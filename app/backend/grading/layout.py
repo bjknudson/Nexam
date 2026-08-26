@@ -323,8 +323,22 @@ def _build_numeric_cells(
         )
         column_x += _BUBBLE_SPACING_PT
 
-    decimal_after = digit_columns // 2 if item.allow_decimal else None
+    # Number of digit columns that fall before the decimal point (the rest
+    # fall after). Checked *before* placing a digit column, so the marker
+    # lands between the two groups rather than trailing after all of them.
+    decimal_before_digits = digit_columns // 2 if item.allow_decimal else None
     for digit_index in range(digit_columns):
+        if decimal_before_digits is not None and digit_index == decimal_before_digits:
+            cells.append(
+                BubbleCellModel(
+                    value=DECIMAL_POINT_BUBBLE_VALUE,
+                    center_x_pt=column_x,
+                    center_y_pt=grid_top_y,
+                    radius_pt=_BUBBLE_RADIUS_PT,
+                )
+            )
+            column_x += _BUBBLE_SPACING_PT
+
         for digit_value in range(10):
             cells.append(
                 BubbleCellModel(
@@ -335,15 +349,5 @@ def _build_numeric_cells(
                 )
             )
         column_x += _BUBBLE_SPACING_PT
-        if decimal_after is not None and digit_index == decimal_after:
-            cells.append(
-                BubbleCellModel(
-                    value=DECIMAL_POINT_BUBBLE_VALUE,
-                    center_x_pt=column_x,
-                    center_y_pt=grid_top_y,
-                    radius_pt=_BUBBLE_RADIUS_PT,
-                )
-            )
-            column_x += _BUBBLE_SPACING_PT
 
     return cells, digit_columns
