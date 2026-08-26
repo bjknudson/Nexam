@@ -38,10 +38,11 @@ def derive_answer_key(
         points = question.points if question.points is not None else 1.0
         total_points += points
 
+        standard_ids = [reference.standard_id for reference in question.standards]
         if question.type == "multiple_choice":
-            answer_key_item = _derive_multiple_choice(question, item_number, points)
+            answer_key_item = _derive_multiple_choice(question, item_number, points, standard_ids)
         elif question.type == "numeric_response":
-            answer_key_item = _derive_numeric_response(question, item_number, points)
+            answer_key_item = _derive_numeric_response(question, item_number, points, standard_ids)
         else:
             answer_key_item = AnswerKeyItemModel(
                 question_id=question.id,
@@ -49,6 +50,7 @@ def derive_answer_key(
                 sheet_item_number=item_number,
                 row_kind="manual_capture",
                 points=points,
+                standard_ids=standard_ids,
             )
         items.append(answer_key_item)
 
@@ -61,7 +63,7 @@ def derive_answer_key(
 
 
 def _derive_multiple_choice(
-    question: QuestionModel, item_number: int, points: float
+    question: QuestionModel, item_number: int, points: float, standard_ids: list[str]
 ) -> AnswerKeyItemModel:
     answer = question.answer or {}
     choices = answer.get("choices") or []
@@ -76,13 +78,14 @@ def _derive_multiple_choice(
         sheet_item_number=item_number,
         row_kind="multiple_choice",
         points=points,
+        standard_ids=standard_ids,
         choice_count=len(choices),
         correct_choice_indices=list(correct_indices),
     )
 
 
 def _derive_numeric_response(
-    question: QuestionModel, item_number: int, points: float
+    question: QuestionModel, item_number: int, points: float, standard_ids: list[str]
 ) -> AnswerKeyItemModel:
     answer = question.answer or {}
     value = float(answer["value"])
@@ -105,6 +108,7 @@ def _derive_numeric_response(
         sheet_item_number=item_number,
         row_kind="numeric_response",
         points=points,
+        standard_ids=standard_ids,
         numeric_value=value,
         numeric_tolerance=tolerance,
         grid_digits=grid_digits,

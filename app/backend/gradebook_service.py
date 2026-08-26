@@ -17,13 +17,16 @@ from .grading.answer_key import derive_answer_key
 from .grading.detect import decode_qr_payload, read_sheet
 from .grading.layout import SheetCopySpec, build_sheet_layout
 from .grading.pdf import render_sheet_layout_to_pdf
+from .grading.scoring import combine_by_standard, score_batch
 from .models import (
     AdministeredTestSnapshotListResponseModel,
     AdministeredTestSnapshotModel,
     AdministeredTestSnapshotSummaryModel,
+    CombinedGradeReportModel,
     DetectedRowResultModel,
     GradebookManifestModel,
     GradebookSummaryModel,
+    GradeReportModel,
     GradingBatchListResponseModel,
     GradingBatchModel,
     QuestionModel,
@@ -33,31 +36,14 @@ from .models import (
     StudentListResponseModel,
     StudentModel,
     TestDraftModel,
+    TestPerformanceItemModel,
+    TestPerformanceRunModel,
     UpsertStudentRequest,
 )
+from .grading.review_state import sheet_needs_review
 from .service import BankWorkspaceError
 
 _SCAN_RASTER_DPI = 300
-
-
-def _row_is_resolved(row: DetectedRowResultModel) -> bool:
-    if row.kind == "manual_capture":
-        return row.manual_score is not None
-    if row.override_choice_indices is not None or row.override_value is not None:
-        return True
-    return row.flag == "none"
-
-
-def _sheet_needs_review(sheet: ScannedSheetModel) -> bool:
-    """One rule, used both right after ingest and after every later
-    identity/row correction, so 'needs review' never means something
-    slightly different depending on when you ask."""
-
-    if sheet.identity_status not in ("pre_identified", "manually_resolved"):
-        return True
-    if sheet.fiducial_confidence is None:
-        return True
-    return any(not _row_is_resolved(row) for row in sheet.row_results)
 
 
 class GradebookService:
@@ -368,6 +354,66 @@ class GradebookService:
     def get_review_queue(self, batch_id: str) -> list[ScannedSheetModel]:
         return [sheet for sheet in self._read_batch(batch_id).sheets if sheet.needs_review]
 
+    # -- Reporting ------------------------------------------------------------
+
+    def get_grade_report(self, batch_id: str) -> GradeReportModel:
+        batch = self._read_batch(batch_id)
+        snapshot = self.get_snapshot(batch.snapshot_id)
+        return score_batch(batch, snapshot, self._read_students().items)
+
+    def get_combined_lineage_report(self, test_title: str) -> CombinedGradeReportModel:
+        lineage_key = test_title.strip().casefold()
+        snapshots = [s for s in self._read_all_snapshots() if s.title.strip().casefold() == lineage_key]
+        snapshot_ids = {s.id for s in snapshots}
+        batches = [b for b in self._read_all_batches() if b.snapshot_id in snapshot_ids]
+
+        reports = [self.get_grade_report(batch.id) for batch in batches]
+        return CombinedGradeReportModel(
+            test_title=test_title,
+            snapshot_ids=sorted(snapshot_ids),
+            batch_ids=[batch.id for batch in batches],
+            scored_sheet_count=sum(report.scored_sheet_count for report in reports),
+            by_standard=combine_by_standard(reports),
+        )
+
+    def build_performance_run(self, batch_id: str, cohort_label: str | None = None) -> TestPerformanceRunModel:
+        """Pure mapping from a grade report to the bank's performance-run
+        shape -- writing it into a bank is the caller's job (main.py), since
+        this service must stay usable with no bank open at all."""
+
+        report = self.get_grade_report(batch_id)
+        return TestPerformanceRunModel(
+            id=uuid.uuid4().hex,
+            administered_at=datetime.now(UTC),
+            cohort_label=cohort_label,
+            notes=(
+                f"Recorded from gradebook batch {batch_id}."
+                + (" Some manual-capture items were not yet scored." if report.contains_unscored_manual_items else "")
+            ),
+            item_results=[
+                TestPerformanceItemModel(
+                    question_id=item.question_id,
+                    attempts=item.attempts,
+                    correct=item.full_credit_count,
+                    average_score=None,
+                    # QuestionModel.difficulty is 1 (easy) to 5 (hard); map full-credit
+                    # rate onto that same scale rather than reporting a raw percentage.
+                    observed_difficulty=(
+                        1.0 + 4.0 * (1.0 - item.percent_full_credit / 100.0) if item.attempts else None
+                    ),
+                    tricky=item.attempts > 0 and item.percent_full_credit < 50.0,
+                    notes=None,
+                )
+                for item in report.by_item
+            ],
+        )
+
+    def get_snapshot(self, snapshot_id: str) -> AdministeredTestSnapshotModel:
+        snapshot = next((s for s in self._read_all_snapshots() if s.id == snapshot_id), None)
+        if snapshot is None:
+            raise BankWorkspaceError(f"Snapshot not found: {snapshot_id}", status_code=404)
+        return snapshot
+
     def get_sheet_image_bytes(self, batch_id: str, sheet_id: str) -> bytes:
         _, workspace_path = self.ensure_open()
         batch = self._read_batch(batch_id)
@@ -396,7 +442,7 @@ class GradebookService:
         sheet.student_id = student_id
         sheet.free_text_name = free_text_name
         sheet.identity_status = "manually_resolved"
-        sheet.needs_review = _sheet_needs_review(sheet)
+        sheet.needs_review = sheet_needs_review(sheet)
 
         self._write_batch(workspace_path, batch)
         return sheet
@@ -432,7 +478,7 @@ class GradebookService:
             row.override_value = override_value
             row.override_note = override_note
 
-        sheet.needs_review = _sheet_needs_review(sheet)
+        sheet.needs_review = sheet_needs_review(sheet)
         self._write_batch(workspace_path, batch)
         return sheet
 
@@ -499,7 +545,7 @@ class GradebookService:
             fiducial_confidence=fiducial_confidence,
             row_results=row_results,
         )
-        sheet.needs_review = _sheet_needs_review(sheet)
+        sheet.needs_review = sheet_needs_review(sheet)
         return sheet
 
     def _build_sheet_lookup(

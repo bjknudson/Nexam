@@ -56,6 +56,7 @@ from .models import (
     TestDraftListResponseModel,
     TestDraftModel,
     TestDraftSummaryModel,
+    TestPerformanceRunModel,
     TestQuestionItemModel,
     TestSectionItemModel,
     TestStandardBalanceModel,
@@ -1070,6 +1071,20 @@ class BankWorkspaceService:
             raise BankWorkspaceError(f"Test draft not found: {test_id}", status_code=404)
         questions_by_id = {question.id: question for question in self._load_questions()}
         return self._build_test_detail(test, questions_by_id)
+
+    def add_performance_run(self, test_id: str, run: TestPerformanceRunModel) -> TestDraftDetailModel:
+        """The one place grading code (a separate .nxgb gradebook, never the
+        bank itself) can feed a completed grading result back into the bank
+        -- aggregate per-question stats only, never student identities, and
+        only when the user explicitly asks for it."""
+
+        tests = self._read_tests()
+        index = next((i for i, item in enumerate(tests.items) if item.id == test_id), None)
+        if index is None:
+            raise BankWorkspaceError(f"Test draft not found: {test_id}", status_code=404)
+        tests.items[index].performance_runs.append(run)
+        self._write_tests(tests)
+        return self.get_test_draft(test_id)
 
     def create_test_draft(
         self,

@@ -834,6 +834,9 @@ class AnswerKeyItemModel(BaseModel):
     sheet_item_number: int
     row_kind: SheetRowKind
     points: float
+    # Carried on the frozen key itself (not looked up from the bank later) so
+    # by-standard reporting works even if the bank isn't open anymore.
+    standard_ids: list[str] = Field(default_factory=list)
     choice_count: int | None = None
     correct_choice_indices: list[int] | None = None
     numeric_value: float | None = None
@@ -1064,3 +1067,82 @@ class OverrideRowResultRequest(BaseModel):
     manual_score: float | None = None
     manual_score_max: float | None = None
     manual_grader_note: str | None = None
+
+
+class ChoiceDistributionEntryModel(BaseModel):
+    choice_index: int
+    count: int
+
+
+class GradeReportItemModel(BaseModel):
+    question_id: str
+    sheet_item_number: int
+    row_kind: SheetRowKind
+    standard_ids: list[str] = Field(default_factory=list)
+    attempts: int
+    full_credit_count: int
+    percent_full_credit: float
+    choice_distribution: list[ChoiceDistributionEntryModel] = Field(default_factory=list)
+    flagged_count: int = 0
+
+
+class GradeReportStandardModel(BaseModel):
+    """`code`/`statement` are left blank -- the snapshot only carries
+    standard ids, not the bank's descriptive text, so a report stays
+    computable even when the source bank isn't open."""
+
+    standard_id: str
+    code: str | None = None
+    statement: str | None = None
+    attempts: int
+    full_credit_count: int
+    percent_full_credit: float
+
+
+class StudentScoreModel(BaseModel):
+    sheet_id: str
+    student_id: str | None = None
+    student_display_name: str | None = None
+    points_earned: float
+    points_possible: float
+    percent_correct: float
+    flagged_answer_count: int
+
+
+class GradeReportModel(BaseModel):
+    batch_id: str
+    snapshot_id: str
+    test_title: str
+    version: str
+    generated_at: datetime
+    scored_sheet_count: int
+    excluded_sheet_count: int
+    total_possible_points: float
+    average_percent_correct: float
+    score_histogram: dict[str, int] = Field(default_factory=dict)
+    by_standard: list[GradeReportStandardModel] = Field(default_factory=list)
+    by_item: list[GradeReportItemModel] = Field(default_factory=list)
+    student_scores: list[StudentScoreModel] = Field(default_factory=list)
+    contains_unscored_manual_items: bool = False
+
+
+class CombinedGradeReportModel(BaseModel):
+    """One test lineage's score-by-standard, combined across every version's
+    batches in this gradebook.
+
+    Reuses the lineage-grouping idea from course coverage reporting (group
+    by title.strip().casefold()), but sums attempts/full_credit_count across
+    versions rather than taking the max: coverage avoids double-counting how
+    many times a standard is *taught*, but a score report is real, distinct
+    student attempts per version, so summing is the correct aggregation here.
+    """
+
+    test_title: str
+    snapshot_ids: list[str] = Field(default_factory=list)
+    batch_ids: list[str] = Field(default_factory=list)
+    scored_sheet_count: int
+    by_standard: list[GradeReportStandardModel] = Field(default_factory=list)
+
+
+class RecordPerformanceRunRequest(BaseModel):
+    cohort_label: str | None = None

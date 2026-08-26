@@ -35,6 +35,7 @@ from .models import (
     QuestionImportRowUpdateRequest,
     QuestionModel,
     QuestionType,
+    RecordPerformanceRunRequest,
     ResolveSheetIdentityRequest,
     SaveBankRequest,
     SaveGradebookRequest,
@@ -276,6 +277,28 @@ def override_row_result(
         manual_score_max=request.manual_score_max,
         manual_grader_note=request.manual_grader_note,
     )
+
+
+@app.get("/api/gradebook/batches/{batch_id}/report")
+def get_grade_report(batch_id: str):
+    return gradebook_service.get_grade_report(batch_id)
+
+
+@app.get("/api/gradebook/report/combined")
+def get_combined_lineage_report(test_title: str = Query(...)):
+    return gradebook_service.get_combined_lineage_report(test_title)
+
+
+@app.post("/api/gradebook/batches/{batch_id}/record-performance-run")
+def record_batch_as_performance_run(batch_id: str, request: RecordPerformanceRunRequest):
+    """Requires a bank to be open -- this is the one place a completed
+    grading result can flow back into the bank, and it's an explicit,
+    user-initiated action, never automatic. See docs/grading-plan.md."""
+
+    batch = gradebook_service.get_scan_batch(batch_id)
+    snapshot = gradebook_service.get_snapshot(batch.snapshot_id)
+    run = gradebook_service.build_performance_run(batch_id, request.cohort_label)
+    return service.add_performance_run(snapshot.source_test_id, run)
 
 
 @app.get("/api/questions")
