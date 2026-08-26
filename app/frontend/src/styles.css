@@ -3796,3 +3796,223 @@ textarea {
     min-height: 100%;
   }
 }
+
+/* ---------------------------------------------------------------------- */
+/* Gradebook (.nxgb) -- a separate document from a bank, see docs/grading.md */
+/* ---------------------------------------------------------------------- */
+
+.gradebook-app {
+  display: grid;
+  align-content: start;
+  gap: 1rem;
+  min-height: 100%;
+  overflow-y: auto;
+  padding: 1rem 1.25rem;
+  background: #eef3f8;
+}
+
+.gradebook-launch {
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+.gradebook-launch-panel {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.gradebook-launch-panel label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: #334155;
+}
+
+.gradebook-manual-open {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.gradebook-manual-open input {
+  flex: 1;
+}
+
+.gradebook-error {
+  margin: 0;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid #fca5a5;
+  border-radius: 10px;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.gradebook-topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  background: linear-gradient(135deg, #ffffff, #ddeaf6);
+  border: 1px solid #d1dbe5;
+  border-radius: 12px;
+}
+
+.gradebook-title {
+  margin: 0;
+  font-weight: 600;
+  font-size: 1.1rem;
+}
+
+.gradebook-tabs {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.gradebook-tabs button {
+  border: 1px solid #d1dbe5;
+  background: #ffffff;
+  border-radius: 999px;
+  padding: 0.4rem 0.9rem;
+}
+
+.gradebook-tabs button.active {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #ffffff;
+}
+
+.gradebook-page-body {
+  min-height: 0;
+}
+
+.button-like {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.4rem 0.9rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #1e293b;
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+
+.administered-test-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.response-sheet-print-pane {
+  padding: 1rem 1.25rem;
+  display: grid;
+  gap: 1rem;
+  background: #eef3f8;
+  overflow-y: auto;
+}
+
+.response-sheet-print-result {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px dashed #cbd5e1;
+}
+
+.scan-review-workspace,
+.grade-report-workspace,
+.administered-tests-workspace,
+.roster-workspace {
+  display: grid;
+  align-content: start;
+  gap: 1rem;
+  min-height: 100%;
+}
+
+.scan-review-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.8fr) minmax(420px, 1.2fr);
+  gap: 0.9rem;
+  min-height: 0;
+}
+
+.scan-review-detail {
+  display: grid;
+  gap: 0.75rem;
+  align-content: start;
+}
+
+.scan-review-image {
+  max-width: 100%;
+  border: 1px solid #d1dbe5;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.scan-review-identity h3,
+.scan-review-row p:first-child {
+  margin-top: 0;
+}
+
+.scan-review-rows {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.scan-review-row {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.scan-review-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.scan-review-table th,
+.scan-review-table td {
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+/* Score histogram: one hue (magnitude, single series -- no legend needed),
+   thin bars, rounded data-ends, direct value labels, native title as a
+   lightweight hover layer. See the dataviz skill. */
+.score-histogram {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.score-histogram-row {
+  display: grid;
+  grid-template-columns: 3.5rem minmax(0, 1fr) 2rem;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.score-histogram-label,
+.score-histogram-value {
+  font-size: 0.82rem;
+  color: #475569;
+}
+
+.score-histogram-value {
+  text-align: right;
+}
+
+.score-histogram-track {
+  background: #eef2f7;
+  border-radius: 4px;
+  height: 0.75rem;
+  overflow: hidden;
+}
+
+.score-histogram-bar {
+  height: 100%;
+  background: #2563eb;
+  border-radius: 4px;
+}

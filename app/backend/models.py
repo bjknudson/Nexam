@@ -956,6 +956,7 @@ class AdministeredTestSnapshotSummaryModel(BaseModel):
     """A lightweight listing row -- omits the frozen items/questions payload."""
 
     id: str
+    layout_id: str
     source_bank_title: str | None = None
     source_test_id: str
     title: str

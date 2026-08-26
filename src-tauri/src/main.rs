@@ -31,6 +31,52 @@ fn open_bank_dialog(initial_directory: Option<String>) -> Option<String> {
     dialog.pick_file().map(|path| path.display().to_string())
 }
 
+/// A gradebook (.nxgb) is a separate document from a bank -- see
+/// docs/grading.md -- so it gets its own open/save dialogs rather than
+/// reusing the bank ones with a different filter bolted on.
+#[tauri::command]
+fn open_gradebook_dialog(initial_directory: Option<String>) -> Option<String> {
+    let mut dialog = FileDialog::new()
+        .add_filter("Nexzam Gradebooks", &["nxgb"])
+        .set_title("Open Nexzam Gradebook");
+
+    if let Some(dir) = initial_directory {
+        dialog = dialog.set_directory(dir);
+    }
+
+    dialog.pick_file().map(|path| path.display().to_string())
+}
+
+#[tauri::command]
+fn save_gradebook_dialog(
+    current_path: Option<String>,
+    suggested_file_name: Option<String>,
+    initial_directory: Option<String>,
+) -> Option<String> {
+    let mut dialog = FileDialog::new()
+        .add_filter("Nexzam Gradebooks", &["nxgb"])
+        .set_title("Save Nexzam Gradebook");
+
+    if let Some(path) = current_path {
+        let path = std::path::Path::new(&path);
+        dialog = dialog.set_file_name(
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("gradebook.nxgb"),
+        );
+        if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+            dialog = dialog.set_directory(parent);
+        }
+    } else {
+        dialog = dialog.set_file_name(suggested_file_name.as_deref().unwrap_or("gradebook.nxgb"));
+        if let Some(dir) = initial_directory {
+            dialog = dialog.set_directory(dir);
+        }
+    }
+
+    dialog.save_file().map(|path| path.display().to_string())
+}
+
 #[tauri::command]
 fn save_bank_dialog(
     current_path: Option<String>,
@@ -59,6 +105,37 @@ fn save_bank_dialog(
     }
 
     dialog.save_file().map(|path| path.display().to_string())
+}
+
+/// Save arbitrary bytes (e.g. a generated response-sheet PDF) to a
+/// user-chosen path. Unlike `save_bank_dialog`, this isn't tied to one file
+/// type -- the filter is derived from the suggested file name's extension.
+#[tauri::command]
+fn save_bytes_dialog(
+    bytes: Vec<u8>,
+    suggested_file_name: Option<String>,
+    initial_directory: Option<String>,
+) -> Result<Option<String>, String> {
+    let file_name = suggested_file_name.unwrap_or_else(|| "download.pdf".to_string());
+    let extension = std::path::Path::new(&file_name)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("pdf")
+        .to_string();
+
+    let mut dialog = FileDialog::new()
+        .add_filter(&extension.to_uppercase(), &[extension.as_str()])
+        .set_file_name(&file_name)
+        .set_title("Save File");
+    if let Some(dir) = initial_directory {
+        dialog = dialog.set_directory(dir);
+    }
+
+    let Some(path) = dialog.save_file() else {
+        return Ok(None);
+    };
+    std::fs::write(&path, &bytes).map_err(|error| format!("Could not save file: {error}"))?;
+    Ok(Some(path.display().to_string()))
 }
 
 #[tauri::command]
@@ -370,6 +447,9 @@ fn main() {
             get_desktop_context,
             open_bank_dialog,
             save_bank_dialog,
+            open_gradebook_dialog,
+            save_gradebook_dialog,
+            save_bytes_dialog,
             pick_directory_dialog,
             set_archive_dirty,
             check_for_updates,

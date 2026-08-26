@@ -291,6 +291,7 @@ class GradebookService:
     ) -> AdministeredTestSnapshotSummaryModel:
         return AdministeredTestSnapshotSummaryModel(
             id=snapshot.id,
+            layout_id=snapshot.layout.id,
             source_bank_title=snapshot.source_bank_title,
             source_test_id=snapshot.source_test_id,
             title=snapshot.title,

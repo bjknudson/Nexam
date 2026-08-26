@@ -32,6 +32,7 @@ interface TestBuilderPaneProps {
   onOpenTest: (testId: string) => void;
   onArchiveTest: (testId: string) => void;
   onOpenPrintPreview: () => void;
+  onOpenResponseSheetPrint: () => void;
   onUpdateTest: (test: TestDraftModel) => void;
   /** Fork the open test into a new draft, optionally reverting the original. */
   onCopyTest: (
@@ -401,6 +402,7 @@ function TestBuilderPane({
   onOpenTest,
   onArchiveTest,
   onOpenPrintPreview,
+  onOpenResponseSheetPrint,
   onUpdateTest,
   onCopyTest,
   onApplyTestJson,
@@ -777,6 +779,14 @@ function TestBuilderPane({
                 disabled={questionItemCount === 0}
               >
                 Preview Print
+              </button>
+              <button
+                type="button"
+                onClick={onOpenResponseSheetPrint}
+                disabled={questionItemCount === 0}
+                title="Hand this test off to an open gradebook and print bubble/grid-in response sheets"
+              >
+                Create Response Sheets...
               </button>
             </section>
 

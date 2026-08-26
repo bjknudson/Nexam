@@ -9,6 +9,7 @@ type PaneKind =
   | "standards"
   | "courses"
   | "test-preview"
+  | "response-sheet-print"
   | "editor"
   | "tests";
 
@@ -44,6 +45,25 @@ export async function saveBankDialog(
 ): Promise<string | null> {
   if (!isDesktopShell()) return null;
   return invoke<string | null>("save_bank_dialog", {
+    currentPath: currentPath ?? null,
+    suggestedFileName: options.suggestedFileName ?? null,
+    initialDirectory: options.initialDirectory ?? null,
+  });
+}
+
+export async function openGradebookDialog(initialDirectory?: string | null): Promise<string | null> {
+  if (!isDesktopShell()) return null;
+  return invoke<string | null>("open_gradebook_dialog", {
+    initialDirectory: initialDirectory ?? null,
+  });
+}
+
+export async function saveGradebookDialog(
+  currentPath?: string | null,
+  options: { suggestedFileName?: string | null; initialDirectory?: string | null } = {},
+): Promise<string | null> {
+  if (!isDesktopShell()) return null;
+  return invoke<string | null>("save_gradebook_dialog", {
     currentPath: currentPath ?? null,
     suggestedFileName: options.suggestedFileName ?? null,
     initialDirectory: options.initialDirectory ?? null,
@@ -131,6 +151,69 @@ export async function openPaneWindow(
   await new Promise<void>((resolve, reject) => {
     void child.once("tauri://created", () => resolve());
     void child.once("tauri://error", (event) => reject(new Error(String(event.payload))));
+  });
+}
+
+const GRADEBOOK_WINDOW_LABEL = "nexzam-gradebook";
+
+/** Open the gradebook as its own top-level window/tab -- a separate document
+ *  from the currently open bank, not a pane of it, so it gets its own query
+ *  param and window label rather than reusing PaneKind/openPaneWindow. See
+ *  docs/grading.md. */
+export async function openGradebookWindow(): Promise<void> {
+  const url = new URL(window.location.href);
+  url.search = "";
+  url.searchParams.set("app", "gradebook");
+
+  if (!isDesktopShell()) {
+    const popup = window.open(
+      url.toString(),
+      GRADEBOOK_WINDOW_LABEL,
+      "popup=yes,width=1200,height=860,resizable=yes,scrollbars=no",
+    );
+    if (!popup) {
+      throw new Error("Failed to open the gradebook window.");
+    }
+    popup.focus();
+    return;
+  }
+
+  const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+  const existing = await WebviewWindow.getByLabel(GRADEBOOK_WINDOW_LABEL);
+
+  if (existing) {
+    await existing.show();
+    await existing.setFocus();
+    return;
+  }
+
+  const child = new WebviewWindow(GRADEBOOK_WINDOW_LABEL, {
+    url: url.toString(),
+    title: "Nexzam Gradebook",
+    width: 1200,
+    height: 860,
+    resizable: true,
+    focus: true,
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    void child.once("tauri://created", () => resolve());
+    void child.once("tauri://error", (event) => reject(new Error(String(event.payload))));
+  });
+}
+
+/** Save arbitrary bytes (e.g. a generated PDF) to a user-chosen path via a
+ *  native "Save As" dialog. Returns null in a browser tab (no OS dialog to
+ *  back it) or if the user cancels. */
+export async function saveBytesDialog(
+  bytes: Uint8Array,
+  options: { suggestedFileName?: string | null; initialDirectory?: string | null } = {},
+): Promise<string | null> {
+  if (!isDesktopShell()) return null;
+  return invoke<string | null>("save_bytes_dialog", {
+    bytes: Array.from(bytes),
+    suggestedFileName: options.suggestedFileName ?? null,
+    initialDirectory: options.initialDirectory ?? null,
   });
 }
 

@@ -414,3 +414,258 @@ export interface DesktopContext {
   backendError: string | null;
   archiveDirty: boolean;
 }
+
+// ---------------------------------------------------------------------------
+// Gradebook (.nxgb) -- a separate local package from a bank. See
+// docs/grading.md. Student names/scans/scores live only here, never in a
+// BankSummaryModel-shaped bank.
+// ---------------------------------------------------------------------------
+
+export interface GradebookManifestModel {
+  schema_version: string;
+  gradebook_id: string;
+  title: string;
+  description?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GradebookSummaryModel {
+  source_path: string;
+  workspace_path: string;
+  manifest: GradebookManifestModel;
+}
+
+export interface StudentModel {
+  id: string;
+  first_name: string;
+  last_name: string;
+  external_id?: string | null;
+}
+
+export interface StudentListResponseModel {
+  items: StudentModel[];
+}
+
+export type SheetRowKind = "multiple_choice" | "numeric_response" | "manual_capture";
+
+export interface AnswerKeyItemModel {
+  question_id: string;
+  test_item_number: number;
+  sheet_item_number: number;
+  row_kind: SheetRowKind;
+  points: number;
+  standard_ids: string[];
+  choice_count?: number | null;
+  correct_choice_indices?: number[] | null;
+  numeric_value?: number | null;
+  numeric_tolerance?: number | null;
+  grid_digits?: number | null;
+  allow_decimal: boolean;
+  allow_negative: boolean;
+}
+
+export interface AnswerKeyModel {
+  test_id: string;
+  version: string;
+  items: AnswerKeyItemModel[];
+  total_points: number;
+}
+
+export interface FiducialMarkerModel {
+  corner: "top_left" | "top_right" | "bottom_left" | "bottom_right";
+  shape: "square" | "circle";
+  center_x_pt: number;
+  center_y_pt: number;
+  size_pt: number;
+}
+
+export interface BubbleCellModel {
+  value: number;
+  center_x_pt: number;
+  center_y_pt: number;
+  radius_pt: number;
+}
+
+export interface CaptureBoxModel {
+  x_pt: number;
+  y_pt: number;
+  width_pt: number;
+  height_pt: number;
+}
+
+export interface SheetRowModel {
+  question_id: string;
+  test_item_number: number;
+  sheet_item_number: number;
+  kind: SheetRowKind;
+  label_x_pt: number;
+  label_y_pt: number;
+  cells: BubbleCellModel[];
+  digit_columns?: number | null;
+  capture_box?: CaptureBoxModel | null;
+}
+
+export interface SheetPageModel {
+  page_index: number;
+  fiducials: FiducialMarkerModel[];
+  qr_box: CaptureBoxModel;
+  qr_payload: string;
+  name_box?: CaptureBoxModel | null;
+  printed_name?: string | null;
+  rows: SheetRowModel[];
+}
+
+export interface SheetLayoutModel {
+  id: string;
+  mode: "blank" | "pre_id";
+  page_size: "letter" | "legal" | "a4";
+  page_width_pt: number;
+  page_height_pt: number;
+  pages: SheetPageModel[];
+}
+
+export interface AdministeredTestSnapshotModel {
+  id: string;
+  source_bank_title?: string | null;
+  source_test_id: string;
+  title: string;
+  version: string;
+  printed_at: string;
+  items: TestItemModel[];
+  questions: QuestionModel[];
+  answer_key: AnswerKeyModel;
+  layout: SheetLayoutModel;
+}
+
+export interface AdministeredTestSnapshotSummaryModel {
+  id: string;
+  layout_id: string;
+  source_bank_title?: string | null;
+  source_test_id: string;
+  title: string;
+  version: string;
+  printed_at: string;
+  total_points: number;
+  page_count: number;
+  mode: "blank" | "pre_id";
+}
+
+export interface AdministeredTestSnapshotListResponseModel {
+  items: AdministeredTestSnapshotSummaryModel[];
+}
+
+export type DetectionFlag = "none" | "low_confidence" | "multi_mark" | "no_mark";
+
+export type IdentityStatus =
+  | "pre_identified"
+  | "unresolved"
+  | "manually_resolved"
+  | "qr_unreadable"
+  | "wrong_snapshot";
+
+export interface DetectedRowResultModel {
+  question_id: string;
+  sheet_item_number: number;
+  kind: SheetRowKind;
+  detected_choice_indices: number[];
+  detected_digits?: string | null;
+  detected_value?: number | null;
+  confidence?: number | null;
+  flag: DetectionFlag;
+  needs_manual_grade: boolean;
+  manual_score?: number | null;
+  manual_score_max?: number | null;
+  manual_grader_note?: string | null;
+  override_choice_indices?: number[] | null;
+  override_value?: number | null;
+  override_note?: string | null;
+}
+
+export interface ScannedSheetModel {
+  id: string;
+  snapshot_id?: string | null;
+  layout_id?: string | null;
+  sheet_id?: string | null;
+  source_image_path: string;
+  page_index: number;
+  student_id?: string | null;
+  free_text_name?: string | null;
+  identity_status: IdentityStatus;
+  fiducial_confidence?: number | null;
+  row_results: DetectedRowResultModel[];
+  needs_review: boolean;
+}
+
+export interface GradingBatchModel {
+  id: string;
+  snapshot_id: string;
+  created_at: string;
+  source_description?: string | null;
+  sheets: ScannedSheetModel[];
+}
+
+export interface GradingBatchListResponseModel {
+  items: GradingBatchModel[];
+}
+
+export interface ChoiceDistributionEntryModel {
+  choice_index: number;
+  count: number;
+}
+
+export interface GradeReportItemModel {
+  question_id: string;
+  sheet_item_number: number;
+  row_kind: SheetRowKind;
+  standard_ids: string[];
+  attempts: number;
+  full_credit_count: number;
+  percent_full_credit: number;
+  choice_distribution: ChoiceDistributionEntryModel[];
+  flagged_count: number;
+}
+
+export interface GradeReportStandardModel {
+  standard_id: string;
+  code?: string | null;
+  statement?: string | null;
+  attempts: number;
+  full_credit_count: number;
+  percent_full_credit: number;
+}
+
+export interface StudentScoreModel {
+  sheet_id: string;
+  student_id?: string | null;
+  student_display_name?: string | null;
+  points_earned: number;
+  points_possible: number;
+  percent_correct: number;
+  flagged_answer_count: number;
+}
+
+export interface GradeReportModel {
+  batch_id: string;
+  snapshot_id: string;
+  test_title: string;
+  version: string;
+  generated_at: string;
+  scored_sheet_count: number;
+  excluded_sheet_count: number;
+  total_possible_points: number;
+  average_percent_correct: number;
+  score_histogram: Record<string, number>;
+  by_standard: GradeReportStandardModel[];
+  by_item: GradeReportItemModel[];
+  student_scores: StudentScoreModel[];
+  contains_unscored_manual_items: boolean;
+}
+
+export interface CombinedGradeReportModel {
+  test_title: string;
+  snapshot_ids: string[];
+  batch_ids: string[];
+  scored_sheet_count: number;
+  by_standard: GradeReportStandardModel[];
+}

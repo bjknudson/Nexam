@@ -44,12 +44,14 @@ import {
   onSaveAsMenu,
   onSaveBankMenu,
   openBankDialog,
+  openGradebookWindow,
   openPaneWindow,
   resolveDefaultBankDirectory,
   saveBankDialog,
   setArchiveDirtyInShell,
   watchPaneWindowClose,
 } from "./desktop";
+import GradebookApp from "./GradebookApp";
 import {
   escapeLikelyLatexBackslashesInJson,
   hasMathMarkup,
@@ -67,6 +69,7 @@ import { SETTINGS_KEYS, usePersistedBoolean, usePersistedString } from "./appSet
 import StandardsWorkspace from "./StandardsWorkspace";
 import TestBuilderPane from "./TestBuilderPane";
 import TestPrintPreview from "./TestPrintPreview";
+import ResponseSheetPrintPane from "./ResponseSheetPrintPane";
 import type {
   AssetInspectionResponseModel,
   AssetListItemModel,
@@ -94,6 +97,7 @@ type PaneKind =
   | "standards"
   | "courses"
   | "test-preview"
+  | "response-sheet-print"
   | "editor"
   | "tests";
 type WorkspacePage = "questions" | "tests" | "standards" | "courses";
@@ -301,6 +305,7 @@ const PANE_KINDS: PaneKind[] = [
   "standards",
   "courses",
   "test-preview",
+  "response-sheet-print",
   "editor",
   "tests",
 ];
@@ -933,6 +938,9 @@ function AssetPane({
 
 function App() {
   const desktopMode = isDesktopShell();
+  // The gradebook is a wholly separate document/app, not a bank pane -- a
+  // distinct query param instead of overloading PaneKind. See docs/grading.md.
+  const isGradebookWindow = new URLSearchParams(window.location.search).get("app") === "gradebook";
   const paneMode = getPaneMode();
   const isPaneWindow = paneMode !== null;
   const isMainWindow = paneMode === null;
@@ -2741,6 +2749,21 @@ function App() {
     }
   }
 
+  async function handleOpenResponseSheetPrintPane() {
+    const selectedTest = testDrafts.find((item) => item.test.id === selectedTestId) ?? testDrafts[0];
+    if (!selectedTest) return;
+
+    try {
+      await openPaneWindow("response-sheet-print", "Response Sheet Preview", {
+        mode: selectedTest.test.id,
+        width: 900,
+        height: 820,
+      });
+    } catch (error) {
+      setErrorMessage((error as Error).message);
+    }
+  }
+
   async function handleDockPane(pane: PaneKind) {
     if (isMainWindow) {
       if (pane === "questions") {
@@ -3031,6 +3054,8 @@ function App() {
               ? "Courses - Nexzam"
               : paneMode === "test-preview"
                 ? "Printable Test Preview - Nexzam"
+                : paneMode === "response-sheet-print"
+                  ? "Response Sheet Preview - Nexzam"
           : "Nexzam";
   }, [paneMode]);
 
@@ -3073,6 +3098,10 @@ function App() {
         </div>
       </div>
     );
+  }
+
+  if (isGradebookWindow) {
+    return <GradebookApp />;
   }
 
   if (paneMode === "questions") {
@@ -3171,6 +3200,18 @@ function App() {
     const testId = new URLSearchParams(window.location.search).get("mode");
     return (
       <TestPrintPreview
+        testId={testId}
+        onClose={() => {
+          void closeCurrentPaneWindow();
+        }}
+      />
+    );
+  }
+
+  if (paneMode === "response-sheet-print") {
+    const testId = new URLSearchParams(window.location.search).get("mode");
+    return (
+      <ResponseSheetPrintPane
         testId={testId}
         onClose={() => {
           void closeCurrentPaneWindow();
@@ -3420,6 +3461,17 @@ function App() {
           {!desktopMode ? (
             <button onClick={() => void handleOpenDemo()} disabled={loading}>
               Open Demo Bank
+            </button>
+          ) : null}
+          {isMainWindow ? (
+            <button
+              type="button"
+              title="A gradebook is a separate file from this bank -- see docs/grading.md"
+              onClick={() => {
+                openGradebookWindow().catch((error) => setErrorMessage((error as Error).message));
+              }}
+            >
+              Open Gradebook
             </button>
           ) : null}
           {isMainWindow ? (
@@ -4312,6 +4364,7 @@ function App() {
                 onOpenTest={handleOpenTest}
                 onArchiveTest={handleArchiveTest}
                 onOpenPrintPreview={() => void handleOpenTestPrintPreview()}
+                onOpenResponseSheetPrint={() => void handleOpenResponseSheetPrintPane()}
                 onUpdateTest={(test) => void handleUpdateTestDraft(test)}
                 onCopyTest={(testId, payload) => void handleCopyTestDraft(testId, payload)}
                 onApplyTestJson={(testId, raw) => void handleApplyTestJson(testId, raw)}
