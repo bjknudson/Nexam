@@ -371,6 +371,10 @@ export interface TestDraftModel {
   title: string;
   version: string;
   course_ids: string[];
+  /** One sheet shape across every version, version marked by the student. */
+  interchangeable_sheets?: boolean;
+  /** Why this version exists -- shown wherever a version is chosen. */
+  version_description?: string | null;
   items: TestItemModel[];
   print_settings: TestPrintSettingsModel;
   performance_runs: TestPerformanceRunModel[];
@@ -441,6 +445,10 @@ export interface StudentModel {
   first_name: string;
   last_name: string;
   external_id?: string | null;
+  /** Class/period, for generating sheets for one section at a time. */
+  section?: string | null;
+  /** Free grouping: intervention group, accommodation, modified-version cohort. */
+  grouping?: string | null;
 }
 
 export interface StudentListResponseModel {
@@ -516,10 +524,12 @@ export interface SheetPageModel {
   rows: SheetRowModel[];
 }
 
+export type SheetPageSize = "letter" | "legal" | "a4" | "half_letter";
+
 export interface SheetLayoutModel {
   id: string;
   mode: "blank" | "pre_id";
-  page_size: "letter" | "legal" | "a4";
+  page_size: SheetPageSize;
   page_width_pt: number;
   page_height_pt: number;
   pages: SheetPageModel[];
@@ -572,6 +582,8 @@ export interface DetectedRowResultModel {
   detected_digits?: string | null;
   detected_value?: number | null;
   confidence?: number | null;
+  /** A human confirmed the student answered nothing here. */
+  override_blank?: boolean;
   flag: DetectionFlag;
   needs_manual_grade: boolean;
   manual_score?: number | null;

@@ -79,3 +79,28 @@ def test_open_bank_and_gradebook_independently(gradebook_client, demo_bok: Path,
     )
     assert gradebook_client.get("/api/gradebook/current").status_code == 200
     assert gradebook_client.get("/api/banks/current").status_code == 200
+
+
+def test_api_closes_a_bank_without_touching_the_working_copy(
+    gradebook_client, demo_bok: Path
+) -> None:
+    assert gradebook_client.post("/api/banks/open", json={"path": str(demo_bok)}).status_code == 200
+    workspace = gradebook_client.get("/api/banks/current").json()["workspace_path"]
+
+    assert gradebook_client.post("/api/banks/close").status_code == 204
+    assert gradebook_client.get("/api/banks/current").status_code == 400
+
+    # Closing is not saving and not discarding: reopening finds the same bank.
+    assert gradebook_client.post("/api/banks/open", json={"path": str(demo_bok)}).status_code == 200
+    assert Path(workspace).exists()
+
+
+def test_api_opens_the_demo_gradebook(gradebook_client) -> None:
+    response = gradebook_client.post("/api/gradebook/open-demo")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["manifest"]["title"].startswith("Demo")
+    students = gradebook_client.get("/api/gradebook/students").json()["items"]
+    assert len(students) >= 20
+    assert {student["section"] for student in students} == {"Period 2", "Period 4"}

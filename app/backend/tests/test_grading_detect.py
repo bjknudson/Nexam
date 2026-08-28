@@ -88,7 +88,7 @@ def test_clean_round_trip_at_non_canonical_dpi_recovers_exact_answers():
     fill_cells(image, layout, [mc_row.cells[2]], _NON_CANONICAL_DPI)
     fill_cells(image, layout, _numeric_fill_cells(numeric_row), _NON_CANONICAL_DPI)
 
-    results, fiducial_confidence = read_sheet(image, page, layout.page_width_pt, layout.page_height_pt)
+    results, fiducial_confidence, _ = read_sheet(image, page, layout.page_width_pt, layout.page_height_pt)
 
     assert fiducial_confidence == 1.0
     mc_result, numeric_result, manual_result = results
@@ -107,7 +107,7 @@ def test_perspective_skew_and_noise_still_recovers_answers():
     fill_cells(image, layout, [mc_row.cells[2]], 300)
 
     distorted = apply_perspective_skew_and_noise(image)
-    results, fiducial_confidence = read_sheet(distorted, page, layout.page_width_pt, layout.page_height_pt)
+    results, fiducial_confidence, _ = read_sheet(distorted, page, layout.page_width_pt, layout.page_height_pt)
 
     assert fiducial_confidence == 1.0
     assert results[0].detected_choice_indices == [2]
@@ -118,7 +118,7 @@ def test_blank_bubble_flagged_no_mark_not_silently_wrong():
     layout, page = _layout_and_page()
     image = rasterize_layout_page(layout, 0, 300)
 
-    results, _ = read_sheet(image, page, layout.page_width_pt, layout.page_height_pt)
+    results, _, _ = read_sheet(image, page, layout.page_width_pt, layout.page_height_pt)
 
     assert results[0].detected_choice_indices == []
     assert results[0].flag == "no_mark"
@@ -130,7 +130,7 @@ def test_two_filled_bubbles_flagged_multi_mark_not_silently_one_answer():
     mc_row = page.rows[0]
 
     fill_cells(image, layout, [mc_row.cells[1], mc_row.cells[2]], 300)
-    results, _ = read_sheet(image, page, layout.page_width_pt, layout.page_height_pt)
+    results, _, _ = read_sheet(image, page, layout.page_width_pt, layout.page_height_pt)
 
     assert set(results[0].detected_choice_indices) == {1, 2}
     assert results[0].flag == "multi_mark"
@@ -142,7 +142,7 @@ def test_faint_partial_mark_flagged_low_confidence():
     mc_row = page.rows[0]
 
     fill_cells(image, layout, [mc_row.cells[2]], 300, darkness=90, fill_fraction=0.4)
-    results, _ = read_sheet(image, page, layout.page_width_pt, layout.page_height_pt)
+    results, _, _ = read_sheet(image, page, layout.page_width_pt, layout.page_height_pt)
 
     assert results[0].flag == "low_confidence"
 

@@ -76,6 +76,17 @@ def score_batch(
     students: list[StudentModel],
 ) -> GradeReportModel:
     students_by_id = {student.id: student for student in students}
+
+    # On an interchangeable sheet the paper says one version and the student may
+    # have taken another, so each sheet is scored against the key it names.
+    keys_by_version = {snapshot.answer_key.version: snapshot.answer_key}
+    for alternate in snapshot.alternate_answer_keys:
+        keys_by_version[alternate.version] = alternate
+
+    def key_for(sheet: ScannedSheetModel) -> dict[str, AnswerKeyItemModel]:
+        chosen = keys_by_version.get(sheet.detected_version or "", snapshot.answer_key)
+        return {item.question_id: item for item in chosen.items}
+
     answer_key_by_question = {item.question_id: item for item in snapshot.answer_key.items}
 
     scoreable_sheets = [sheet for sheet in batch.sheets if _is_scoreable(sheet, batch.snapshot_id)]
@@ -88,10 +99,11 @@ def score_batch(
     contains_unscored_manual_items = False
 
     for sheet in scoreable_sheets:
+        sheet_key = key_for(sheet)
         points_earned_total = 0.0
         flagged_count = 0
         for row in sheet.row_results:
-            key_item = answer_key_by_question.get(row.question_id)
+            key_item = sheet_key.get(row.question_id)
             if key_item is None:
                 continue
             points_earned, is_full_credit, unscored = _score_row(row, key_item)

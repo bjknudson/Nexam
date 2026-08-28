@@ -25,19 +25,57 @@ def render_sheet_layout_to_pdf(layout: SheetLayoutModel) -> bytes:
     pdf = canvas.Canvas(buffer, pagesize=(layout.page_width_pt, layout.page_height_pt))
 
     for page in layout.pages:
-        _draw_page(pdf, page)
+        _draw_page(pdf, page, layout.header_label, layout.version_labels)
         pdf.showPage()
 
     pdf.save()
     return buffer.getvalue()
 
 
-def _draw_page(pdf: canvas.Canvas, page: SheetPageModel) -> None:
+def _draw_page(
+    pdf: canvas.Canvas,
+    page: SheetPageModel,
+    header_label: str | None,
+    version_labels: list[str],
+) -> None:
     _draw_fiducials(pdf, page)
     _draw_qr(pdf, page)
+    _draw_header(pdf, page, header_label)
     _draw_name_box(pdf, page)
+    _draw_version_row(pdf, page, version_labels)
     for row in page.rows:
         _draw_row(pdf, row)
+
+
+def _draw_version_row(
+    pdf: canvas.Canvas, page: SheetPageModel, version_labels: list[str]
+) -> None:
+    row = page.version_row
+    if row is None or not version_labels:
+        return
+    pdf.setFont("Helvetica-Bold", 9)
+    pdf.drawString(row.label_x_pt, row.label_y_pt - 3, "Version:")
+    for cell in row.cells:
+        pdf.circle(cell.center_x_pt, cell.center_y_pt, cell.radius_pt, fill=0, stroke=1)
+        label = version_labels[cell.value] if cell.value < len(version_labels) else str(cell.value)
+        pdf.setFont("Helvetica", 6)
+        pdf.drawCentredString(cell.center_x_pt, cell.center_y_pt - 2, label)
+
+
+def _draw_header(pdf: canvas.Canvas, page: SheetPageModel, header_label: str | None) -> None:
+    """Which test and version this sheet belongs to, on every page.
+
+    Sits above the name box so it survives the sheet being handed out on its
+    own, and repeats per page so a separated second page is still identifiable.
+    """
+
+    if not header_label:
+        return
+    box = page.name_box
+    if box is None:
+        return
+    pdf.setFont("Helvetica-Bold", 9)
+    pdf.drawString(box.x_pt, box.y_pt + box.height_pt + 14, header_label)
 
 
 def _draw_fiducials(pdf: canvas.Canvas, page: SheetPageModel) -> None:

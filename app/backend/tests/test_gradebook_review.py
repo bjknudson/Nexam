@@ -263,3 +263,60 @@ def test_review_workflow_via_api(gradebook_client, demo_bok: Path, tmp_path: Pat
 
     queue_after_response = gradebook_client.get(f"/api/gradebook/batches/{batch_id}/review-queue")
     assert queue_after_response.json()["items"] == []
+
+
+def test_marking_a_row_blank_resolves_it_without_inventing_an_answer(
+    bank_service: BankWorkspaceService, demo_bok: Path, tmp_path: Path
+) -> None:
+    """A student who skipped a question is a valid reading, not a stuck flag."""
+
+    bank_service.open_bank(str(demo_bok))
+    gradebook_service = GradebookService()
+    snapshot = _hand_off(bank_service, gradebook_service, tmp_path)
+    student = gradebook_service.upsert_student(
+        None, UpsertStudentRequest(first_name="Ada", last_name="Lovelace")
+    )
+    batch_id, sheet_id = _ingest_blank_sheet(gradebook_service, snapshot)
+    gradebook_service.resolve_sheet_identity(batch_id, sheet_id, student_id=student.id)
+
+    question_id = snapshot.answer_key.items[0].question_id
+    updated_sheet = gradebook_service.override_row_result(
+        batch_id, sheet_id, question_id, override_blank=True
+    )
+
+    row = next(r for r in updated_sheet.row_results if r.question_id == question_id)
+    assert row.override_blank is True
+    # No answer was invented on the student's behalf.
+    assert row.override_choice_indices is None
+    assert row.override_value is None
+    # The raw detection still says what the scanner saw.
+    assert row.flag == "no_mark"
+
+
+def test_a_sheet_of_blanks_can_be_fully_reviewed(
+    bank_service: BankWorkspaceService, demo_bok: Path, tmp_path: Path
+) -> None:
+    bank_service.open_bank(str(demo_bok))
+    gradebook_service = GradebookService()
+    snapshot = _hand_off(bank_service, gradebook_service, tmp_path)
+    student = gradebook_service.upsert_student(
+        None, UpsertStudentRequest(first_name="Grace", last_name="Hopper")
+    )
+    batch_id, sheet_id = _ingest_blank_sheet(gradebook_service, snapshot)
+    gradebook_service.resolve_sheet_identity(batch_id, sheet_id, student_id=student.id)
+
+    sheet = gradebook_service.get_scan_batch(batch_id).sheets[0]
+    assert sheet.needs_review is True
+
+    for row in sheet.row_results:
+        if row.kind == "manual_capture":
+            sheet = gradebook_service.override_row_result(
+                batch_id, sheet_id, row.question_id, manual_score=0.0
+            )
+        else:
+            sheet = gradebook_service.override_row_result(
+                batch_id, sheet_id, row.question_id, override_blank=True
+            )
+
+    # Every question answered "nothing" still finishes review.
+    assert sheet.needs_review is False

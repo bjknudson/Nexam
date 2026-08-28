@@ -32,7 +32,8 @@
     },
     "resources": {
       "../dist/backend/nexzam-backend": "nexzam-backend",
-      "../samples/demo-bank.bok": "samples/demo-bank.bok"
+      "../samples/demo-bank.bok": "samples/demo-bank.bok",
+      "../samples/demo-gradebook.nxgb": "samples/demo-gradebook.nxgb"
     }
   }
 }

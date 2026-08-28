@@ -35,15 +35,40 @@ _FILL_SAMPLE_RADIUS_FRACTION = 0.7
 
 
 def decode_qr_payload(image: np.ndarray) -> dict | None:
+    """Read the sheet's QR, trying harder before giving up.
+
+    OpenCV's detector is sensitive to how many pixels the finder patterns land
+    on, so the same code reads on one pass and not the next when the scan sits
+    near that threshold. A sheet whose QR cannot be read has to be identified by
+    hand, so it is worth a couple of rescaled attempts first -- this matters for
+    real scans (phone photos, low-DPI scanners), not only for tight test images.
+    """
+
     detector = cv2.QRCodeDetector()
-    data, _, _ = detector.detectAndDecode(image)
-    if not data:
-        return None
-    try:
-        payload = json.loads(data)
-    except (json.JSONDecodeError, TypeError):
-        return None
-    return payload if isinstance(payload, dict) else None
+    for scale, binarize in ((1.0, False), (2.0, False), (1.0, True), (0.5, False)):
+        candidate = image
+        if scale != 1.0:
+            interpolation = cv2.INTER_CUBIC if scale > 1.0 else cv2.INTER_AREA
+            candidate = cv2.resize(image, None, fx=scale, fy=scale, interpolation=interpolation)
+        if binarize:
+            # Pushes a washed-out or unevenly lit code back to clean black/white,
+            # which is the state the finder patterns are easiest to locate in.
+            _, candidate = cv2.threshold(
+                candidate, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+            )
+        try:
+            data, _, _ = detector.detectAndDecode(candidate)
+        except cv2.error:
+            continue
+        if not data:
+            continue
+        try:
+            payload = json.loads(data)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        if isinstance(payload, dict):
+            return payload
+    return None
 
 
 def detect_bubble_fill(roi_gray: np.ndarray) -> tuple[bool, float]:
@@ -116,22 +141,36 @@ def read_sheet(
     page_width_pt: float,
     page_height_pt: float,
     canonical_dpi: int = CANONICAL_DPI,
-) -> tuple[list[DetectedRowResultModel], float | None]:
+    version_labels: list[str] | None = None,
+) -> tuple[list[DetectedRowResultModel], float | None, str | None]:
     """Register the scanned page against `page`'s frozen geometry and read
     every row. Returns (row_results, fiducial_confidence); fiducial_confidence
     is None when registration itself failed, in which case row_results is
-    empty -- there is nothing to read without a resolved geometry."""
+    empty -- there is nothing to read without a resolved geometry.
+
+    The third element is the version the student bubbled on an interchangeable
+    sheet, or None when the sheet has no version row or nothing was marked."""
 
     fiducial_pixels = locate_fiducials(image_gray, page, page_width_pt, page_height_pt)
     if fiducial_pixels is None:
-        return [], None
+        return [], None, None
 
     scale = canonical_dpi / 72.0
     homography = _compute_homography(fiducial_pixels, page, page_height_pt, scale)
     canonical = _warp_canonical(image_gray, homography, page_width_pt, page_height_pt, scale)
 
     row_results = [_read_row(canonical, row, scale, page_height_pt) for row in page.rows]
-    return row_results, 1.0
+
+    detected_version = None
+    if page.version_row is not None and version_labels:
+        # The version row is an ordinary multiple-choice row, so it reads with
+        # the same detector; exactly one mark means a usable answer.
+        version_result = _read_row(canonical, page.version_row, scale, page_height_pt)
+        marked = version_result.detected_choice_indices
+        if len(marked) == 1 and 0 <= marked[0] < len(version_labels):
+            detected_version = version_labels[marked[0]]
+
+    return row_results, 1.0, detected_version
 
 
 def _compute_homography(

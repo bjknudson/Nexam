@@ -79,9 +79,16 @@ export async function pickDirectoryDialog(initialDirectory?: string | null): Pro
 
 export async function resolveDefaultBankDirectory(): Promise<string | null> {
   if (!isDesktopShell()) return null;
-  const { documentDir, join } = await import("@tauri-apps/api/path");
-  const documents = await documentDir();
-  return join(documents, "Nexzam");
+  try {
+    const { documentDir, join } = await import("@tauri-apps/api/path");
+    const documents = await documentDir();
+    return join(documents, "Nexzam");
+  } catch {
+    // `documentDir` is a capability-gated core command. A window without that
+    // permission must still be able to open its file dialog -- just without a
+    // starting directory -- rather than failing before the picker is reached.
+    return null;
+  }
 }
 
 export async function setArchiveDirtyInShell(dirty: boolean): Promise<void> {
@@ -102,6 +109,17 @@ export async function printCurrentWindow(pageSize: string): Promise<void> {
     return;
   }
   await invoke("print_current_window", { pageSize });
+}
+
+/** Show a generated PDF in a Nexzam window and open the print dialog on it,
+ *  rather than saving a file and asking the teacher to print it elsewhere. */
+export async function printPdfUrl(url: string, title?: string): Promise<void> {
+  if (!isDesktopShell()) {
+    // A browser can open the PDF in a tab, where its own print button works.
+    window.open(url, "_blank", "noopener");
+    return;
+  }
+  await invoke("print_pdf_url", { url, title: title ?? null });
 }
 
 export async function openPaneWindow(
@@ -160,10 +178,15 @@ const GRADEBOOK_WINDOW_LABEL = "nexzam-gradebook";
  *  from the currently open bank, not a pane of it, so it gets its own query
  *  param and window label rather than reusing PaneKind/openPaneWindow. See
  *  docs/grading.md. */
-export async function openGradebookWindow(): Promise<void> {
+export async function openGradebookWindow(
+  intent?: "new" | "open" | "demo",
+): Promise<void> {
   const url = new URL(window.location.href);
   url.search = "";
   url.searchParams.set("app", "gradebook");
+  // Carries File-menu intent through to the gradebook window, which reads it on
+  // load so "Open Demo Gradebook" lands on the demo rather than a chooser.
+  if (intent) url.searchParams.set("intent", intent);
 
   if (!isDesktopShell()) {
     const popup = window.open(
@@ -273,6 +296,35 @@ export function onSaveBankMenu(callback: () => void): Promise<UnlistenFn | null>
 
 export function onSaveAsMenu(callback: () => void): Promise<UnlistenFn | null> {
   return onMenuEvent("nexzam://save-as", callback);
+}
+
+export function onCloseBankMenu(callback: () => void): Promise<UnlistenFn | null> {
+  return onMenuEvent("nexzam://close-bank", callback);
+}
+
+export function onNewGradebookMenu(callback: () => void): Promise<UnlistenFn | null> {
+  return onMenuEvent("nexzam://new-gradebook", callback);
+}
+
+export function onOpenGradebookMenu(callback: () => void): Promise<UnlistenFn | null> {
+  return onMenuEvent("nexzam://open-gradebook", callback);
+}
+
+export function onOpenDemoGradebookMenu(callback: () => void): Promise<UnlistenFn | null> {
+  return onMenuEvent("nexzam://open-demo-gradebook", callback);
+}
+
+export function onCloseGradebookMenu(callback: () => void): Promise<UnlistenFn | null> {
+  return onMenuEvent("nexzam://close-gradebook", callback);
+}
+
+/** Tell the shell which "close" menu commands should be available. */
+export async function setDocumentMenuState(
+  bankOpen: boolean,
+  gradebookOpen: boolean,
+): Promise<void> {
+  if (!isDesktopShell()) return;
+  await invoke("set_document_menu_state", { bankOpen, gradebookOpen });
 }
 
 export async function getAppVersion(): Promise<string | null> {

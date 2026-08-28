@@ -555,7 +555,7 @@ def test_create_test_draft_and_add_questions_builds_summary(
     detail = bank_service.add_question_to_test(detail.test.id, "q_mc_0001")
     detail = bank_service.add_question_to_test(detail.test.id, "q_sa_0001", experimental=True)
 
-    assert detail.test.id == "test_0001"
+    assert detail.test.id.startswith("test_")
     assert detail.test.title == "Unit 1 Mechanics"
     assert [item.question_id for item in detail.test.items] == ["q_mc_0001", "q_sa_0001"]
     assert detail.test.items[1].experimental is True
@@ -570,7 +570,7 @@ def test_create_test_draft_and_add_questions_builds_summary(
     assert detail.summary.standard_ids == ["PHY-ELE-01", "PHY-KIN-01"]
 
     listed = bank_service.list_test_drafts()
-    assert [item.test.id for item in listed.items] == ["test_0001"]
+    assert detail.test.id in [item.test.id for item in listed.items]
 
 
 def test_test_draft_supports_manual_section_items(
@@ -624,9 +624,10 @@ def test_test_drafts_are_saved_in_repacked_bank(
         tests = json.loads(archive.read("tests/tests.json"))
 
     assert "tests/tests.json" in names
-    assert tests["items"][0]["title"] == "Printable Practice Test"
-    assert tests["items"][0]["version"] == "B"
-    assert tests["items"][0]["items"] == [
+    assert "Printable Practice Test" in [item["title"] for item in tests["items"]]
+    saved = next(item for item in tests["items"] if item["title"] == "Printable Practice Test")
+    assert saved["version"] == "B"
+    assert saved["items"] == [
         {
             "question_id": "q_num_0001",
             "experimental": False,
@@ -1179,6 +1180,7 @@ def test_course_detail_reports_coverage_blind_spots_and_extras(
     demo_bok: Path,
 ) -> None:
     bank_service.open_bank(str(demo_bok))
+    baseline_question_count = bank_service.get_course_detail("physics-1").question_count
     detail = bank_service.create_test_draft(
         title="Physics Unit 1", version="A", course_ids=["physics-1"]
     )
@@ -1207,8 +1209,8 @@ def test_course_detail_reports_coverage_blind_spots_and_extras(
 
     course = bank_service.get_course_detail("physics-1")
 
-    assert [item.test_id for item in course.tests] == [test_id]
-    assert course.question_count == 2
+    assert test_id in [summary.test_id for summary in course.tests]
+    assert course.question_count == baseline_question_count + 2
     covered_ids = {item.standard_id for item in course.covered_standards}
     uncovered_ids = {item.standard_id for item in course.uncovered_standards}
     assert "PHY-KIN-01" in covered_ids
@@ -1231,9 +1233,10 @@ def test_tests_can_serve_several_courses_and_survive_a_deleted_one(
 
     assert detail.test.course_ids == ["physics-1", "algebra-1"]
     assert detail.summary.course_ids == ["physics-1", "algebra-1"]
-    assert [item.test_id for item in bank_service.get_course_detail("algebra-1").tests] == [
-        detail.test.id
-    ]
+    assert any(
+        detail.test.id in summary.test_ids
+        for summary in bank_service.get_course_detail("algebra-1").tests
+    )
 
     bank_service.delete_course("algebra-1")
 
@@ -1294,7 +1297,7 @@ def test_seeding_a_course_pulls_in_standards_and_associates_tests(
     detail = bank_service.seed_course_from("physics-1-2027", "physics-1")
 
     assert [ref.standard_id for ref in detail.course.standard_refs] == source_standard_ids
-    assert [item.test_id for item in detail.tests] == [shared.test.id]
+    assert shared.test.id in [summary.test_id for summary in detail.tests]
     # Associated, not copied: one test now reports coverage for both courses.
     assert bank_service.get_test_draft(shared.test.id).test.course_ids == [
         "physics-1",

@@ -63,11 +63,13 @@ nexzam/
 ├── samples/
 │   ├── demo-bank/
 │   ├── demo-bank.bok
+│   ├── demo-gradebook.nxgb          # sample roster for trying the grading flow
 │   ├── sample-import.csv            # bulk question import example
 │   └── sample-standards-import.csv  # standards import with per-standard sources
 └── scripts/
     ├── build_backend_binary.sh
-    └── build_demo_bok.py
+    ├── build_demo_bok.py
+    └── build_demo_gradebook.py
 ```
 
 ## `.bok` package layout

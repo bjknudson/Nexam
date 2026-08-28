@@ -24,25 +24,85 @@ from ..models import (
     SheetRowModel,
 )
 
-PageSize = Literal["letter", "legal", "a4"]
+PageSize = Literal["letter", "legal", "a4", "half_letter"]
 
 _PAGE_SIZES_PT: dict[PageSize, tuple[float, float]] = {
     "letter": (612.0, 792.0),
     "legal": (612.0, 1008.0),
     "a4": (595.28, 841.89),
+    # Half of a letter sheet, portrait. Two of these print on one page without
+    # shrinking anything: the bubbles stay the size the detector expects,
+    # which is what scaling a full sheet down to 2-up would have ruined.
+    "half_letter": (396.0, 612.0),
 }
+
+
+@dataclass(frozen=True)
+class _Placement:
+    """One response, positioned on a page."""
+
+    item: AnswerKeyItemModel
+    x_pt: float
+    row_top_y_pt: float
+    height_pt: float
+
+
+@dataclass(frozen=True)
+class _PageGeometry:
+    """Furniture positions for one page size.
+
+    Fixed margins and a fixed name-box width work on letter-sized paper and
+    collide on a half sheet -- at 396pt wide the name box ran under the QR. The
+    chrome scales with the page instead, and the name box takes whatever width
+    is left beside the QR.
+    """
+
+    width: float
+    height: float
+    margin: float
+    qr_size: float
+    header_height: float
+    name_box_width: float
+    manual_row_height: float
+
+
+def _page_geometry(page_size: PageSize) -> _PageGeometry:
+    width, height = _PAGE_SIZES_PT[page_size]
+    compact = width < 500.0
+    margin = 36.0 if compact else _MARGIN_PT
+    qr_size = 54.0 if compact else _QR_BOX_SIZE_PT
+    header_height = 84.0 if compact else _HEADER_HEIGHT_PT
+    # Whatever is left between the left margin and the QR, never less than a
+    # width a name can actually be written in.
+    name_box_width = max(120.0, width - 2 * margin - qr_size - 12.0)
+    # A written-response box worth writing in, without eating a short page.
+    manual_row_height = 72.0 if compact else _MANUAL_ROW_HEIGHT_PT
+    return _PageGeometry(
+        width=width,
+        height=height,
+        margin=margin,
+        qr_size=qr_size,
+        header_height=header_height,
+        name_box_width=name_box_width,
+        manual_row_height=manual_row_height,
+    )
 
 _MARGIN_PT = 54.0
 _FIDUCIAL_SIZE_PT = 18.0
 _QR_BOX_SIZE_PT = 72.0
-_NAME_BOX_WIDTH_PT = 260.0
 _NAME_BOX_HEIGHT_PT = 24.0
 _HEADER_HEIGHT_PT = 120.0
 _BUBBLE_ROW_HEIGHT_PT = 28.0
 _MANUAL_ROW_HEIGHT_PT = 90.0
 _BUBBLE_RADIUS_PT = 6.0
 _BUBBLE_SPACING_PT = 20.0
+_VERSION_LABEL_WIDTH_PT = 52.0
 _LABEL_OFFSET_PT = 36.0
+_COLUMN_GUTTER_PT = 18.0
+_COLUMN_PAD_PT = 8.0
+# Beyond four, the columns get too narrow to label clearly and a mis-shaded
+# bubble becomes hard to trace back to its question.
+_MAX_RESPONSE_COLUMNS = 4
 
 # A numeric grid-in column stacks all ten digit bubbles vertically (like a
 # scantron grid-in), so its row needs far more height than one MC bubble
@@ -74,16 +134,22 @@ def build_sheet_layout(
     mode: Literal["blank", "pre_id"],
     page_size: PageSize,
     copies: list[SheetCopySpec],
+    header_label: str | None = None,
+    version_labels: list[str] | None = None,
 ) -> SheetLayoutModel:
     if not copies:
         raise ValueError("build_sheet_layout requires at least one copy to print")
 
-    page_width_pt, page_height_pt = _PAGE_SIZES_PT[page_size]
-    row_chunks = _paginate_rows(answer_key.items, page_height_pt)
+    geometry = _page_geometry(page_size)
+    page_width_pt, page_height_pt = geometry.width, geometry.height
+    # The version bubble sits above the responses on the first page, so the
+    # planner has to know that row of space is already spoken for.
+    version_offset = _BUBBLE_ROW_HEIGHT_PT if version_labels else 0.0
+    page_plans = _plan_pages(answer_key.items, geometry, version_offset)
 
     pages: list[SheetPageModel] = []
     for copy in copies:
-        for page_index, chunk in enumerate(row_chunks):
+        for page_index, chunk in enumerate(page_plans):
             pages.append(
                 _build_page(
                     copy=copy,
@@ -93,6 +159,8 @@ def build_sheet_layout(
                     page_width_pt=page_width_pt,
                     page_height_pt=page_height_pt,
                     answer_key=answer_key,
+                    version_labels=version_labels or [],
+                    geometry=geometry,
                 )
             )
 
@@ -102,54 +170,189 @@ def build_sheet_layout(
         page_size=page_size,
         page_width_pt=page_width_pt,
         page_height_pt=page_height_pt,
+        header_label=header_label,
+        version_labels=list(version_labels or []),
         pages=pages,
     )
 
 
-def _row_height(item: AnswerKeyItemModel) -> float:
+def _row_height(item: AnswerKeyItemModel, geometry: _PageGeometry) -> float:
     if item.row_kind == "manual_capture":
-        return _MANUAL_ROW_HEIGHT_PT
+        return geometry.manual_row_height
     if item.row_kind == "numeric_response":
         return _NUMERIC_ROW_HEIGHT_PT
     return _BUBBLE_ROW_HEIGHT_PT
 
 
-def _paginate_rows(
-    items: list[AnswerKeyItemModel], page_height_pt: float
-) -> list[list[AnswerKeyItemModel]]:
-    usable_height = page_height_pt - _HEADER_HEIGHT_PT - _MARGIN_PT
-    chunks: list[list[AnswerKeyItemModel]] = []
-    current: list[AnswerKeyItemModel] = []
-    remaining = usable_height
+def _item_column_width(item: AnswerKeyItemModel) -> float:
+    """How wide one response needs to be, label included.
 
+    A written response always takes the full width; the bubble kinds are narrow
+    enough that several fit side by side, which is the whole point of columns.
+    """
+
+    if item.row_kind == "multiple_choice":
+        choices = max(item.choice_count or 0, 1)
+        return _LABEL_OFFSET_PT + choices * _BUBBLE_SPACING_PT + _COLUMN_PAD_PT
+
+    if item.row_kind == "numeric_response":
+        digits = max(item.grid_digits or 1, 1)
+        extras = (1 if item.allow_negative else 0) + (1 if item.allow_decimal else 0)
+        return _LABEL_OFFSET_PT + (digits + extras) * _BUBBLE_SPACING_PT + _COLUMN_PAD_PT
+
+    return 0.0
+
+
+def _max_columns(geometry: _PageGeometry, column_width: float) -> int:
+    """How many of those fit across the page, at least one."""
+
+    if column_width <= 0:
+        return 1
+    usable = geometry.width - 2 * geometry.margin
+    fitting = int((usable + _COLUMN_GUTTER_PT) // (column_width + _COLUMN_GUTTER_PT))
+    return max(1, min(fitting, _MAX_RESPONSE_COLUMNS))
+
+
+def _runs_by_kind(items: list[AnswerKeyItemModel]) -> list[list[AnswerKeyItemModel]]:
+    """Consecutive items of one kind.
+
+    A written response breaks a run, so a test that goes multiple choice, then
+    an essay, then more multiple choice becomes a column block, a full-width
+    box, and another column block -- rather than one column order that reads
+    across the essay.
+    """
+
+    runs: list[list[AnswerKeyItemModel]] = []
     for item in items:
-        row_height = _row_height(item)
-        if current and row_height > remaining:
-            chunks.append(current)
-            current = []
-            remaining = usable_height
-        current.append(item)
-        remaining -= row_height
+        if runs and runs[-1][0].row_kind == item.row_kind:
+            runs[-1].append(item)
+        else:
+            runs.append([item])
+    return runs
 
-    if current:
-        chunks.append(current)
-    if not chunks:
-        # A test with no sheet-eligible items still gets one (empty) page.
-        chunks.append([])
-    return chunks
+
+def _lay_out(
+    items: list[AnswerKeyItemModel],
+    geometry: _PageGeometry,
+    first_page_top_offset: float,
+    column_target: int,
+) -> list[list[_Placement]]:
+    """Place every response, using at most `column_target` columns per run.
+
+    Bubble rows fill a column top to bottom before starting the next, so
+    numbering reads down each column the way a scantron does.
+    """
+
+    pages: list[list[_Placement]] = []
+    placements: list[_Placement] = []
+    bottom = geometry.margin
+    top_of_page = geometry.height - geometry.header_height
+    y = top_of_page - first_page_top_offset
+
+    def start_new_page() -> None:
+        nonlocal placements, y
+        pages.append(placements)
+        placements = []
+        y = top_of_page
+
+    for run in _runs_by_kind(items):
+        if run[0].row_kind == "manual_capture":
+            for item in run:
+                height = _row_height(item, geometry)
+                if placements and y - height < bottom:
+                    start_new_page()
+                placements.append(
+                    _Placement(item=item, x_pt=geometry.margin, row_top_y_pt=y, height_pt=height)
+                )
+                y -= height
+            continue
+
+        row_height = _row_height(run[0], geometry)
+        column_width = _item_column_width(run[0])
+        columns_available = min(column_target, _max_columns(geometry, column_width))
+        remaining = list(run)
+
+        while remaining:
+            rows_per_column = int((y - bottom) // row_height)
+            if rows_per_column <= 0:
+                start_new_page()
+                rows_per_column = int((y - bottom) // row_height)
+                if rows_per_column <= 0:
+                    # Taller than a whole page: place it and let it overflow
+                    # rather than looping forever.
+                    rows_per_column = 1
+
+            capacity = rows_per_column * columns_available
+            take = remaining[:capacity]
+            remaining = remaining[capacity:]
+
+            # Spread across every column allowed, balanced. Collapsing to the
+            # fewest columns that merely fit would leave a short run one column
+            # wide and push everything after it down the page -- which is what
+            # the caller is widening the columns to avoid.
+            columns = max(1, min(columns_available, len(take)))
+            per_column = max(1, -(-len(take) // columns))
+
+            for index, item in enumerate(take):
+                column_index = index // per_column
+                row_index = index % per_column
+                placements.append(
+                    _Placement(
+                        item=item,
+                        x_pt=geometry.margin
+                        + column_index * (column_width + _COLUMN_GUTTER_PT),
+                        row_top_y_pt=y - row_index * row_height,
+                        height_pt=row_height,
+                    )
+                )
+
+            y -= per_column * row_height
+            if remaining:
+                start_new_page()
+
+    pages.append(placements)
+    return pages
+
+
+def _plan_pages(
+    items: list[AnswerKeyItemModel], geometry: _PageGeometry, first_page_top_offset: float
+) -> list[list[_Placement]]:
+    """Fit the responses on as few pages as columns allow.
+
+    Tries one column first and widens only as needed, so a short test keeps a
+    single readable column and a long one gets folded into columns rather than
+    spilling onto a second sheet. The column count is uniform across the sheet:
+    a run that reads two-wide and another that reads three-wide on the same page
+    invites shading the wrong row.
+    """
+
+    best = _lay_out(items, geometry, first_page_top_offset, 1)
+    if len(best) <= 1:
+        return best
+
+    for column_target in range(2, _MAX_RESPONSE_COLUMNS + 1):
+        candidate = _lay_out(items, geometry, first_page_top_offset, column_target)
+        if len(candidate) < len(best):
+            best = candidate
+        if len(best) <= 1:
+            break
+
+    return best
 
 
 def _build_page(
     *,
     copy: SheetCopySpec,
     page_index: int,
-    chunk: list[AnswerKeyItemModel],
+    chunk: list[_Placement],
     mode: Literal["blank", "pre_id"],
     page_width_pt: float,
     page_height_pt: float,
     answer_key: AnswerKeyModel,
+    version_labels: list[str] | None = None,
+    geometry: _PageGeometry,
 ) -> SheetPageModel:
-    fiducials = _build_fiducials(page_width_pt, page_height_pt)
+    fiducials = _build_fiducials(page_width_pt, page_height_pt, geometry)
 
     qr_payload = json.dumps(
         {
@@ -162,29 +365,39 @@ def _build_page(
         separators=(",", ":"),
     )
     qr_box = CaptureBoxModel(
-        x_pt=page_width_pt - _MARGIN_PT - _QR_BOX_SIZE_PT,
-        y_pt=page_height_pt - _MARGIN_PT - _QR_BOX_SIZE_PT,
-        width_pt=_QR_BOX_SIZE_PT,
-        height_pt=_QR_BOX_SIZE_PT,
+        x_pt=page_width_pt - geometry.margin - geometry.qr_size,
+        y_pt=page_height_pt - geometry.margin - geometry.qr_size,
+        width_pt=geometry.qr_size,
+        height_pt=geometry.qr_size,
     )
 
     # Always reserve the same box position regardless of mode: pdf.py draws
     # a blank line inside it for "blank" mode, or centers printed_name inside
     # it for "pre_id" mode -- one shared coordinate, two ways to render it.
     name_box = CaptureBoxModel(
-        x_pt=_MARGIN_PT,
-        y_pt=page_height_pt - _MARGIN_PT - _NAME_BOX_HEIGHT_PT,
-        width_pt=_NAME_BOX_WIDTH_PT,
+        x_pt=geometry.margin,
+        y_pt=page_height_pt - geometry.margin - _NAME_BOX_HEIGHT_PT,
+        width_pt=geometry.name_box_width,
         height_pt=_NAME_BOX_HEIGHT_PT,
     )
     printed_name = copy.printed_name if mode == "pre_id" else None
 
-    rows: list[SheetRowModel] = []
-    row_y = page_height_pt - _HEADER_HEIGHT_PT
-    for item in chunk:
-        row_height = _row_height(item)
-        rows.append(_build_row(item, row_y, row_height))
-        row_y -= row_height
+    version_row = (
+        _build_version_row(version_labels, geometry)
+        if version_labels and page_index == 0
+        else None
+    )
+
+    rows = [
+        _build_row(
+            placement.item,
+            placement.row_top_y_pt,
+            placement.height_pt,
+            geometry,
+            placement.x_pt,
+        )
+        for placement in chunk
+    ]
 
     return SheetPageModel(
         page_index=page_index,
@@ -193,12 +406,44 @@ def _build_page(
         qr_payload=qr_payload,
         name_box=name_box,
         printed_name=printed_name,
+        version_row=version_row,
         rows=rows,
     )
 
 
-def _build_fiducials(page_width_pt: float, page_height_pt: float) -> list[FiducialMarkerModel]:
-    inset = _MARGIN_PT / 2
+def _build_version_row(version_labels: list[str], geometry: _PageGeometry) -> SheetRowModel:
+    """One bubble per version, shaped like a multiple-choice row.
+
+    Reusing the MC shape means the existing fill-ratio detector reads it with no
+    special case -- a version mark is just another bubble at a known coordinate.
+    """
+
+    row_y = geometry.height - geometry.header_height
+    label_y = row_y - _BUBBLE_ROW_HEIGHT_PT / 2
+    cells = [
+        BubbleCellModel(
+            value=index,
+            center_x_pt=geometry.margin + _VERSION_LABEL_WIDTH_PT + index * _BUBBLE_SPACING_PT,
+            center_y_pt=label_y,
+            radius_pt=_BUBBLE_RADIUS_PT,
+        )
+        for index in range(len(version_labels))
+    ]
+    return SheetRowModel(
+        question_id="__version__",
+        test_item_number=0,
+        sheet_item_number=0,
+        kind="multiple_choice",
+        label_x_pt=geometry.margin,
+        label_y_pt=label_y,
+        cells=cells,
+    )
+
+
+def _build_fiducials(
+    page_width_pt: float, page_height_pt: float, geometry: _PageGeometry
+) -> list[FiducialMarkerModel]:
+    inset = geometry.margin / 2
     half = _FIDUCIAL_SIZE_PT / 2
     return [
         FiducialMarkerModel(
@@ -234,12 +479,18 @@ def _build_fiducials(page_width_pt: float, page_height_pt: float) -> list[Fiduci
     ]
 
 
-def _build_row(item: AnswerKeyItemModel, row_y: float, row_height: float) -> SheetRowModel:
-    label_x = _MARGIN_PT
+def _build_row(
+    item: AnswerKeyItemModel,
+    row_y: float,
+    row_height: float,
+    geometry: _PageGeometry,
+    column_x: float,
+) -> SheetRowModel:
+    label_x = column_x
     label_y = row_y - row_height / 2
 
     if item.row_kind == "multiple_choice":
-        cells = _build_choice_cells(item, label_y)
+        cells = _build_choice_cells(item, label_y, column_x)
         return SheetRowModel(
             question_id=item.question_id,
             test_item_number=item.test_item_number,
@@ -254,7 +505,7 @@ def _build_row(item: AnswerKeyItemModel, row_y: float, row_height: float) -> She
         # The digit grid stacks downward from just below the row's top, not
         # around the row's vertical midpoint like a single-line MC row.
         grid_top_y = row_y - _NUMERIC_HEADER_PT
-        cells, digit_columns = _build_numeric_cells(item, grid_top_y)
+        cells, digit_columns = _build_numeric_cells(item, grid_top_y, column_x)
         return SheetRowModel(
             question_id=item.question_id,
             test_item_number=item.test_item_number,
@@ -266,10 +517,13 @@ def _build_row(item: AnswerKeyItemModel, row_y: float, row_height: float) -> She
             digit_columns=digit_columns,
         )
 
+    capture_box_x = label_x + _LABEL_OFFSET_PT
     capture_box = CaptureBoxModel(
-        x_pt=label_x + _LABEL_OFFSET_PT,
+        x_pt=capture_box_x,
         y_pt=row_y - row_height + 8.0,
-        width_pt=400.0,
+        # Whatever is left to the right margin. A fixed width overhung the page
+        # on anything narrower than letter.
+        width_pt=max(120.0, geometry.width - geometry.margin - capture_box_x),
         height_pt=row_height - 16.0,
     )
     return SheetRowModel(
@@ -283,9 +537,11 @@ def _build_row(item: AnswerKeyItemModel, row_y: float, row_height: float) -> She
     )
 
 
-def _build_choice_cells(item: AnswerKeyItemModel, label_y: float) -> list[BubbleCellModel]:
+def _build_choice_cells(
+    item: AnswerKeyItemModel, label_y: float, column_x: float
+) -> list[BubbleCellModel]:
     choice_count = item.choice_count or 0
-    start_x = _MARGIN_PT + _LABEL_OFFSET_PT
+    start_x = column_x + _LABEL_OFFSET_PT
     return [
         BubbleCellModel(
             value=choice_index,
@@ -298,7 +554,7 @@ def _build_choice_cells(item: AnswerKeyItemModel, label_y: float) -> list[Bubble
 
 
 def _build_numeric_cells(
-    item: AnswerKeyItemModel, grid_top_y: float
+    item: AnswerKeyItemModel, grid_top_y: float, column_x: float
 ) -> tuple[list[BubbleCellModel], int]:
     """Lay out one bubble column per digit, each stacking all ten digits
     (0-9) vertically downward from grid_top_y -- like a scantron grid-in --
@@ -308,7 +564,7 @@ def _build_numeric_cells(
     to decode it."""
 
     digit_columns = max(item.grid_digits or 1, 1)
-    start_x = _MARGIN_PT + _LABEL_OFFSET_PT
+    start_x = column_x + _LABEL_OFFSET_PT
     column_x = start_x
     cells: list[BubbleCellModel] = []
 

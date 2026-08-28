@@ -90,3 +90,48 @@ def _upsert_request(first_name: str, last_name: str, external_id: str | None = N
     from app.backend.models import UpsertStudentRequest
 
     return UpsertStudentRequest(first_name=first_name, last_name=last_name, external_id=external_id)
+
+
+def test_create_gradebook_appends_the_extension_when_it_is_missing(
+    gradebook_service: GradebookService, tmp_path: Path
+) -> None:
+    # A teacher typing a destination should not have to remember ".nxgb".
+    summary = gradebook_service.create_gradebook(
+        "Period 3", None, str(tmp_path / "period-3")
+    )
+
+    assert (tmp_path / "period-3.nxgb").exists()
+    assert summary.source_path.endswith("period-3.nxgb")
+
+
+def test_create_gradebook_leaves_a_correct_extension_alone(
+    gradebook_service: GradebookService, tmp_path: Path
+) -> None:
+    summary = gradebook_service.create_gradebook(
+        "Period 4", None, str(tmp_path / "period-4.nxgb")
+    )
+
+    assert summary.source_path.endswith("period-4.nxgb")
+    assert not (tmp_path / "period-4.nxgb.nxgb").exists()
+
+
+def test_create_gradebook_still_refuses_a_different_extension(
+    gradebook_service: GradebookService, tmp_path: Path
+) -> None:
+    # Silently renaming someone's .bok would be worse than refusing it.
+    with pytest.raises(BankWorkspaceError) as exc_info:
+        gradebook_service.create_gradebook("Period 5", None, str(tmp_path / "bank.bok"))
+
+    assert exc_info.value.status_code == 400
+    assert ".bok" in exc_info.value.message
+
+
+def test_saving_to_a_new_path_appends_the_extension_too(
+    gradebook_service: GradebookService, tmp_path: Path
+) -> None:
+    gradebook_service.create_gradebook("Period 6", None, str(tmp_path / "period-6.nxgb"))
+
+    saved_to = gradebook_service.save_gradebook(str(tmp_path / "period-6-copy"))
+
+    assert saved_to.endswith("period-6-copy.nxgb")
+    assert (tmp_path / "period-6-copy.nxgb").exists()

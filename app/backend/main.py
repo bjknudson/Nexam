@@ -143,6 +143,28 @@ def open_gradebook(request: OpenGradebookRequest):
     return gradebook_service.open_gradebook(request.path)
 
 
+@app.post("/api/gradebook/open-demo")
+def open_demo_gradebook():
+    """Open the shipped sample roster.
+
+    Resolved the same way the demo bank is: a bundled resource path in a
+    release build, the repo's samples directory when running from source.
+    """
+
+    bundled = os.environ.get("NEXZAM_DEMO_GRADEBOOK_PATH")
+    if bundled:
+        return gradebook_service.open_gradebook(bundled)
+
+    repo_root = Path(__file__).resolve().parents[2]
+    demo_gradebook = repo_root / "samples" / "demo-gradebook.nxgb"
+    if not demo_gradebook.exists():
+        raise BankWorkspaceError(
+            "The demo gradebook is missing. Run scripts/build_demo_gradebook.py.",
+            status_code=404,
+        )
+    return gradebook_service.open_gradebook(str(demo_gradebook))
+
+
 @app.get("/api/gradebook/current")
 def get_current_gradebook():
     return gradebook_service.get_summary()
@@ -198,6 +220,18 @@ def create_administered_test(request: CreateAdministeredTestRequest):
     the open gradebook. See docs/grading-plan.md."""
     test_detail = service.get_test_draft(request.test_id)
     source_bank_title = service.get_summary().manifest.title
+
+    # An interchangeable sheet has to carry every version's key, so the lineage
+    # -- same title, the convention "New Version" already follows -- comes along.
+    alternates = []
+    if test_detail.test.interchangeable_sheets:
+        lineage_key = test_detail.test.title.strip().casefold()
+        for other in service.list_test_drafts().items:
+            if other.test.id == test_detail.test.id:
+                continue
+            if other.test.title.strip().casefold() == lineage_key:
+                alternates.append((other.test, other.questions))
+
     return gradebook_service.create_snapshot_and_sheets(
         test=test_detail.test,
         questions=test_detail.questions,
@@ -206,12 +240,18 @@ def create_administered_test(request: CreateAdministeredTestRequest):
         page_size=request.page_size,
         blank_count=request.blank_count,
         student_ids=request.student_ids,
+        alternates=alternates,
     )
 
 
 @app.get("/api/gradebook/administered-tests")
 def list_administered_tests():
     return gradebook_service.list_administered_tests()
+
+
+@app.get("/api/gradebook/administered-tests/{snapshot_id}")
+def get_administered_test(snapshot_id: str):
+    return gradebook_service.get_administered_test(snapshot_id)
 
 
 @app.get("/api/gradebook/sheets/{layout_id}/pdf")
@@ -233,6 +273,13 @@ def list_scan_batches():
 @app.get("/api/gradebook/batches/{batch_id}")
 def get_scan_batch(batch_id: str):
     return gradebook_service.get_scan_batch(batch_id)
+
+
+@app.post("/api/gradebook/scans/ingest")
+async def ingest_scans(files: list[UploadFile] = File(...)):
+    """Sort a pile of scans into batches by the test each sheet belongs to."""
+    uploaded = [(file.filename or "scan", await file.read()) for file in files]
+    return {"items": gradebook_service.ingest_scans(uploaded)}
 
 
 @app.post("/api/gradebook/batches/{batch_id}/ingest")
@@ -272,6 +319,7 @@ def override_row_result(
         question_id,
         override_choice_indices=request.override_choice_indices,
         override_value=request.override_value,
+        override_blank=request.override_blank,
         override_note=request.override_note,
         manual_score=request.manual_score,
         manual_score_max=request.manual_score_max,
@@ -299,6 +347,11 @@ def record_batch_as_performance_run(batch_id: str, request: RecordPerformanceRun
     snapshot = gradebook_service.get_snapshot(batch.snapshot_id)
     run = gradebook_service.build_performance_run(batch_id, request.cohort_label)
     return service.add_performance_run(snapshot.source_test_id, run)
+
+
+@app.post("/api/banks/close", status_code=204)
+def close_bank():
+    service.close_bank()
 
 
 @app.get("/api/questions")

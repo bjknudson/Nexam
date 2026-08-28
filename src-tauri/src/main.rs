@@ -181,6 +181,42 @@ fn apply_print_info(page_size: &str) {
 #[cfg(not(target_os = "macos"))]
 fn apply_print_info(_page_size: &str) {}
 
+/// Show a generated PDF in its own Nexzam window and open the print dialog on it.
+///
+/// The alternative was handing the file to Preview and asking the teacher to
+/// print from there. A webview renders a PDF natively and prints through the
+/// same panel as any other page, so a short-lived window keeps printing inside
+/// the app. The window stays up afterwards: it doubles as the preview of what
+/// was sent, and closing it is the teacher's call.
+#[tauri::command]
+fn print_pdf_url(app_handle: AppHandle, url: String, title: Option<String>) -> Result<(), String> {
+    let parsed = url
+        .parse()
+        .map_err(|_| format!("Not a printable address: {url}"))?;
+    let label = format!(
+        "nexzam-print-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|value| value.as_millis())
+            .unwrap_or(0)
+    );
+
+    tauri::WebviewWindowBuilder::new(&app_handle, label, tauri::WebviewUrl::External(parsed))
+        .title(title.unwrap_or_else(|| "Print Response Sheets".to_string()))
+        .inner_size(900.0, 1100.0)
+        .on_page_load(|window, payload| {
+            // Only once the PDF has actually rendered -- printing at request
+            // time would hand the printer a blank page.
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                let _ = window.print();
+            }
+        })
+        .build()
+        .map_err(|error| format!("Could not open the print window: {error}"))?;
+
+    Ok(())
+}
+
 /// Open the system print dialog for the window that asked for it.
 ///
 /// `window.print()` is a no-op inside the macOS webview, so the button has to
@@ -191,6 +227,24 @@ fn print_current_window(webview_window: tauri::WebviewWindow, page_size: Option<
     webview_window
         .print()
         .map_err(|error| format!("Could not open the print dialog: {error}"))
+}
+
+/// Grey out the "close" commands when there is nothing open to close.
+///
+/// The frontend owns the answer to "is a bank open" -- it is backend state, not
+/// shell state -- so it tells the menu rather than the menu guessing.
+#[tauri::command]
+fn set_document_menu_state(app_handle: AppHandle, bank_open: bool, gradebook_open: bool) {
+    let Some(menu) = app_handle.menu() else {
+        return;
+    };
+    for (id, enabled) in [("close-bank", bank_open), ("close-gradebook", gradebook_open)] {
+        if let Some(kind) = menu.get(id) {
+            if let Some(item) = kind.as_menuitem() {
+                let _ = item.set_enabled(enabled);
+            }
+        }
+    }
 }
 
 #[tauri::command]
@@ -352,6 +406,20 @@ fn main() {
             let save_bank_item = MenuItemBuilder::with_id("save-bank", "Save Bank")
                 .accelerator("CmdOrCtrl+S")
                 .build(handle)?;
+            let close_bank_item = MenuItemBuilder::with_id("close-bank", "Close Bank")
+                .enabled(false)
+                .build(handle)?;
+            let new_gradebook_item =
+                MenuItemBuilder::with_id("new-gradebook", "New Gradebook…").build(handle)?;
+            let open_gradebook_item =
+                MenuItemBuilder::with_id("open-gradebook", "Open Gradebook…").build(handle)?;
+            let open_demo_gradebook_item =
+                MenuItemBuilder::with_id("open-demo-gradebook", "Open Demo Gradebook")
+                    .build(handle)?;
+            let close_gradebook_item =
+                MenuItemBuilder::with_id("close-gradebook", "Close Gradebook")
+                    .enabled(false)
+                    .build(handle)?;
             let save_as_item = MenuItemBuilder::with_id("save-as", "Save As…")
                 .accelerator("CmdOrCtrl+Shift+S")
                 .build(handle)?;
@@ -379,6 +447,14 @@ fn main() {
                 .separator()
                 .item(&save_bank_item)
                 .item(&save_as_item)
+                .item(&close_bank_item)
+                .separator()
+                // A gradebook is its own document, so it gets its own section
+                // rather than being mixed in with the bank's commands.
+                .item(&new_gradebook_item)
+                .item(&open_gradebook_item)
+                .item(&open_demo_gradebook_item)
+                .item(&close_gradebook_item)
                 .separator()
                 .close_window()
                 .build()?;
@@ -437,6 +513,21 @@ fn main() {
             "save-as" => {
                 let _ = app_handle.emit("nexzam://save-as", ());
             }
+            "close-bank" => {
+                let _ = app_handle.emit("nexzam://close-bank", ());
+            }
+            "new-gradebook" => {
+                let _ = app_handle.emit("nexzam://new-gradebook", ());
+            }
+            "open-gradebook" => {
+                let _ = app_handle.emit("nexzam://open-gradebook", ());
+            }
+            "open-demo-gradebook" => {
+                let _ = app_handle.emit("nexzam://open-demo-gradebook", ());
+            }
+            "close-gradebook" => {
+                let _ = app_handle.emit("nexzam://close-gradebook", ());
+            }
             _ => {}
         })
         .setup(|app| {
@@ -452,8 +543,10 @@ fn main() {
             save_bytes_dialog,
             pick_directory_dialog,
             set_archive_dirty,
+            set_document_menu_state,
             check_for_updates,
-            print_current_window
+            print_current_window,
+            print_pdf_url
         ])
         .build(tauri::generate_context!())
         .expect("error while running Nexzam");

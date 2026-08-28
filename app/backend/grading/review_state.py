@@ -14,6 +14,8 @@ from ..models import DetectedRowResultModel, ScannedSheetModel
 def row_is_resolved(row: DetectedRowResultModel) -> bool:
     if row.kind == "manual_capture":
         return row.manual_score is not None
+    if row.override_blank:
+        return True
     if row.override_choice_indices is not None or row.override_value is not None:
         return True
     return row.flag == "none"

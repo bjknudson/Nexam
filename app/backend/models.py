@@ -445,6 +445,15 @@ class TestDraftModel(BaseModel):
     # A test can serve more than one course: the same midterm may be reused when
     # a course is retaught, or shared between two courses that overlap.
     course_ids: list[str] = Field(default_factory=list)
+    # When set, every version of this test is written to the same response-sheet
+    # shape so one stack of sheets serves any version, with the student marking
+    # which version they took. Off by default: it constrains item writing, which
+    # is the wrong trade for versions that differ on purpose (EL, lower lexile).
+    interchangeable_sheets: bool = False
+    # Why this version exists -- "shorter passages for EL", "retake". Shown
+    # wherever a version is chosen, so the reason travels with the version
+    # instead of living in the teacher's head.
+    version_description: str | None = None
     items: list[TestItemModel] = Field(default_factory=list)
     print_settings: TestPrintSettingsModel = Field(default_factory=TestPrintSettingsModel)
     performance_runs: list[TestPerformanceRunModel] = Field(default_factory=list)
@@ -792,6 +801,12 @@ class StudentModel(BaseModel):
     first_name: str
     last_name: str
     external_id: str | None = None
+    # Which class this student is in -- used to generate response sheets for one
+    # section without pulling in every other section on the roster.
+    section: str | None = None
+    # A free grouping: intervention group, accommodation, whichever version of a
+    # modified test this student should get. Filterable the same way.
+    grouping: str | None = None
 
     @field_validator("id", "first_name", "last_name")
     @classmethod
@@ -810,6 +825,8 @@ class UpsertStudentRequest(BaseModel):
     first_name: str
     last_name: str
     external_id: str | None = None
+    section: str | None = None
+    grouping: str | None = None
 
 
 class StudentListResponseModel(BaseModel):
@@ -904,6 +921,9 @@ class SheetPageModel(BaseModel):
     # or centers printed_name inside that same box when it's present.
     name_box: CaptureBoxModel | None = None
     printed_name: str | None = None
+    # Present only on interchangeable sheets, and only on the first page: one
+    # bubble per version, filled by the student to say which paper they got.
+    version_row: SheetRowModel | None = None
     rows: list[SheetRowModel] = Field(default_factory=list)
 
 
@@ -920,9 +940,18 @@ class SheetLayoutModel(BaseModel):
 
     id: str
     mode: Literal["blank", "pre_id"]
-    page_size: Literal["letter", "legal", "a4"]
+    page_size: Literal["letter", "legal", "a4", "half_letter"]
     page_width_pt: float
     page_height_pt: float
+    # Printed at the top of every page. Response sheets are often handed out
+    # separately from the test paper, and a sheet filled against the wrong
+    # version scores as wrong answers rather than as an obvious mistake, so the
+    # sheet says which test and version it belongs to. Frozen with the rest of
+    # the layout: it describes the paper that was actually handed out.
+    header_label: str | None = None
+    # Version labels in bubble order, matching version_row's cell values. Empty
+    # on a version-specific sheet, which needs no bubble.
+    version_labels: list[str] = Field(default_factory=list)
     pages: list[SheetPageModel] = Field(default_factory=list)
 
 
@@ -945,6 +974,10 @@ class AdministeredTestSnapshotModel(BaseModel):
     items: list[TestItemModel]
     questions: list["QuestionModel"]
     answer_key: AnswerKeyModel
+    # Keys for the other versions of this test, present only for interchangeable
+    # sheets. Scoring picks by the version the student bubbled; `answer_key`
+    # stays the version this paper was printed from.
+    alternate_answer_keys: list[AnswerKeyModel] = Field(default_factory=list)
     layout: SheetLayoutModel
 
 
@@ -974,7 +1007,7 @@ class AdministeredTestSnapshotListResponseModel(BaseModel):
 class CreateAdministeredTestRequest(BaseModel):
     test_id: str
     mode: Literal["blank", "pre_id"] = "blank"
-    page_size: Literal["letter", "legal", "a4"] = "letter"
+    page_size: Literal["letter", "legal", "a4", "half_letter"] = "letter"
     blank_count: int | None = None
     student_ids: list[str] | None = None
 
@@ -1005,6 +1038,11 @@ class DetectedRowResultModel(BaseModel):
     detected_value: float | None = None
     confidence: float | None = None
     flag: DetectionFlag = "none"
+    # Set when a human confirms the student answered nothing here. Students
+    # skip questions, so an empty row is a valid reading that should clear
+    # review -- distinct from a row nobody has looked at yet, which is what an
+    # absent override means.
+    override_blank: bool = False
 
     needs_manual_grade: bool = False
     manual_score: float | None = None
@@ -1027,6 +1065,8 @@ class ScannedSheetModel(BaseModel):
     free_text_name: str | None = None
     identity_status: IdentityStatus
     fiducial_confidence: float | None = None
+    # Which version the student marked, on an interchangeable sheet.
+    detected_version: str | None = None
     row_results: list[DetectedRowResultModel] = Field(default_factory=list)
     needs_review: bool = False
 
@@ -1064,6 +1104,7 @@ class OverrideRowResultRequest(BaseModel):
 
     override_choice_indices: list[int] | None = None
     override_value: float | None = None
+    override_blank: bool | None = None
     override_note: str | None = None
     manual_score: float | None = None
     manual_score_max: float | None = None

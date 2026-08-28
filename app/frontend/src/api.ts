@@ -24,6 +24,7 @@ import type {
   QuestionListResponseModel,
   QuestionModel,
   ScannedSheetModel,
+  SheetPageSize,
   StandardImportResponseModel,
   StandardListResponseModel,
   StandardRecordModel,
@@ -294,6 +295,11 @@ export async function createStandardPlaceholders(standardIds: string[]): Promise
 
 export async function listAssets(): Promise<AssetListResponseModel> {
   return handleResponse(await fetch(buildApiUrl("/api/assets")));
+}
+
+export async function closeBank(): Promise<void> {
+  const response = await fetch(buildApiUrl("/api/banks/close"), { method: "POST" });
+  if (!response.ok) throw new Error("Could not close the bank.");
 }
 
 export async function listQuestions(params: {
@@ -632,6 +638,12 @@ export async function saveGradebook(destinationPath?: string): Promise<{ saved_t
   );
 }
 
+export async function openDemoGradebook(): Promise<GradebookSummaryModel> {
+  return handleResponse(
+    await fetch(buildApiUrl("/api/gradebook/open-demo"), { method: "POST" }),
+  );
+}
+
 export async function closeGradebook(): Promise<{ closed: boolean }> {
   return handleResponse(await fetch(buildApiUrl("/api/gradebook/close"), { method: "POST" }));
 }
@@ -644,6 +656,8 @@ export async function createStudent(payload: {
   firstName: string;
   lastName: string;
   externalId: string | null;
+  section?: string | null;
+  grouping?: string | null;
 }): Promise<StudentModel> {
   return handleResponse(
     await fetch(buildApiUrl("/api/gradebook/students"), {
@@ -653,6 +667,8 @@ export async function createStudent(payload: {
         first_name: payload.firstName,
         last_name: payload.lastName,
         external_id: payload.externalId,
+        section: payload.section ?? null,
+        grouping: payload.grouping ?? null,
       }),
     }),
   );
@@ -660,7 +676,13 @@ export async function createStudent(payload: {
 
 export async function updateStudent(
   studentId: string,
-  payload: { firstName: string; lastName: string; externalId: string | null },
+  payload: {
+    firstName: string;
+    lastName: string;
+    externalId: string | null;
+    section?: string | null;
+    grouping?: string | null;
+  },
 ): Promise<StudentModel> {
   return handleResponse(
     await fetch(buildApiUrl(`/api/gradebook/students/${encodeURIComponent(studentId)}`), {
@@ -670,6 +692,8 @@ export async function updateStudent(
         first_name: payload.firstName,
         last_name: payload.lastName,
         external_id: payload.externalId,
+        section: payload.section ?? null,
+        grouping: payload.grouping ?? null,
       }),
     }),
   );
@@ -692,7 +716,7 @@ export async function deleteStudent(studentId: string): Promise<void> {
 export async function createAdministeredTest(payload: {
   testId: string;
   mode: "blank" | "pre_id";
-  pageSize?: "letter" | "legal" | "a4";
+  pageSize?: SheetPageSize;
   blankCount?: number | null;
   studentIds?: string[] | null;
 }): Promise<AdministeredTestSnapshotModel> {
@@ -713,6 +737,16 @@ export async function createAdministeredTest(payload: {
 
 export async function listAdministeredTests(): Promise<AdministeredTestSnapshotListResponseModel> {
   return handleResponse(await fetch(buildApiUrl("/api/gradebook/administered-tests")));
+}
+
+export async function getAdministeredTest(
+  snapshotId: string,
+): Promise<AdministeredTestSnapshotModel> {
+  return handleResponse(
+    await fetch(
+      buildApiUrl(`/api/gradebook/administered-tests/${encodeURIComponent(snapshotId)}`),
+    ),
+  );
 }
 
 export function getSheetPdfUrl(layoutId: string): string {
@@ -741,6 +775,15 @@ export async function listScanBatches(): Promise<GradingBatchListResponseModel> 
 
 export async function getScanBatch(batchId: string): Promise<GradingBatchModel> {
   return handleResponse(await fetch(buildApiUrl(`/api/gradebook/batches/${encodeURIComponent(batchId)}`)));
+}
+
+/** Upload scans without naming a batch: each sheet's QR decides where it goes. */
+export async function ingestScans(files: File[]): Promise<{ items: GradingBatchModel[] }> {
+  const form = new FormData();
+  for (const file of files) form.append("files", file);
+  return handleResponse(
+    await fetch(buildApiUrl("/api/gradebook/scans/ingest"), { method: "POST", body: form }),
+  );
 }
 
 export async function ingestScanBatch(batchId: string, files: File[]): Promise<GradingBatchModel> {
@@ -797,6 +840,7 @@ export async function overrideRowResult(
   payload: {
     overrideChoiceIndices?: number[] | null;
     overrideValue?: number | null;
+    overrideBlank?: boolean | null;
     overrideNote?: string | null;
     manualScore?: number | null;
     manualScoreMax?: number | null;
@@ -813,6 +857,7 @@ export async function overrideRowResult(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           override_choice_indices: payload.overrideChoiceIndices ?? null,
+          override_blank: payload.overrideBlank ?? null,
           override_value: payload.overrideValue ?? null,
           override_note: payload.overrideNote ?? null,
           manual_score: payload.manualScore ?? null,

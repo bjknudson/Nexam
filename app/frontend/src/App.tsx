@@ -8,6 +8,9 @@ import {
   createQuestionFromJson,
   createQuestionsFromJson,
   getBackendHealth,
+  closeBank,
+  closeGradebook,
+  getCurrentGradebook,
   copyTestDraft as copyTestDraftApi,
   createTestDraft,
   deleteQuestion,
@@ -37,14 +40,20 @@ import {
   getDesktopContext,
   isDesktopShell,
   onBankPropertiesMenu,
+  onCloseBankMenu,
+  onCloseGradebookMenu,
   onNewBankMenu,
+  onNewGradebookMenu,
   onOpenBankMenu,
   onOpenDemoBankMenu,
+  onOpenDemoGradebookMenu,
+  onOpenGradebookMenu,
   onOpenSettings,
   onSaveAsMenu,
   onSaveBankMenu,
   openBankDialog,
   openGradebookWindow,
+  setDocumentMenuState,
   openPaneWindow,
   resolveDefaultBankDirectory,
   saveBankDialog,
@@ -1213,6 +1222,11 @@ function App() {
     registerMenuListener(onBankPropertiesMenu, () => handleOpenBankPropertiesDialog());
     registerMenuListener(onSaveBankMenu, () => void handleSaveBank());
     registerMenuListener(onSaveAsMenu, () => handleSaveAs());
+    registerMenuListener(onCloseBankMenu, () => void handleCloseBank());
+    registerMenuListener(onNewGradebookMenu, () => void handleOpenGradebook("new"));
+    registerMenuListener(onOpenGradebookMenu, () => void handleOpenGradebook("open"));
+    registerMenuListener(onOpenDemoGradebookMenu, () => void handleOpenGradebook("demo"));
+    registerMenuListener(onCloseGradebookMenu, () => void handleCloseGradebook());
 
     return () => {
       cancelled = true;
@@ -1225,6 +1239,31 @@ function App() {
     if (!bank) return;
     void refreshQuestionList();
   }, [bank, search, topicFilter, typeFilter, hostsBankState]);
+
+  // Keep File's "Close" commands greyed out when there is nothing to close. The
+  // gradebook lives in another window, so its state is polled rather than known.
+  useEffect(() => {
+    if (!desktopMode || !isMainWindow) return;
+    let cancelled = false;
+
+    const sync = async () => {
+      let gradebookOpen = false;
+      try {
+        await getCurrentGradebook();
+        gradebookOpen = true;
+      } catch {
+        gradebookOpen = false;
+      }
+      if (!cancelled) void setDocumentMenuState(Boolean(bank), gradebookOpen);
+    };
+
+    void sync();
+    const intervalId = window.setInterval(sync, 4000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [desktopMode, isMainWindow, bank]);
 
   const selectedTestDetail = testDrafts.find((item) => item.test.id === selectedTestId) ?? null;
   const openTestsMissingSelectedQuestion = selectedId
@@ -1630,6 +1669,53 @@ function App() {
     const path = await openBankDialog(bankDirectory || undefined);
     if (!path) return;
     await openBankAtPath(path);
+  }
+
+  async function handleCloseBank() {
+    if (!bank) return;
+    if (!(await persistDraft("open-bank"))) return;
+    setLoading(true);
+    try {
+      await closeBank();
+      setBank(null);
+      setSelectedId(null);
+      setQuestionItems([]);
+      setTestDrafts([]);
+      setWorkspaceDirty(false);
+      setStatusMessage("Closed the bank. The working copy is left as it was.");
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage((error as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  /** The gradebook is its own window, so File's gradebook commands open that
+   *  window and tell it what to do rather than doing it here. */
+  async function handleOpenGradebook(intent: "new" | "open" | "demo") {
+    try {
+      await openGradebookWindow(intent);
+    } catch (error) {
+      setErrorMessage((error as Error).message);
+    }
+  }
+
+  async function handleCloseGradebook() {
+    try {
+      await closeGradebook();
+      setStatusMessage("Closed the gradebook.");
+      // The gradebook window shows its own state, so tell it to re-read.
+      try {
+        const channel = new BroadcastChannel("nexzam-pane-sync");
+        channel.postMessage({ type: "gradebook-data-changed" });
+        channel.close();
+      } catch {
+        // Best effort only.
+      }
+    } catch (error) {
+      setErrorMessage((error as Error).message);
+    }
   }
 
   async function handleOpenDemo() {

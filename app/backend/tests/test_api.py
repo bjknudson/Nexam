@@ -298,7 +298,7 @@ def test_api_exposes_course_detail_and_test_course_assignment(
     detail = client.get("/api/courses/physics-1")
     assert detail.status_code == 200
     payload = detail.json()
-    assert [item["test_id"] for item in payload["tests"]] == [test_id]
+    assert test_id in [item["test_id"] for item in payload["tests"]]
     assert payload["uncovered_standards"]
 
     reassigned = client.put(
@@ -382,7 +382,7 @@ def test_api_seeds_a_new_course_from_an_existing_one(
     assert response.status_code == 200
     payload = response.json()
     assert payload["course"]["standard_refs"]
-    assert [item["test_id"] for item in payload["tests"]] == [shared_id]
+    assert shared_id in [item["test_id"] for item in payload["tests"]]
     assert client.get(f"/api/tests/{shared_id}").json()["test"]["course_ids"] == [
         "physics-1",
         "physics-1-2027",

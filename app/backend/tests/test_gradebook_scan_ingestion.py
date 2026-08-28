@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from app.backend.gradebook_service import GradebookService
@@ -211,3 +212,159 @@ def test_ingest_via_api(gradebook_client, demo_bok: Path, tmp_path: Path) -> Non
     assert sheets[0]["row_results"][0]["detected_choice_indices"] == (
         snapshot.answer_key.items[0].correct_choice_indices
     )
+
+
+def test_scans_sort_themselves_into_batches_by_test(
+    bank_service: BankWorkspaceService, demo_bok: Path, tmp_path: Path
+) -> None:
+    """No batch has to exist first: the sheet's own QR says where it belongs."""
+
+    bank_service.open_bank(str(demo_bok))
+    gradebook_service = GradebookService()
+    first = _hand_off(bank_service, gradebook_service, tmp_path)
+    # A second hand-off into the same gradebook, not a second gradebook.
+    second_detail = bank_service.add_question_to_test(
+        bank_service.create_test_draft("Unit 2 Waves", "A").test.id, "q_mc_0002"
+    )
+    second = gradebook_service.create_snapshot_and_sheets(
+        test=second_detail.test,
+        questions=second_detail.questions,
+        source_bank_title="Physics 1",
+        mode="blank",
+        page_size="letter",
+        blank_count=1,
+        student_ids=None,
+    )
+
+    first_png = _fill_correct_choice_png(first)
+    second_png = _fill_correct_choice_png(second)
+
+    batches = gradebook_service.ingest_scans(
+        [("a.png", first_png), ("b.png", second_png)]
+    )
+
+    assert len(batches) == 2
+    by_snapshot = {batch.snapshot_id: batch for batch in batches}
+    assert set(by_snapshot) == {first.id, second.id}
+    for snapshot_id, batch in by_snapshot.items():
+        assert len(batch.sheets) == 1
+        assert batch.sheets[0].snapshot_id == snapshot_id
+
+
+def test_re_scanning_stragglers_reuses_the_same_batch(
+    bank_service: BankWorkspaceService, demo_bok: Path, tmp_path: Path
+) -> None:
+    bank_service.open_bank(str(demo_bok))
+    gradebook_service = GradebookService()
+    snapshot = _hand_off(bank_service, gradebook_service, tmp_path)
+    png = _fill_correct_choice_png(snapshot)
+
+    first_pass = gradebook_service.ingest_scans([("a.png", png)])
+    second_pass = gradebook_service.ingest_scans([("b.png", png)])
+
+    # One class set, one batch -- not a new batch per trip to the scanner.
+    assert first_pass[0].id == second_pass[0].id
+    assert len(gradebook_service.get_scan_batch(first_pass[0].id).sheets) == 2
+
+
+def test_ingesting_with_nothing_handed_off_says_so(
+    bank_service: BankWorkspaceService, demo_bok: Path, tmp_path: Path
+) -> None:
+    bank_service.open_bank(str(demo_bok))
+    gradebook_service = GradebookService()
+    gradebook_service.create_gradebook("Empty", None, str(tmp_path / "empty.nxgb"))
+
+    # A real page, just one with nothing in this gradebook to belong to.
+    blank_page = png_bytes(np.full((1100, 850), 255, dtype=np.uint8))
+
+    with pytest.raises(BankWorkspaceError) as exc_info:
+        gradebook_service.ingest_scans([("a.png", blank_page)])
+
+    assert exc_info.value.status_code == 400
+    assert "handed off" in exc_info.value.message
+
+
+@pytest.mark.parametrize("page_size", ["letter", "half_letter", "legal", "a4"])
+def test_every_sheet_size_scans_back_correctly(
+    bank_service: BankWorkspaceService, demo_bok: Path, tmp_path: Path, page_size: str
+) -> None:
+    """Detection registers against the layout's own geometry, so a half sheet
+    reads the same as a full one -- different paper, same pipeline."""
+
+    bank_service.open_bank(str(demo_bok))
+    gradebook_service = GradebookService()
+    gradebook_service.create_gradebook("Period 2", None, str(tmp_path / f"{page_size}.nxgb"))
+    detail = _build_mc_test(bank_service)
+    snapshot = gradebook_service.create_snapshot_and_sheets(
+        test=detail.test,
+        questions=detail.questions,
+        source_bank_title="Physics 1",
+        mode="blank",
+        page_size=page_size,
+        blank_count=1,
+        student_ids=None,
+    )
+
+    # The furniture has to fit the paper: name box must not run under the QR.
+    page = snapshot.layout.pages[0]
+    assert page.name_box.x_pt + page.name_box.width_pt <= page.qr_box.x_pt
+
+    batches = gradebook_service.ingest_scans(
+        [(f"{page_size}.png", _fill_correct_choice_png(snapshot))]
+    )
+    sheet = batches[0].sheets[0]
+
+    assert sheet.identity_status != "qr_unreadable"
+    assert sheet.fiducial_confidence is not None
+    correct_index = snapshot.answer_key.items[0].correct_choice_indices[0]
+    assert sheet.row_results[0].detected_choice_indices == [correct_index]
+
+
+def test_a_multi_column_sheet_scans_each_column_back_to_the_right_question(
+    bank_service: BankWorkspaceService, demo_bok: Path, tmp_path: Path
+) -> None:
+    """Columns move bubbles sideways, so this checks a mark in the second column
+    is read as its own question rather than the one beside it."""
+
+    from app.backend.tests.grading_test_utils import fill_cells, rasterize_layout_page
+
+    bank_service.open_bank(str(demo_bok))
+    gradebook_service = GradebookService()
+    gradebook_service.create_gradebook("Period 2", None, str(tmp_path / "cols.nxgb"))
+
+    test = bank_service.create_test_draft("Wide Sheet", "A").test
+    question_ids = [f"q_mc_{index:04d}" for index in range(1, 41)]
+    for question_id in question_ids:
+        bank_service.add_question_to_test(test.id, question_id)
+    detail = bank_service.get_test_draft(test.id)
+
+    snapshot = gradebook_service.create_snapshot_and_sheets(
+        test=detail.test,
+        questions=detail.questions,
+        source_bank_title="Demo Bank",
+        mode="blank",
+        page_size="letter",
+        blank_count=1,
+        student_ids=None,
+    )
+
+    page = snapshot.layout.pages[0]
+    # It really is laid out in more than one column.
+    assert len({round(row.label_x_pt) for row in page.rows}) > 1
+    assert len(snapshot.layout.pages) == 1
+
+    # Mark a different choice on every row, so a row read off by one is caught.
+    image = rasterize_layout_page(snapshot.layout, 0, 300)
+    expected: dict[str, int] = {}
+    for offset, row in enumerate(page.rows):
+        choice_index = offset % len(row.cells)
+        fill_cells(image, snapshot.layout, [row.cells[choice_index]], 300)
+        expected[row.question_id] = choice_index
+
+    batches = gradebook_service.ingest_scans([("wide.png", png_bytes(image))])
+    sheet = batches[0].sheets[0]
+
+    assert sheet.fiducial_confidence is not None
+    read_back = {row.question_id: row.detected_choice_indices for row in sheet.row_results}
+    for question_id, choice_index in expected.items():
+        assert read_back[question_id] == [choice_index], f"{question_id} read wrong"

@@ -1,12 +1,21 @@
 import { useEffect, useState } from "react";
 
-import { closeGradebook, createGradebook, openGradebook, saveGradebook, updateGradebookDetails } from "./api";
+import {
+  closeGradebook,
+  createGradebook,
+  getCurrentGradebook,
+  openDemoGradebook,
+  openGradebook,
+  saveGradebook,
+  updateGradebookDetails,
+} from "./api";
 import {
   isDesktopShell,
   openGradebookDialog,
   resolveDefaultBankDirectory,
   saveGradebookDialog,
 } from "./desktop";
+import { SETTINGS_KEYS, usePersistedString } from "./appSettings";
 import type { GradebookSummaryModel } from "./types";
 import RosterWorkspace from "./RosterWorkspace";
 import AdministeredTestsWorkspace from "./AdministeredTestsWorkspace";
@@ -34,10 +43,82 @@ export default function GradebookApp() {
   const [errorMessage, setErrorMessage] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
 
+  // The same directory the bank dialogs start in, so gradebooks land beside banks.
+  const [bankDirectory, setBankDirectory] = usePersistedString(SETTINGS_KEYS.bankDirectory, "");
+  const [lastGradebookPath, setLastGradebookPath] = usePersistedString(
+    SETTINGS_KEYS.lastGradebookPath,
+    "",
+  );
+
   const [manualPath, setManualPath] = useState("");
   const [newTitle, setNewTitle] = useState("");
   const [newDescription, setNewDescription] = useState("");
   const [newDestinationPath, setNewDestinationPath] = useState("");
+
+  useEffect(() => {
+    if (!desktopMode || bankDirectory) return;
+    let cancelled = false;
+    void resolveDefaultBankDirectory().then((resolved) => {
+      if (!cancelled && resolved) setBankDirectory(resolved);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [desktopMode, bankDirectory, setBankDirectory]);
+
+  // The gradebook lives in the shared backend, not in this window. Reopening or
+  // reloading the window must adopt whatever is already open instead of showing
+  // the open/create screen over the top of it.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const current = await getCurrentGradebook();
+        if (!cancelled) {
+          setGradebook(current);
+          setLastGradebookPath(current.source_path);
+        }
+      } catch {
+        // Nothing open yet -- the open/create screen is the right thing to show.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [setLastGradebookPath]);
+
+  // File > New/Open/Demo Gradebook arrives as an intent on the URL, so the menu
+  // command lands on the right thing instead of just showing this screen.
+  useEffect(() => {
+    const intent = new URLSearchParams(window.location.search).get("intent");
+    if (!intent || gradebook) return;
+    if (intent === "demo") {
+      void (async () => {
+        try {
+          setLoading(true);
+          const opened = await openDemoGradebook();
+          setGradebook(opened);
+          setLastGradebookPath(opened.source_path);
+        } catch (error) {
+          setErrorMessage(
+            `Could not open the demo gradebook: ${(error as Error).message}`,
+          );
+        } finally {
+          setLoading(false);
+        }
+      })();
+      return;
+    }
+    if (intent === "open") void handleOpenViaDialog();
+    if (intent === "new") void handlePickCreateDestination();
+    // Acting once on load is the point; re-running would fight the teacher.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Offer the gradebook you had open last rather than a blank field.
+  useEffect(() => {
+    if (lastGradebookPath) setManualPath((current) => current || lastGradebookPath);
+  }, [lastGradebookPath]);
 
   useEffect(() => {
     if (!statusMessage) return;
@@ -48,11 +129,12 @@ export default function GradebookApp() {
   async function handleOpenViaDialog() {
     setErrorMessage("");
     try {
-      const initialDirectory = await resolveDefaultBankDirectory();
+      const initialDirectory = bankDirectory || (await resolveDefaultBankDirectory());
       const path = await openGradebookDialog(initialDirectory);
       if (!path) return;
       setLoading(true);
       setGradebook(await openGradebook(path));
+      setLastGradebookPath(path);
     } catch (error) {
       setErrorMessage((error as Error).message);
     } finally {
@@ -65,7 +147,9 @@ export default function GradebookApp() {
     setErrorMessage("");
     setLoading(true);
     try {
-      setGradebook(await openGradebook(manualPath.trim()));
+      const opened = await openGradebook(manualPath.trim());
+      setGradebook(opened);
+      setLastGradebookPath(opened.source_path);
     } catch (error) {
       setErrorMessage((error as Error).message);
     } finally {
@@ -76,7 +160,7 @@ export default function GradebookApp() {
   async function handlePickCreateDestination() {
     setErrorMessage("");
     try {
-      const initialDirectory = await resolveDefaultBankDirectory();
+      const initialDirectory = bankDirectory || (await resolveDefaultBankDirectory());
       const suggestedFileName = newTitle.trim()
         ? `${newTitle.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-")}.nxgb`
         : "gradebook.nxgb";
@@ -98,6 +182,7 @@ export default function GradebookApp() {
         destinationPath: newDestinationPath.trim(),
       });
       setGradebook(created);
+      setLastGradebookPath(created.source_path);
       setNewTitle("");
       setNewDescription("");
       setNewDestinationPath("");

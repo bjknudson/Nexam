@@ -22,6 +22,7 @@ from .models import (
     AdministeredTestSnapshotListResponseModel,
     AdministeredTestSnapshotModel,
     AdministeredTestSnapshotSummaryModel,
+    AnswerKeyModel,
     CombinedGradeReportModel,
     DetectedRowResultModel,
     GradebookManifestModel,
@@ -44,6 +45,9 @@ from .grading.review_state import sheet_needs_review
 from .service import BankWorkspaceError
 
 _SCAN_RASTER_DPI = 300
+
+
+_UNSET_PAYLOAD: dict = {"__unset__": True}
 
 
 class GradebookService:
@@ -83,6 +87,26 @@ class GradebookService:
         self._workspace_path = workspace_path
         return self.get_summary()
 
+    @staticmethod
+    def _as_gradebook_path(destination_path: str) -> Path:
+        """Normalize a destination into a `.nxgb` path.
+
+        A teacher typing a path should not have to remember the extension, and a
+        save dialog can hand back a name without one, so append it rather than
+        refusing the path. A different extension is still an error: silently
+        renaming someone's `.bok` would be worse than saying no.
+        """
+
+        target_path = Path(destination_path).expanduser().resolve()
+        if target_path.suffix == ".nxgb":
+            return target_path
+        if target_path.suffix:
+            raise BankWorkspaceError(
+                f"A gradebook file must end with .nxgb, not {target_path.suffix}",
+                status_code=400,
+            )
+        return target_path.with_name(f"{target_path.name}.nxgb")
+
     def create_gradebook(
         self, title: str, description: str | None, destination_path: str
     ) -> GradebookSummaryModel:
@@ -90,9 +114,7 @@ class GradebookService:
         if not title:
             raise BankWorkspaceError("Gradebook title must not be empty.", status_code=400)
 
-        target_path = Path(destination_path).expanduser().resolve()
-        if target_path.suffix != ".nxgb":
-            raise BankWorkspaceError("Destination path must end with .nxgb", status_code=400)
+        target_path = self._as_gradebook_path(destination_path)
 
         workspace_path = self._new_workspace_dir(target_path.stem)
 
@@ -129,9 +151,9 @@ class GradebookService:
 
     def save_gradebook(self, destination_path: str | None = None) -> str:
         source_path, workspace_path = self.ensure_open()
-        target_path = Path(destination_path).expanduser().resolve() if destination_path else source_path
-        if target_path.suffix != ".nxgb":
-            raise BankWorkspaceError("Destination path must end with .nxgb", status_code=400)
+        target_path = (
+            self._as_gradebook_path(destination_path) if destination_path else source_path
+        )
 
         self._refresh_manifest_timestamp()
 
@@ -176,6 +198,8 @@ class GradebookService:
                 first_name=request.first_name,
                 last_name=request.last_name,
                 external_id=request.external_id,
+                section=request.section,
+                grouping=request.grouping,
             )
             students.items = [updated if s.id == student_id else s for s in students.items]
         else:
@@ -184,6 +208,8 @@ class GradebookService:
                 first_name=request.first_name,
                 last_name=request.last_name,
                 external_id=request.external_id,
+                section=request.section,
+                grouping=request.grouping,
             )
             students.items.append(updated)
 
@@ -211,11 +237,20 @@ class GradebookService:
         page_size: str,
         blank_count: int | None,
         student_ids: list[str] | None,
+        alternates: list[tuple[TestDraftModel, list[QuestionModel]]] | None = None,
     ) -> AdministeredTestSnapshotModel:
         _, workspace_path = self.ensure_open()
 
         questions_by_id = {question.id: question for question in questions}
         answer_key = derive_answer_key(test, questions_by_id)
+
+        alternate_keys: list[AnswerKeyModel] = []
+        version_labels: list[str] = []
+        if test.interchangeable_sheets and alternates:
+            alternate_keys = self._compatible_alternate_keys(answer_key, alternates)
+            version_labels = sorted(
+                {answer_key.version, *(key.version for key in alternate_keys)}
+            )
 
         copies = self._build_copies(mode, blank_count, student_ids)
         layout_id = uuid.uuid4().hex
@@ -225,6 +260,12 @@ class GradebookService:
             mode=mode,
             page_size=page_size,
             copies=copies,
+            header_label=(
+                f"{test.title} - mark your version below"
+                if version_labels
+                else f"{test.title} - Version {test.version}"
+            ),
+            version_labels=version_labels,
         )
 
         snapshot = AdministeredTestSnapshotModel(
@@ -237,6 +278,7 @@ class GradebookService:
             items=test.items,
             questions=questions,
             answer_key=answer_key,
+            alternate_answer_keys=alternate_keys,
             layout=layout,
         )
 
@@ -246,6 +288,32 @@ class GradebookService:
         (snapshot_dir / "sheet.pdf").write_bytes(render_sheet_layout_to_pdf(layout))
 
         return snapshot
+
+    def _compatible_alternate_keys(
+        self,
+        answer_key: AnswerKeyModel,
+        alternates: list[tuple[TestDraftModel, list[QuestionModel]]],
+    ) -> list[AnswerKeyModel]:
+        """Keys for the sibling versions, kept only where the sheet shape matches.
+
+        One sheet can serve several versions only if every version asks for the
+        same run of row kinds -- same multiple choice, then numeric, then written
+        -- because the bubbles are at fixed coordinates. A version that diverges
+        is dropped rather than silently mis-scored: its own sheets still work.
+        """
+
+        def shape(key: AnswerKeyModel) -> list[str]:
+            return [item.row_kind for item in key.items]
+
+        target_shape = shape(answer_key)
+        compatible: list[AnswerKeyModel] = []
+        for alternate_test, alternate_questions in alternates:
+            alternate_key = derive_answer_key(
+                alternate_test, {question.id: question for question in alternate_questions}
+            )
+            if shape(alternate_key) == target_shape:
+                compatible.append(alternate_key)
+        return compatible
 
     def _build_copies(
         self, mode: str, blank_count: int | None, student_ids: list[str] | None
@@ -277,6 +345,19 @@ class GradebookService:
         summaries = [self._snapshot_summary(snapshot) for snapshot in self._read_all_snapshots()]
         summaries.sort(key=lambda summary: summary.printed_at, reverse=True)
         return AdministeredTestSnapshotListResponseModel(items=summaries)
+
+    def get_administered_test(self, snapshot_id: str) -> AdministeredTestSnapshotModel:
+        """The full frozen snapshot, including the questions as they were printed.
+
+        Scan review needs the question text and rubric to score a written
+        response, and those must come from the snapshot rather than the bank:
+        the bank may have changed, or not be open at all.
+        """
+
+        for snapshot in self._read_all_snapshots():
+            if snapshot.id == snapshot_id:
+                return snapshot
+        raise BankWorkspaceError(f"Administered test not found: {snapshot_id}", status_code=404)
 
     def get_sheet_pdf_bytes(self, layout_id: str) -> bytes:
         _, workspace_path = self.ensure_open()
@@ -351,6 +432,81 @@ class GradebookService:
 
         self._write_batch(workspace_path, batch)
         return batch
+
+    def ingest_scans(self, files: list[tuple[str, bytes]]) -> list[GradingBatchModel]:
+        """Take a pile of scans and sort them by the test each sheet says it is.
+
+        Every sheet already carries a QR naming the exact printing it came from,
+        so asking the teacher to declare a batch first was asking for something
+        the paper already knows. Pages are routed to the batch for their own
+        snapshot, one batch per test and version, created on first sight.
+        """
+
+        _, workspace_path = self.ensure_open()
+        sheet_lookup = self._build_sheet_lookup()
+        touched: dict[str, GradingBatchModel] = {}
+
+        for filename, content in files:
+            for page_image in self._rasterize_upload(filename, content):
+                payload = decode_qr_payload(page_image)
+                snapshot_id = None
+                if payload is not None and isinstance(payload.get("sheet_id"), str):
+                    match = sheet_lookup.get(payload["sheet_id"])
+                    if match is not None:
+                        snapshot_id = match[0].id
+
+                batch = self._batch_for_snapshot(snapshot_id, touched)
+                scans_dir = workspace_path / "scans" / batch.id
+                scans_dir.mkdir(parents=True, exist_ok=True)
+                sheet = self._ingest_page(
+                    page_image, batch, sheet_lookup, scans_dir, payload=payload
+                )
+                batch.sheets.append(sheet)
+
+        for batch in touched.values():
+            self._write_batch(workspace_path, batch)
+        return sorted(touched.values(), key=lambda item: item.created_at)
+
+    def _batch_for_snapshot(
+        self, snapshot_id: str | None, touched: dict[str, GradingBatchModel]
+    ) -> GradingBatchModel:
+        """The open batch for a snapshot, reused across this upload and across
+        uploads, so re-scanning a few stragglers does not fragment a class set.
+
+        A page whose QR could not be read has no snapshot to sort by. It lands
+        in the most recently printed test's batch, flagged for review, because a
+        sheet a teacher cannot find is worse than one filed in the wrong place.
+        """
+
+        if snapshot_id is None:
+            if touched:
+                return next(reversed(list(touched.values())))
+            snapshots = self._read_all_snapshots()
+            if not snapshots:
+                raise BankWorkspaceError(
+                    "No tests have been handed off to this gradebook yet, so there is "
+                    "nothing for these scans to belong to.",
+                    status_code=400,
+                )
+            snapshot_id = max(snapshots, key=lambda item: item.printed_at).id
+
+        if snapshot_id in touched:
+            return touched[snapshot_id]
+
+        existing = next(
+            (batch for batch in self._read_all_batches() if batch.snapshot_id == snapshot_id),
+            None,
+        )
+        if existing is not None:
+            touched[snapshot_id] = existing
+            return existing
+
+        snapshot = self.get_snapshot(snapshot_id)
+        created = self.create_scan_batch(
+            snapshot_id, f"{snapshot.title} - Version {snapshot.version}"
+        )
+        touched[snapshot_id] = created
+        return created
 
     def get_review_queue(self, batch_id: str) -> list[ScannedSheetModel]:
         return [sheet for sheet in self._read_batch(batch_id).sheets if sheet.needs_review]
@@ -429,9 +585,14 @@ class GradebookService:
         student_id: str | None = None,
         free_text_name: str | None = None,
     ) -> ScannedSheetModel:
+        # Blank strings arrive from empty form fields; treat them as absent so the
+        # message below is about what the teacher did, not about the payload.
+        student_id = (student_id or "").strip() or None
+        free_text_name = (free_text_name or "").strip() or None
         if not student_id and not free_text_name:
             raise BankWorkspaceError(
-                "resolve_sheet_identity requires student_id or free_text_name.", status_code=400
+                "Pick a student from the roster, or type a name, before saving this sheet's identity.",
+                status_code=400,
             )
         if student_id and not any(s.id == student_id for s in self._read_students().items):
             raise BankWorkspaceError(f"Student not found: {student_id}", status_code=404)
@@ -456,6 +617,7 @@ class GradebookService:
         *,
         override_choice_indices: list[int] | None = None,
         override_value: float | None = None,
+        override_blank: bool | None = None,
         override_note: str | None = None,
         manual_score: float | None = None,
         manual_score_max: float | None = None,
@@ -477,6 +639,8 @@ class GradebookService:
         else:
             row.override_choice_indices = override_choice_indices
             row.override_value = override_value
+            if override_blank is not None:
+                row.override_blank = override_blank
             row.override_note = override_note
 
         sheet.needs_review = sheet_needs_review(sheet)
@@ -495,13 +659,17 @@ class GradebookService:
         batch: GradingBatchModel,
         sheet_lookup: dict[str, tuple[AdministeredTestSnapshotModel, SheetPageModel]],
         scans_dir: Path,
+        payload: dict | None = _UNSET_PAYLOAD,
     ) -> ScannedSheetModel:
         sheet_seq = len(list(scans_dir.glob("*.png")))
         image_path = scans_dir / f"{sheet_seq:04d}.png"
         cv2.imwrite(str(image_path), page_image)
         relative_image_path = str(image_path.relative_to(scans_dir.parents[1]))
 
-        payload = decode_qr_payload(page_image)
+        # Decoding a 300dpi page is not cheap, so a caller that already looked at
+        # the QR to decide where this page belongs passes it back in.
+        if payload is _UNSET_PAYLOAD:
+            payload = decode_qr_payload(page_image)
         if payload is None or not isinstance(payload.get("sheet_id"), str):
             return ScannedSheetModel(
                 id=uuid.uuid4().hex,
@@ -530,8 +698,12 @@ class GradebookService:
         else:
             identity_status = "unresolved"
 
-        row_results, fiducial_confidence = read_sheet(
-            page_image, page, snapshot.layout.page_width_pt, snapshot.layout.page_height_pt
+        row_results, fiducial_confidence, detected_version = read_sheet(
+            page_image,
+            page,
+            snapshot.layout.page_width_pt,
+            snapshot.layout.page_height_pt,
+            version_labels=snapshot.layout.version_labels,
         )
 
         sheet = ScannedSheetModel(
@@ -544,6 +716,7 @@ class GradebookService:
             student_id=student_id,
             identity_status=identity_status,
             fiducial_confidence=fiducial_confidence,
+            detected_version=detected_version,
             row_results=row_results,
         )
         sheet.needs_review = sheet_needs_review(sheet)

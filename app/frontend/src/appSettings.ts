@@ -9,6 +9,7 @@ export const SETTINGS_KEYS = {
   questionsShowStatusFilter: "nexzam:qp-show-status-filter",
   questionsShortenText: "nexzam:qp-shorten-question-text",
   bankDirectory: "nexzam:bank-directory",
+  lastGradebookPath: "nexzam:last-gradebook-path",
 } as const;
 
 // Persists to localStorage and stays in sync across windows (via the native

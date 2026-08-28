@@ -117,6 +117,14 @@ class BankWorkspaceService:
             raise BankWorkspaceError("No bank is currently open.", status_code=400)
         return self._source_path, self._workspace_path
 
+    def close_bank(self) -> None:
+        """Forget the open bank. The working copy stays on disk untouched, so a
+        close is not a save and not a discard -- reopening the same `.bok`
+        picks it up again."""
+
+        self._source_path = None
+        self._workspace_path = None
+
     def open_bank(self, bok_path: str) -> BankSummaryModel:
         source_path = Path(bok_path).expanduser().resolve()
         if not source_path.exists():

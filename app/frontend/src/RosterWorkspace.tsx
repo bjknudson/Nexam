@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { createStudent, deleteStudent, listStudents, updateStudent } from "./api";
+import { createStudent, deleteStudent, listStudents, saveGradebook, updateStudent } from "./api";
 import type { StudentModel } from "./types";
 
 export default function RosterWorkspace() {
@@ -15,6 +15,8 @@ export default function RosterWorkspace() {
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [externalId, setExternalId] = useState("");
+  const [section, setSection] = useState("");
+  const [grouping, setGrouping] = useState("");
 
   async function refreshStudents(): Promise<StudentModel[]> {
     setLoading(true);
@@ -50,6 +52,8 @@ export default function RosterWorkspace() {
     setFirstName(selected?.first_name ?? "");
     setLastName(selected?.last_name ?? "");
     setExternalId(selected?.external_id ?? "");
+    setSection(selected?.section ?? "");
+    setGrouping(selected?.grouping ?? "");
   }, [selected, creating]);
 
   function startCreate() {
@@ -58,6 +62,8 @@ export default function RosterWorkspace() {
     setFirstName("");
     setLastName("");
     setExternalId("");
+    setSection("");
+    setGrouping("");
   }
 
   async function runMutation(work: () => Promise<void>) {
@@ -80,18 +86,27 @@ export default function RosterWorkspace() {
           firstName: firstName.trim(),
           lastName: lastName.trim(),
           externalId: externalId.trim() || null,
+          section: section.trim() || null,
+          grouping: grouping.trim() || null,
         });
         await refreshStudents();
         setCreating(false);
         setSelectedId(created.id);
-        setStatusMessage("Student added.");
+        // Roster edits are the one thing a teacher types in by hand and would
+        // hate to retype, so they go straight into the .nxgb rather than
+        // waiting for an explicit Save.
+        await saveGradebook();
+        setStatusMessage("Student added and saved.");
       } else if (selected) {
         await updateStudent(selected.id, {
           firstName: firstName.trim(),
           lastName: lastName.trim(),
           externalId: externalId.trim() || null,
+          section: section.trim() || null,
+          grouping: grouping.trim() || null,
         });
         await refreshStudents();
+        await saveGradebook();
         setStatusMessage("Saved.");
       }
     });
@@ -143,7 +158,11 @@ export default function RosterWorkspace() {
                 <strong>
                   {student.first_name} {student.last_name}
                 </strong>
-                {student.external_id ? <span>{student.external_id}</span> : null}
+                {student.section || student.grouping ? (
+                  <span>{[student.section, student.grouping].filter(Boolean).join(" - ")}</span>
+                ) : student.external_id ? (
+                  <span>{student.external_id}</span>
+                ) : null}
               </button>
             ))}
           </div>
@@ -166,6 +185,24 @@ export default function RosterWorkspace() {
                   type="text"
                   value={lastName}
                   onChange={(event) => setLastName(event.target.value)}
+                />
+              </label>
+              <label title="Class or period. Response sheets can be generated for one section at a time.">
+                Section / Period
+                <input
+                  type="text"
+                  placeholder="e.g. Period 2"
+                  value={section}
+                  onChange={(event) => setSection(event.target.value)}
+                />
+              </label>
+              <label title="Any grouping you want to filter by -- intervention group, accommodation, or which modified version a student should get.">
+                Group / Needs
+                <input
+                  type="text"
+                  placeholder="e.g. EL, extended time"
+                  value={grouping}
+                  onChange={(event) => setGrouping(event.target.value)}
                 />
               </label>
               <label>

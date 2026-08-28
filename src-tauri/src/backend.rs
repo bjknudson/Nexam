@@ -175,11 +175,16 @@ fn build_bundled_command<R: Runtime>(app_handle: &AppHandle<R>, port: u16) -> Re
         .path()
         .resolve("samples/demo-bank.bok", BaseDirectory::Resource)
         .context("Failed to resolve the bundled demo bank path.")?;
+    let demo_gradebook = app_handle
+        .path()
+        .resolve("samples/demo-gradebook.nxgb", BaseDirectory::Resource)
+        .context("Failed to resolve the bundled demo gradebook path.")?;
 
     let mut command = Command::new(&backend_binary);
     command
         .args(["--port", &port.to_string()])
-        .env("NEXZAM_DEMO_BANK_PATH", &demo_bank);
+        .env("NEXZAM_DEMO_BANK_PATH", &demo_bank)
+        .env("NEXZAM_DEMO_GRADEBOOK_PATH", &demo_gradebook);
     Ok(command)
 }
 

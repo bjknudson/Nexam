@@ -3933,7 +3933,9 @@ textarea {
 
 .scan-review-layout {
   display: grid;
-  grid-template-columns: minmax(280px, 0.8fr) minmax(420px, 1.2fr);
+  /* The sheet picker is a list of names -- it does not need a third of the
+     window. The room belongs to the scan and the answers being corrected. */
+  grid-template-columns: minmax(180px, 0.45fr) minmax(0, 2.6fr);
   gap: 0.9rem;
   min-height: 0;
 }
@@ -3942,28 +3944,173 @@ textarea {
   display: grid;
   gap: 0.75rem;
   align-content: start;
+  min-width: 0;
+}
+
+/* The sheet and the answers being corrected have to be readable at the same
+   time. Fixed proportions rather than letting the image take the slack: given
+   free space the scan would grow to fill the pane and push the review cards
+   out of view. */
+.scan-review-split {
+  display: grid;
+  grid-template-columns: minmax(220px, 30%) minmax(280px, 1fr);
+  gap: 0.9rem;
+  align-items: start;
+  min-width: 0;
+}
+
+.scan-review-sheet-column {
+  position: sticky;
+  top: 0;
+  min-width: 0;
 }
 
 .scan-review-image {
-  max-width: 100%;
+  width: 100%;
+  height: auto;
   border: 1px solid #d1dbe5;
   border-radius: 10px;
   background: #ffffff;
 }
 
-.scan-review-identity h3,
-.scan-review-row p:first-child {
+.scan-review-review-column {
+  display: grid;
+  gap: 0.7rem;
+  align-content: start;
+  min-width: 0;
+}
+
+.scan-review-identity h3 {
   margin-top: 0;
 }
 
-.scan-review-rows {
-  display: grid;
-  gap: 0.6rem;
+/* One heading per run of rows, so the kind is stated once instead of on every
+   row. */
+.scan-review-section h4 {
+  margin: 0 0 0.35rem;
+  color: #64748b;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
+.scan-review-row-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+/* A confident row is a chip: "1. A" and nothing else. A flagged row opens to
+   full width so its correction controls have room. */
 .scan-review-row {
+  border: 1px solid #dce5ef;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.scan-review-row.needs-review {
+  border-color: #f0b429;
+  background: #fffbeb;
+}
+
+.scan-review-row.expanded {
+  flex: 1 1 100%;
+  padding: 0.4rem 0.55rem 0.55rem;
+}
+
+.scan-review-row-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  padding: 0.25rem 0.5rem;
+  border: none;
+  background: transparent;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.scan-review-row.expanded .scan-review-row-summary {
+  padding: 0 0 0.3rem;
+}
+
+.scan-review-row-number {
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+}
+
+.scan-review-row-answer {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.scan-review-row-flag {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: #d97706;
+}
+
+.scan-review-row-body {
   display: grid;
   gap: 0.4rem;
+}
+
+.scan-review-row-detail {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.76rem;
+}
+
+.scan-review-blank-button {
+  white-space: nowrap;
+}
+
+.scan-review-rubric-toggle {
+  justify-self: start;
+  padding: 0.15rem 0.5rem;
+  border: 1px dashed #b6c6da;
+  border-radius: 999px;
+  background: transparent;
+  color: #475569;
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+
+.scan-review-rubric {
+  padding: 0.5rem 0.6rem;
+  border: 1px solid #dce5ef;
+  border-radius: 8px;
+  background: #f7fafd;
+  font-size: 0.8rem;
+}
+
+.scan-review-rubric p {
+  margin: 0 0 0.35rem;
+}
+
+.scan-review-rubric ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.scan-review-rubric-prompt {
+  font-weight: 600;
+}
+
+.scan-review-rubric-empty,
+.scan-review-rubric-solution {
+  color: #64748b;
+}
+
+@media (max-width: 1000px) {
+  .scan-review-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .scan-review-sheet-column {
+    position: static;
+  }
 }
 
 .scan-review-table {
@@ -4015,4 +4162,119 @@ textarea {
   height: 100%;
   background: #2563eb;
   border-radius: 4px;
+}
+
+.response-sheet-select-all {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.3rem 0.1rem 0.5rem;
+  border-bottom: 1px solid #e2e8f0;
+  margin-bottom: 0.35rem;
+  color: #64748b;
+  font-size: 0.8rem;
+}
+
+/* Printings of one test stack together: the most recent reads as the card, the
+   reprints tuck underneath it. */
+.administered-test-stack {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.administered-test-stack-toggle {
+  justify-self: start;
+  margin-top: 0.35rem;
+  padding: 0.1rem 0.5rem;
+  border: 1px dashed #b6c6da;
+  border-radius: 999px;
+  background: transparent;
+  color: #475569;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.administered-test-earlier {
+  margin-left: 1.25rem;
+  background: #f7fafd;
+}
+
+.administered-test-handoff {
+  margin-bottom: 0.9rem;
+  border: 1px solid #d1dbe5;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.response-sheet-roster-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  padding-bottom: 0.5rem;
+}
+
+.response-sheet-student-tag {
+  margin-left: auto;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: #eef3f8;
+  color: #64748b;
+  font-size: 0.72rem;
+}
+
+.response-sheet-no-gradebook {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.response-sheet-no-gradebook-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.test-archive-browse-button {
+  white-space: nowrap;
+  font-size: 0.78rem;
+}
+
+.test-archive-dialog {
+  width: min(560px, 94vw);
+}
+
+.test-archive-list {
+  display: grid;
+  gap: 0.35rem;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.test-archive-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid #dce5ef;
+  border-radius: 8px;
+  background: #fbfdff;
+}
+
+.test-archive-row > div {
+  display: grid;
+}
+
+.test-archive-row span {
+  color: #64748b;
+  font-size: 0.78rem;
+}
+
+.test-builder-card-archive {
+  padding: 0.1rem 0.5rem;
+  border: 1px solid #d7e1eb;
+  border-radius: 999px;
+  background: transparent;
+  color: #475569;
+  font-size: 0.72rem;
+  cursor: pointer;
 }
