@@ -33,38 +33,87 @@ _SEARCH_WINDOW_FRACTION = 0.12
 _AREA_TOLERANCE = (0.25, 4.0)
 _FILL_SAMPLE_RADIUS_FRACTION = 0.7
 
+# The sheet prints its QR in a fixed corner, so looking there before scanning
+# the whole page is both quicker and more reliable: OpenCV localises a code
+# far better when it fills more of the frame.
+_QR_REGION_FRACTION = 0.42
+
+# OpenCV's QR localisation is sensitive to the pixel size the finder patterns
+# land on, and not monotonically so -- a code that fails at 600px wide reads
+# fine at 450px and again at 900px. Roughly 1% of codes are missed by any one
+# pass, so the ladder mixes thresholding with both up- and down-scaling and
+# stops at the first rung that reads. Otsu at 0.9 leads because it was the
+# single most reliable rung when this was measured over several hundred codes.
+_QR_DECODE_ATTEMPTS = (
+    (True, 0.9),
+    (False, 1.0),
+    (True, 1.0),
+    (False, 2.0),
+    (True, 0.6),
+    (False, 0.75),
+    (True, 1.5),
+    (False, 0.5),
+)
+
+# The whole-page fallback only has to cope with odd framing, and upscaling a
+# full 300dpi page is by far the most expensive thing here -- a page with no
+# readable code at all would otherwise spend a second being resized. The
+# corner crops above already carry the hard-to-localise codes.
+_QR_WHOLE_PAGE_ATTEMPTS = (
+    (True, 0.9),
+    (False, 1.0),
+    (True, 1.0),
+    (False, 0.5),
+)
+
+
+def _qr_search_regions(image: np.ndarray):
+    """Where a sheet's QR is worth looking for, and how hard to try there."""
+
+    height, width = image.shape[:2]
+    band = int(height * _QR_REGION_FRACTION)
+    side = int(width * _QR_REGION_FRACTION)
+    if band and side:
+        yield image[:band, width - side :], _QR_DECODE_ATTEMPTS
+        # Same corner on a page that went through the feeder upside down.
+        yield image[height - band :, :side], _QR_DECODE_ATTEMPTS
+    yield image, _QR_WHOLE_PAGE_ATTEMPTS
+
 
 def decode_qr_payload(image: np.ndarray) -> dict | None:
     """Read the sheet's QR, trying harder before giving up.
 
-    OpenCV's detector is sensitive to how many pixels the finder patterns land
-    on, so the same code reads on one pass and not the next when the scan sits
-    near that threshold. A sheet whose QR cannot be read has to be identified by
-    hand, so it is worth a couple of rescaled attempts first -- this matters for
-    real scans (phone photos, low-DPI scanners), not only for tight test images.
+    A sheet whose QR cannot be read has to be identified by hand, so it is
+    worth several attempts first -- and this matters for clean renders as much
+    as for real scans (phone photos, low-DPI scanners), because the detector's
+    blind spots depend on the code's own pattern, not only on scan quality.
     """
 
     detector = cv2.QRCodeDetector()
-    for scale, binarize in ((1.0, False), (2.0, False), (1.0, True), (0.5, False)):
-        candidate = image
-        if scale != 1.0:
-            interpolation = cv2.INTER_CUBIC if scale > 1.0 else cv2.INTER_AREA
-            candidate = cv2.resize(image, None, fx=scale, fy=scale, interpolation=interpolation)
-        if binarize:
-            # Pushes a washed-out or unevenly lit code back to clean black/white,
-            # which is the state the finder patterns are easiest to locate in.
-            _, candidate = cv2.threshold(
-                candidate, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
-            )
-        try:
-            data, _, _ = detector.detectAndDecode(candidate)
-        except cv2.error:
+    for region, attempts in _qr_search_regions(image):
+        if region.size == 0:
             continue
-        if not data:
-            continue
-        payload = parse_qr_payload(data)
-        if payload is not None:
-            return payload
+        # Pushes a washed-out or unevenly lit code back to clean black/white,
+        # which is the state the finder patterns are easiest to locate in.
+        # Thresholding per region beats one pass over the whole page, whose
+        # darkest content sits well away from the QR.
+        _, binarized = cv2.threshold(region, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        for binarize, scale in attempts:
+            candidate = binarized if binarize else region
+            if scale != 1.0:
+                interpolation = cv2.INTER_CUBIC if scale > 1.0 else cv2.INTER_AREA
+                candidate = cv2.resize(
+                    candidate, None, fx=scale, fy=scale, interpolation=interpolation
+                )
+            try:
+                data, _, _ = detector.detectAndDecode(candidate)
+            except cv2.error:
+                continue
+            if not data:
+                continue
+            payload = parse_qr_payload(data)
+            if payload is not None:
+                return payload
     return None
 
 

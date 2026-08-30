@@ -9,6 +9,9 @@ exactly what was filled. See docs/grading-plan.md's verification section.
 
 from __future__ import annotations
 
+import numpy as np
+import pytest
+
 from app.backend.grading.detect import decode_qr_payload, locate_fiducials, read_sheet
 from app.backend.grading.layout import SheetCopySpec, build_sheet_layout
 from app.backend.models import AnswerKeyItemModel, AnswerKeyModel
@@ -223,3 +226,53 @@ def test_the_qr_is_never_mistaken_for_a_corner_marker():
             actual_x, actual_y = found[marker.corner]
             drift = ((actual_x - expected_x) ** 2 + (actual_y - expected_y) ** 2) ** 0.5
             assert drift < 10, f"{marker.corner} drifted {drift:.0f}px -- the QR was picked up"
+
+
+# Real sheet ids whose QR OpenCV's detector fails to localise on a single pass.
+# They are not corrupt or low quality -- the detector's blind spots depend on
+# the code's own module pattern, so roughly one sheet id in a hundred renders
+# a code that one pass misses. These three were found by sweeping random ids
+# and are kept as fixtures because they reproduce exactly.
+_HARD_TO_LOCALISE_SHEET_IDS = ["F54E5B8906E6", "964433F3D485", "053BB3BFEC92"]
+
+
+@pytest.mark.parametrize("sheet_id", _HARD_TO_LOCALISE_SHEET_IDS)
+@pytest.mark.parametrize("page_size", ["letter", "half_letter"])
+def test_a_qr_the_detector_struggles_to_localise_is_still_read(sheet_id, page_size):
+    layout = build_sheet_layout(
+        layout_id="L",
+        answer_key=_mixed_answer_key(),
+        mode="blank",
+        page_size=page_size,
+        copies=[SheetCopySpec(sheet_id=sheet_id)],
+    )
+    image = rasterize_layout_page(layout, 0, 300)
+
+    assert decode_qr_payload(image) == {"sheet_id": sheet_id}
+
+
+@pytest.mark.parametrize("dpi", [200, 300, 400])
+def test_a_hard_to_localise_qr_is_read_at_any_scan_resolution(dpi):
+    layout = build_sheet_layout(
+        layout_id="L",
+        answer_key=_mixed_answer_key(),
+        mode="blank",
+        page_size="letter",
+        copies=[SheetCopySpec(sheet_id=_HARD_TO_LOCALISE_SHEET_IDS[0])],
+    )
+    image = rasterize_layout_page(layout, 0, dpi)
+
+    assert decode_qr_payload(image) == {"sheet_id": _HARD_TO_LOCALISE_SHEET_IDS[0]}
+
+
+def test_a_sheet_scanned_upside_down_still_reports_its_id():
+    layout = build_sheet_layout(
+        layout_id="L",
+        answer_key=_mixed_answer_key(),
+        mode="blank",
+        page_size="letter",
+        copies=[SheetCopySpec(sheet_id="A1B2C3D4E5F6")],
+    )
+    image = rasterize_layout_page(layout, 0, 300)
+
+    assert decode_qr_payload(np.rot90(image, 2).copy()) == {"sheet_id": "A1B2C3D4E5F6"}
