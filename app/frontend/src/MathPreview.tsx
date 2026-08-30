@@ -24,14 +24,42 @@ interface MathPreviewSection {
   preferWholeExpression?: boolean;
 }
 
-const COMMAND_PATTERN =
-  /\\(?:frac|sqrt|sum|int|lim|theta|pi|alpha|beta|gamma|delta|Delta|lambda|mu|sigma|omega|cdot|times|div|pm|leq|geq|neq|approx|implies|sin|cos|tan|left|right)\b/;
+// One list, used to build every pattern below. It used to be spelled out five
+// times, which is how a bug in the terminator could sit in all five at once.
+const MATH_COMMANDS =
+  "frac|sqrt|sum|int|lim|theta|pi|alpha|beta|gamma|delta|Delta|lambda|mu|sigma|omega|cdot|times|div|pm|leq|geq|neq|approx|implies|sin|cos|tan|left|right";
+
+/** A command name ends at the first character that is not a letter.
+ *
+ *  This has to be a lookahead, not `\b`: a word boundary treats `_` as a word
+ *  character, so `\lim_{x \to c}` read as no command at all and rendered as
+ *  raw LaTeX. Every subscripted command -- `\sum_`, `\int_`, `\theta_` -- hit
+ *  the same thing.
+ */
+const COMMAND_END = "(?![A-Za-z])";
+
+/** A subscript or superscript written as a braced group, which may contain
+ *  spaces (`_{x \to c}`). Matched as a unit so a bare-math span never stops
+ *  mid-group and hands KaTeX an unbalanced brace. */
+const SCRIPT_GROUP = "(?:[_^]\\{[^{}]*\\})?";
+
+const TRAILING_MATH_CHARS = "[A-Za-z0-9_^{}+\\-*/=().\\\\]*";
+
+const COMMAND_PATTERN = new RegExp(`\\\\(?:${MATH_COMMANDS})${COMMAND_END}`);
 const NOTATION_PATTERN = /(^|[\s([{=+\-*/])(?:[A-Za-z]\w*)\s*(?:\^\{?[-+]?\w+\}?|_\{?[-+]?\w+\}?)/;
 const CURRENCY_PATTERN = /^\s*\$?\d+(?:\.\d{1,2})?\s*$/;
-const BARE_MATH_PATTERN =
-  /\\(?:frac|sqrt)(?:\{[^{}]*\}){1,2}[A-Za-z0-9_^{}+\-*/=().\\]*|\\(?:sum|int|lim|theta|pi|alpha|beta|gamma|delta|Delta|lambda|mu|sigma|omega|cdot|times|div|pm|leq|geq|neq|approx|implies|sin|cos|tan|left|right)\b[A-Za-z0-9_^{}+\-*/=().\\]*|[A-Za-z]\w*\s*(?:\^\{?[-+]?\w+\}?|_\{?[-+]?\w+\}?)/g;
-const JSON_LATEX_ESCAPE_PATTERN =
-  /(^|[^\\])\\(frac|sqrt|sum|int|lim|theta|pi|alpha|beta|gamma|delta|Delta|lambda|mu|sigma|omega|cdot|times|div|pm|leq|geq|neq|approx|implies|sin|cos|tan|left|right|\(|\)|\[|\])/g;
+const BARE_MATH_PATTERN = new RegExp(
+  [
+    `\\\\(?:frac|sqrt)(?:\\{[^{}]*\\}){1,2}${TRAILING_MATH_CHARS}`,
+    `\\\\(?:${MATH_COMMANDS})${COMMAND_END}${SCRIPT_GROUP}${TRAILING_MATH_CHARS}`,
+    "[A-Za-z]\\w*\\s*(?:\\^\\{?[-+]?\\w+\\}?|_\\{?[-+]?\\w+\\}?)",
+  ].join("|"),
+  "g",
+);
+const JSON_LATEX_ESCAPE_PATTERN = new RegExp(
+  `(^|[^\\\\])\\\\(${MATH_COMMANDS}|\\(|\\)|\\[|\\])`,
+  "g",
+);
 
 export function hasMathMarkup(text: unknown): boolean {
   if (typeof text !== "string") return false;
@@ -316,9 +344,8 @@ function isLikelyWholeMathExpression(text: string): boolean {
   if (!hasMathCommand && !hasEquationSyntax) return false;
 
   const proseWords = value.match(/[A-Za-z]{4,}/g) ?? [];
-  const latexWords = value.match(
-    /\\(?:frac|sqrt|sum|int|lim|theta|pi|alpha|beta|gamma|delta|Delta|lambda|mu|sigma|omega|cdot|times|div|pm|leq|geq|neq|approx|implies|sin|cos|tan|left|right)\b/g,
-  ) ?? [];
+  const latexWords =
+    value.match(new RegExp(`\\\\(?:${MATH_COMMANDS})${COMMAND_END}`, "g")) ?? [];
 
   return proseWords.length <= latexWords.length + 2;
 }

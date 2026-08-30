@@ -24,6 +24,11 @@ from ..models import (
     SheetRowModel,
 )
 
+# Uppercase on purpose: with an uppercase hex id this whole payload fits QR's
+# alphanumeric mode, which packs it into a 21x21 grid instead of 25x25 without
+# giving up the default error correction that a smudged scan needs.
+QR_PAYLOAD_PREFIX = "NZS1:"
+
 PageSize = Literal["letter", "legal", "a4", "half_letter"]
 
 _PAGE_SIZES_PT: dict[PageSize, tuple[float, float]] = {
@@ -70,7 +75,10 @@ def _page_geometry(page_size: PageSize) -> _PageGeometry:
     width, height = _PAGE_SIZES_PT[page_size]
     compact = width < 500.0
     margin = 36.0 if compact else _MARGIN_PT
-    qr_size = 54.0 if compact else _QR_BOX_SIZE_PT
+    # Full size even on a half sheet. Shrinking the code shrinks every module
+    # with it, and the module is what a scanner has to resolve -- the narrow
+    # page still leaves a usable name field beside a full-size code.
+    qr_size = _QR_BOX_SIZE_PT
     header_height = 84.0 if compact else _HEADER_HEIGHT_PT
     # Whatever is left between the left margin and the QR, never less than a
     # width a name can actually be written in.
@@ -354,16 +362,13 @@ def _build_page(
 ) -> SheetPageModel:
     fiducials = _build_fiducials(page_width_pt, page_height_pt, geometry)
 
-    qr_payload = json.dumps(
-        {
-            "test_id": answer_key.test_id,
-            "version": answer_key.version,
-            "sheet_id": copy.sheet_id,
-            "page_index": page_index,
-            "student_id": copy.student_id,
-        },
-        separators=(",", ":"),
-    )
+    # Just the sheet's own id, prefixed so the format can be recognised and
+    # changed later. Everything else -- which test, which page, which student --
+    # is already in the snapshot this sheet_id resolves to, and every extra
+    # character made the code denser and harder to scan: the old JSON record
+    # needed a 45x45 grid where this needs 25x25, doubling the pixels per module
+    # at any given scan resolution.
+    qr_payload = f"{QR_PAYLOAD_PREFIX}{copy.sheet_id}"
     qr_box = CaptureBoxModel(
         x_pt=page_width_pt - geometry.margin - geometry.qr_size,
         y_pt=page_height_pt - geometry.margin - geometry.qr_size,
@@ -406,6 +411,7 @@ def _build_page(
         qr_payload=qr_payload,
         name_box=name_box,
         printed_name=printed_name,
+        student_id=copy.student_id,
         version_row=version_row,
         rows=rows,
     )

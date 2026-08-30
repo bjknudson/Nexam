@@ -3957,27 +3957,108 @@ textarea {
   gap: 0.9rem;
   align-items: start;
   min-width: 0;
+  min-height: 0;
 }
 
+/* The loupe is a child of this column, not of the clipped frame, so it can hang
+   over the sheet's edges -- which is where the question numbers live. */
 .scan-review-sheet-column {
   position: sticky;
   top: 0;
   min-width: 0;
 }
 
-.scan-review-image {
-  width: 100%;
-  height: auto;
+/* The frame is what holds the sheet's size. Zooming transforms the image inside
+   it and crops -- the frame never grows, so the review cards beside it stay put
+   and nothing has to scroll. */
+.scan-review-image-frame {
+  position: relative;
+  /* clip, not hidden: `hidden` still makes this a scroll container, so the
+     cropped sheet could be nudged around by a trackpad. Zooming should crop and
+     nothing else. */
+  overflow: clip;
   border: 1px solid #d1dbe5;
   border-radius: 10px;
   background: #ffffff;
+  cursor: zoom-in;
 }
 
+.scan-review-image-frame.zoomed {
+  cursor: zoom-out;
+}
+
+.scan-review-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  user-select: none;
+}
+
+/* Follows the cursor and must never eat the click that toggles the zoom. */
+.scan-review-loupe {
+  position: absolute;
+  width: 220px;
+  height: 220px;
+  margin-left: -110px;
+  margin-top: -110px;
+  border: 2px solid #1d4ed8;
+  /* Square, not a circle: a round window cuts the corners off exactly where the
+     question number and the last choice sit. */
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.28);
+  background-color: #ffffff;
+  background-repeat: no-repeat;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.scan-review-image-hint {
+  margin: 0.35rem 0 0;
+  color: #94a3b8;
+  font-size: 0.72rem;
+  text-align: center;
+}
+
+/* The sheet stays put while the corrections scroll beside it -- on a long test
+   the answers run past the bottom, and scrolling the whole page would take the
+   scan out of view exactly when it is needed for comparison. */
 .scan-review-review-column {
   display: grid;
   gap: 0.7rem;
   align-content: start;
   min-width: 0;
+  max-height: calc(100vh - 16rem);
+  overflow-y: auto;
+  padding-right: 0.35rem;
+}
+
+.scan-review-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.3rem 0;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #eef3f8;
+}
+
+.scan-review-nav span {
+  color: #64748b;
+  font-size: 0.78rem;
+}
+
+/* Last one is a plain footer -- only the top bar needs to stay in view. */
+.scan-review-review-column > .scan-review-nav:last-child {
+  position: static;
+}
+
+.scan-review-confirm {
+  justify-self: start;
+  border-color: #16a34a;
+  color: #15803d;
+  font-weight: 600;
 }
 
 .scan-review-identity h3 {
@@ -4277,4 +4358,76 @@ textarea {
   color: #475569;
   font-size: 0.72rem;
   cursor: pointer;
+}
+
+.report-excluded {
+  border-color: #f0b429;
+  background: #fffbeb;
+}
+
+.report-excluded h3 {
+  margin-top: 0;
+  color: #92400e;
+}
+
+.report-excluded > p {
+  margin: 0 0 0.6rem;
+  color: #92400e;
+  font-size: 0.85rem;
+}
+
+.report-excluded-sheet {
+  padding: 0.5rem 0.65rem;
+  border: 1px solid #f3d9a4;
+  border-radius: 8px;
+  background: #ffffff;
+  margin-bottom: 0.4rem;
+}
+
+.report-excluded-sheet ul {
+  margin: 0.3rem 0 0;
+  padding-left: 1.1rem;
+  color: #475569;
+  font-size: 0.85rem;
+}
+
+.scan-review-problems {
+  border-color: #f0b429;
+  background: #fffbeb;
+}
+
+.scan-review-problems h3 {
+  margin: 0 0 0.4rem;
+  color: #92400e;
+  font-size: 0.92rem;
+}
+
+.scan-review-problems ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: #475569;
+  font-size: 0.84rem;
+}
+
+.scan-review-problems > p {
+  margin: 0.45rem 0 0;
+  color: #92400e;
+  font-size: 0.78rem;
+}
+
+.scan-review-fixes {
+  margin: 0.4rem 0 0;
+  padding-left: 1.2rem;
+  display: grid;
+  gap: 0.5rem;
+  color: #475569;
+  font-size: 0.82rem;
+}
+
+.scan-review-fixes strong {
+  color: #92400e;
+}
+
+.scan-review-fixes .gradebook-manual-open {
+  margin-top: 0.3rem;
 }

@@ -657,6 +657,12 @@ export interface StudentScoreModel {
   flagged_answer_count: number;
 }
 
+export interface ExcludedSheetModel {
+  sheet_id: string;
+  student_display_name?: string | null;
+  reasons: string[];
+}
+
 export interface GradeReportModel {
   batch_id: string;
   snapshot_id: string;
@@ -665,6 +671,8 @@ export interface GradeReportModel {
   generated_at: string;
   scored_sheet_count: number;
   excluded_sheet_count: number;
+  /** Absent on reports produced before exclusions were explained. */
+  excluded_sheets?: ExcludedSheetModel[];
   total_possible_points: number;
   average_percent_correct: number;
   score_histogram: Record<string, number>;

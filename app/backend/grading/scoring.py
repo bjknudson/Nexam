@@ -15,6 +15,7 @@ from ..models import (
     AnswerKeyItemModel,
     ChoiceDistributionEntryModel,
     DetectedRowResultModel,
+    ExcludedSheetModel,
     GradeReportItemModel,
     GradeReportModel,
     GradeReportStandardModel,
@@ -92,6 +93,24 @@ def score_batch(
     scoreable_sheets = [sheet for sheet in batch.sheets if _is_scoreable(sheet, batch.snapshot_id)]
     excluded_count = len(batch.sheets) - len(scoreable_sheets)
 
+    excluded_sheets = []
+    for sheet in batch.sheets:
+        reasons = exclusion_reasons(sheet, batch.snapshot_id)
+        if not reasons:
+            continue
+        student = students_by_id.get(sheet.student_id or "")
+        excluded_sheets.append(
+            ExcludedSheetModel(
+                sheet_id=sheet.id,
+                student_display_name=(
+                    f"{student.first_name} {student.last_name}"
+                    if student
+                    else sheet.free_text_name
+                ),
+                reasons=reasons,
+            )
+        )
+
     accumulators = {
         item.question_id: _ItemAccumulator(item) for item in snapshot.answer_key.items
     }
@@ -145,6 +164,7 @@ def score_batch(
         generated_at=datetime.now(UTC),
         scored_sheet_count=len(scoreable_sheets),
         excluded_sheet_count=excluded_count,
+        excluded_sheets=excluded_sheets,
         total_possible_points=snapshot.answer_key.total_points,
         average_percent_correct=average_percent,
         score_histogram=dict(histogram),
@@ -181,12 +201,39 @@ def combine_by_standard(reports: list[GradeReportModel]) -> list[GradeReportStan
 
 
 def _is_scoreable(sheet: ScannedSheetModel, batch_snapshot_id: str) -> bool:
-    return (
-        sheet.snapshot_id == batch_snapshot_id
-        and sheet.identity_status != "qr_unreadable"
-        and sheet.fiducial_confidence is not None
-        and bool(sheet.row_results)
-    )
+    return not exclusion_reasons(sheet, batch_snapshot_id)
+
+
+def exclusion_reasons(sheet: ScannedSheetModel, batch_snapshot_id: str) -> list[str]:
+    """Why this sheet cannot be scored, in the teacher's terms.
+
+    Read from the sheet's own fields rather than from `identity_status`, which
+    is overwritten the moment someone resolves the identity by hand -- that
+    would erase the very reason the sheet was unusable and leave a page that
+    looks fixed but still cannot be scored.
+    """
+
+    reasons: list[str] = []
+
+    if sheet.snapshot_id is None:
+        reasons.append(
+            "The QR code could not be read, so this page was never matched to a printed test."
+        )
+    elif sheet.snapshot_id != batch_snapshot_id:
+        reasons.append(
+            "This page is from a different printing of the test. Versions and reprints each "
+            "get their own answer key, so it has to be scored with the batch it belongs to."
+        )
+
+    if sheet.fiducial_confidence is None:
+        reasons.append(
+            "The corner markers could not be found, so the page could not be lined up to read "
+            "answers. Rescan it flat and fully in frame."
+        )
+    elif not sheet.row_results:
+        reasons.append("No answer rows were read from this page.")
+
+    return reasons
 
 
 def _score_row(

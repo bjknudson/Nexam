@@ -253,3 +253,124 @@ def _all_correct_image_mc_only(snapshot, dpi=300):
     item = snapshot.answer_key.items[0]
     fill_cells(image, snapshot.layout, [row.cells[item.correct_choice_indices[0]]], dpi)
     return image
+
+
+def test_an_excluded_sheet_says_why_it_was_excluded(
+    bank_service: BankWorkspaceService, demo_bok: Path, tmp_path: Path
+) -> None:
+    """A bare count told the teacher something was wrong but not what."""
+
+    from app.backend.tests.grading_test_utils import png_bytes, rasterize_layout_page
+    import numpy as np
+
+    bank_service.open_bank(str(demo_bok))
+    gradebook_service = GradebookService()
+    gradebook_service.create_gradebook("Period 2", None, str(tmp_path / "why.nxgb"))
+
+    detail = bank_service.add_question_to_test(
+        bank_service.create_test_draft("Why Excluded", "A").test.id, "q_mc_0001"
+    )
+    snapshot = gradebook_service.create_snapshot_and_sheets(
+        test=detail.test,
+        questions=detail.questions,
+        source_bank_title="Demo Bank",
+        mode="blank",
+        page_size="letter",
+        blank_count=1,
+        student_ids=None,
+    )
+    batch = gradebook_service.create_scan_batch(snapshot.id, None)
+
+    # A page with nothing on it: no QR to match, no corners to line up.
+    blank_page = png_bytes(np.full((3300, 2550), 255, dtype=np.uint8))
+    gradebook_service.ingest_scan_batch(batch.id, [("blank.png", blank_page)])
+
+    report = gradebook_service.get_grade_report(batch.id)
+
+    assert report.excluded_sheet_count == 1
+    assert len(report.excluded_sheets) == 1
+    reasons = " ".join(report.excluded_sheets[0].reasons).lower()
+    assert "qr code could not be read" in reasons
+    assert "corner markers" in reasons
+
+
+def test_resolving_an_identity_does_not_hide_why_a_sheet_is_unscoreable(
+    bank_service: BankWorkspaceService, demo_bok: Path, tmp_path: Path
+) -> None:
+    """Naming the student overwrites identity_status, so the reason has to come
+    from the sheet's own fields or it disappears exactly when a teacher is
+    trying to work out what went wrong."""
+
+    from app.backend.tests.grading_test_utils import png_bytes
+    from app.backend.models import UpsertStudentRequest
+    import numpy as np
+
+    bank_service.open_bank(str(demo_bok))
+    gradebook_service = GradebookService()
+    gradebook_service.create_gradebook("Period 2", None, str(tmp_path / "masked.nxgb"))
+
+    detail = bank_service.add_question_to_test(
+        bank_service.create_test_draft("Masked", "A").test.id, "q_mc_0001"
+    )
+    snapshot = gradebook_service.create_snapshot_and_sheets(
+        test=detail.test,
+        questions=detail.questions,
+        source_bank_title="Demo Bank",
+        mode="blank",
+        page_size="letter",
+        blank_count=1,
+        student_ids=None,
+    )
+    batch = gradebook_service.create_scan_batch(snapshot.id, None)
+    blank_page = png_bytes(np.full((3300, 2550), 255, dtype=np.uint8))
+    updated = gradebook_service.ingest_scan_batch(batch.id, [("blank.png", blank_page)])
+
+    student = gradebook_service.upsert_student(
+        None, UpsertStudentRequest(first_name="Ada", last_name="Lovelace")
+    )
+    sheet = updated.sheets[0]
+    gradebook_service.resolve_sheet_identity(batch.id, sheet.id, student_id=student.id)
+
+    report = gradebook_service.get_grade_report(batch.id)
+
+    # Still excluded, still explained, and now attributed to the named student.
+    assert report.excluded_sheet_count == 1
+    excluded = report.excluded_sheets[0]
+    assert excluded.student_display_name == "Ada Lovelace"
+    assert excluded.reasons
+
+
+def test_a_sheet_from_another_printing_says_so(
+    bank_service: BankWorkspaceService, demo_bok: Path, tmp_path: Path
+) -> None:
+    from app.backend.tests.test_gradebook_scan_ingestion import _fill_correct_choice_png
+
+    bank_service.open_bank(str(demo_bok))
+    gradebook_service = GradebookService()
+    gradebook_service.create_gradebook("Period 2", None, str(tmp_path / "reprint.nxgb"))
+
+    detail = bank_service.add_question_to_test(
+        bank_service.create_test_draft("Reprinted", "A").test.id, "q_mc_0001"
+    )
+    common = dict(
+        test=detail.test,
+        questions=detail.questions,
+        source_bank_title="Demo Bank",
+        mode="blank",
+        page_size="letter",
+        blank_count=1,
+        student_ids=None,
+    )
+    first_printing = gradebook_service.create_snapshot_and_sheets(**common)
+    second_printing = gradebook_service.create_snapshot_and_sheets(**common)
+
+    # Scan a sheet from the first printing into the second printing's batch.
+    batch = gradebook_service.create_scan_batch(second_printing.id, None)
+    gradebook_service.ingest_scan_batch(
+        batch.id, [("stray.png", _fill_correct_choice_png(first_printing))]
+    )
+
+    report = gradebook_service.get_grade_report(batch.id)
+
+    assert report.excluded_sheet_count == 1
+    assert "different printing" in " ".join(report.excluded_sheets[0].reasons)

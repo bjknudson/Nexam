@@ -62,13 +62,33 @@ def decode_qr_payload(image: np.ndarray) -> dict | None:
             continue
         if not data:
             continue
-        try:
-            payload = json.loads(data)
-        except (json.JSONDecodeError, TypeError):
-            return None
-        if isinstance(payload, dict):
+        payload = parse_qr_payload(data)
+        if payload is not None:
             return payload
     return None
+
+
+QR_PAYLOAD_PREFIX = "NZS1:"
+
+
+def parse_qr_payload(data: str) -> dict | None:
+    """Read either payload format.
+
+    Sheets printed before the payload was trimmed carry a JSON record; new ones
+    carry `nzs1:<sheet_id>`. Both have to keep working, because the old ones are
+    paper already sitting in a filing cabinet.
+    """
+
+    text = data.strip()
+    if text.upper().startswith(QR_PAYLOAD_PREFIX):
+        sheet_id = text[len(QR_PAYLOAD_PREFIX) :]
+        return {"sheet_id": sheet_id} if sheet_id else None
+
+    try:
+        payload = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def detect_bubble_fill(roi_gray: np.ndarray) -> tuple[bool, float]:
@@ -95,11 +115,44 @@ def detect_bubble_fill(roi_gray: np.ndarray) -> tuple[bool, float]:
     return filled, min(1.0, max(0.0, confidence))
 
 
+def _mask_out_qr(
+    binary: np.ndarray,
+    page: SheetPageModel,
+    page_width_pt: float,
+    page_height_pt: float,
+    image_w: int,
+    image_h: int,
+) -> None:
+    box = page.qr_box
+    if box is None:
+        return
+
+    # A little wider than the box itself, to cover the code's quiet zone.
+    pad_pt = 6.0
+    x0 = int(((box.x_pt - pad_pt) / page_width_pt) * image_w)
+    x1 = int(((box.x_pt + box.width_pt + pad_pt) / page_width_pt) * image_w)
+    # Page coordinates run bottom-up; image rows run top-down.
+    y0 = int((1 - (box.y_pt + box.height_pt + pad_pt) / page_height_pt) * image_h)
+    y1 = int((1 - (box.y_pt - pad_pt) / page_height_pt) * image_h)
+
+    x0, x1 = max(0, x0), min(image_w, x1)
+    y0, y1 = max(0, y0), min(image_h, y1)
+    if x1 > x0 and y1 > y0:
+        binary[y0:y1, x0:x1] = 0
+
+
 def locate_fiducials(
     image_gray: np.ndarray, page: SheetPageModel, page_width_pt: float, page_height_pt: float
 ) -> dict[str, tuple[float, float]] | None:
     image_h, image_w = image_gray.shape[:2]
     _, binary = cv2.threshold(image_gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+    # Blank out the QR before hunting for corner markers. A QR's three finder
+    # patterns are solid dark squares of exactly the kind this looks for, and
+    # the sparser the code the closer they get to a fiducial's size -- close
+    # enough that one can be picked as the top-right marker, which skews the
+    # homography and quietly misreads most of the page rather than failing.
+    _mask_out_qr(binary, page, page_width_pt, page_height_pt, image_w, image_h)
 
     found: dict[str, tuple[float, float]] = {}
     window = int(max(image_w, image_h) * _SEARCH_WINDOW_FRACTION)

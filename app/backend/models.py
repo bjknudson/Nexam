@@ -921,6 +921,10 @@ class SheetPageModel(BaseModel):
     # or centers printed_name inside that same box when it's present.
     name_box: CaptureBoxModel | None = None
     printed_name: str | None = None
+    # Who this copy was printed for, in "pre_id" mode. Kept here rather than in
+    # the QR: the sheet is paper that leaves the building, and the roster id it
+    # would have carried is the same one an export keys on.
+    student_id: str | None = None
     # Present only on interchangeable sheets, and only on the first page: one
     # bubble per version, filled by the student to say which paper they got.
     version_row: SheetRowModel | None = None
@@ -1092,6 +1096,13 @@ class GradingBatchListResponseModel(BaseModel):
     items: list[GradingBatchModel] = Field(default_factory=list)
 
 
+class ReassignSheetRequest(BaseModel):
+    """Match a scan to a printing by hand when its QR could not be read."""
+
+    snapshot_id: str
+    page_index: int = 0
+
+
 class ResolveSheetIdentityRequest(BaseModel):
     student_id: str | None = None
     free_text_name: str | None = None
@@ -1151,6 +1162,21 @@ class StudentScoreModel(BaseModel):
     flagged_answer_count: int
 
 
+class ExcludedSheetModel(BaseModel):
+    """A sheet the report could not score, and why.
+
+    A bare count told the teacher something was wrong without telling them what,
+    and the reasons are not always visible on the sheet itself -- resolving an
+    identity, for instance, overwrites the status that said the QR was never
+    read. These are derived from the sheet's own fields so they stay true no
+    matter what has been edited since.
+    """
+
+    sheet_id: str
+    student_display_name: str | None = None
+    reasons: list[str] = Field(default_factory=list)
+
+
 class GradeReportModel(BaseModel):
     batch_id: str
     snapshot_id: str
@@ -1159,6 +1185,7 @@ class GradeReportModel(BaseModel):
     generated_at: datetime
     scored_sheet_count: int
     excluded_sheet_count: int
+    excluded_sheets: list[ExcludedSheetModel] = Field(default_factory=list)
     total_possible_points: float
     average_percent_correct: float
     score_histogram: dict[str, int] = Field(default_factory=dict)

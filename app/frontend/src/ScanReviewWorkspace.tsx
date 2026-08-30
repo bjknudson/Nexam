@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 
 import {
   getAdministeredTest,
@@ -6,12 +7,15 @@ import {
   getSheetImageUrl,
   ingestScans,
   listScanBatches,
+  listAdministeredTests,
   listStudents,
   overrideRowResult,
+  reassignSheetToPrinting,
   resolveSheetIdentity,
 } from "./api";
 import type {
   AdministeredTestSnapshotModel,
+  AdministeredTestSnapshotSummaryModel,
   DetectedRowResultModel,
   GradingBatchModel,
   ScannedSheetModel,
@@ -49,6 +53,29 @@ function shortAnswer(row: DetectedRowResultModel): string {
   // A student who answered nothing is a real, valid reading -- not an error.
   return "-";
 }
+
+/** Click-to-zoom factor. Enough to read a smudged bubble, small enough that the
+ *  surrounding rows stay visible for context. */
+const CLICK_ZOOM = 3;
+
+const LOUPE_SIZE_PX = 220;
+
+/** How much of the sheet the loupe shows across its width, in inches.
+ *
+ *  Sized by the paper rather than by a zoom factor: a question row is about
+ *  1.6in wide (the number plus five choices), and two inches holds one with
+ *  room plus three or four rows above and below. A fixed magnification would
+ *  show less of the sheet as the review panel got wider, which is exactly when
+ *  the numbers and bubbles would start falling outside the window.
+ */
+const LOUPE_SPAN_IN = 2.0;
+
+/** Hide the loupe this close to the sheet's edge, where it would mostly show
+ *  the blank beyond the paper. */
+const LOUPE_EDGE_GUARD_PX = 10;
+
+/** Fallback magnification for when the printed sheet's size is not known yet. */
+const LOUPE_ZOOM = 3;
 
 const ROW_KIND_LABEL: Record<string, string> = {
   multiple_choice: "Multiple Choice",
@@ -93,6 +120,53 @@ function sheetLabel(
   return `Sheet ${index + 1}`;
 }
 
+/** Scale about the top-left, then shift so the clicked point sits in the middle
+ *  of the frame -- clamped so the crop never runs off the sheet into blank space. */
+function sheetZoomStyle(point: { x: number; y: number }): CSSProperties {
+  const shift = (fraction: number) => {
+    const centred = 0.5 - fraction * CLICK_ZOOM;
+    // Percentages are of the image's own width/height, which is what the
+    // transform translates by.
+    const min = (1 - CLICK_ZOOM) * 100;
+    return Math.min(0, Math.max(min, centred * 100));
+  };
+  return {
+    transformOrigin: "0 0",
+    transform: `translate(${shift(point.x)}%, ${shift(point.y)}%) scale(${CLICK_ZOOM})`,
+  };
+}
+
+/** Why this sheet cannot be scored, in the same terms the report uses.
+ *
+ *  Derived from the sheet's own fields, not from `identity_status`: resolving an
+ *  identity by hand overwrites that status, which would erase the reason the
+ *  page was unusable and leave it looking fixed. Mirrors `exclusion_reasons`
+ *  in grading/scoring.py.
+ */
+function sheetProblems(sheet: ScannedSheetModel, batchSnapshotId: string | null): string[] {
+  const problems: string[] = [];
+
+  if (!sheet.snapshot_id) {
+    problems.push(
+      "The QR code could not be read, so this page was never matched to a printed test.",
+    );
+  } else if (batchSnapshotId && sheet.snapshot_id !== batchSnapshotId) {
+    problems.push(
+      "This page is from a different printing of the test, so it cannot be scored in this batch.",
+    );
+  }
+
+  if (sheet.fiducial_confidence == null) {
+    problems.push(
+      "The corner markers could not be found, so the page could not be lined up to read answers. Rescan it flat and fully in frame.",
+    );
+  } else if (!sheet.row_results.length) {
+    problems.push("No answer rows were read from this page.");
+  }
+
+  return problems;
+}
+
 function identityLabel(sheet: ScannedSheetModel): string {
   switch (sheet.identity_status) {
     case "pre_identified":
@@ -121,8 +195,17 @@ export default function ScanReviewWorkspace() {
   const [errorMessage, setErrorMessage] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
   const [snapshot, setSnapshot] = useState<AdministeredTestSnapshotModel | null>(null);
+  const [printings, setPrintings] = useState<AdministeredTestSnapshotSummaryModel[]>([]);
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
   const [openRubrics, setOpenRubrics] = useState<Record<string, boolean>>({});
+  // Click-to-zoom: the point to centre on, as a fraction of the sheet, or null
+  // for the whole page. The frame never resizes -- it crops.
+  const [zoomPoint, setZoomPoint] = useState<{ x: number; y: number } | null>(null);
+  // Loupe: where the cursor is over the sheet, and the sheet's rendered size.
+  const [loupe, setLoupe] = useState<
+    { cursorX: number; cursorY: number; x: number; y: number; width: number; height: number } | null
+  >(null);
+  const sheetImageRef = useRef<HTMLImageElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [freeTextName, setFreeTextName] = useState("");
@@ -169,11 +252,23 @@ export default function ScanReviewWorkspace() {
     selectedBatch?.sheets.filter((sheet) => filter === "all" || sheet.needs_review) ?? [];
   const selectedSheet = selectedBatch?.sheets.find((sheet) => sheet.id === selectedSheetId) ?? null;
 
+  // Stepping moves through the sheets the filter is showing, so "needs review"
+  // walks only the ones still outstanding.
+  const sheetPosition = visibleSheets.findIndex((sheet) => sheet.id === selectedSheetId);
+  const stepSheet = (direction: -1 | 1) => {
+    if (visibleSheets.length === 0) return;
+    const next = sheetPosition < 0 ? 0 : sheetPosition + direction;
+    const target = visibleSheets[Math.min(visibleSheets.length - 1, Math.max(0, next))];
+    if (target) setSelectedSheetId(target.id);
+  };
+
   useEffect(() => {
     setFreeTextName(selectedSheet?.free_text_name ?? "");
     setRowDrafts({});
     setExpandedRows({});
     setOpenRubrics({});
+    setZoomPoint(null);
+    setLoupe(null);
   }, [selectedSheet?.id]);
 
   // The printed questions come from the snapshot, not the bank: scoring a
@@ -197,6 +292,35 @@ export default function ScanReviewWorkspace() {
       cancelled = true;
     };
   }, [selectedBatch?.snapshot_id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void listAdministeredTests()
+      .then((response) => {
+        if (!cancelled) setPrintings(response.items);
+      })
+      .catch(() => {
+        if (!cancelled) setPrintings([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedBatchId]);
+
+  async function handleReassign(snapshotId: string) {
+    if (!selectedBatchId || !selectedSheet) return;
+    setBusy(true);
+    try {
+      await reassignSheetToPrinting(selectedBatchId, selectedSheet.id, snapshotId);
+      await refreshSelectedBatch(selectedBatchId);
+      setStatusMessage("Matched to that printing and read again.");
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   const questionsById = Object.fromEntries(
     (snapshot?.questions ?? []).map((question) => [question.id, question]),
@@ -274,6 +398,62 @@ export default function ScanReviewWorkspace() {
       });
       await refreshSelectedBatch(selectedBatchId);
       setStatusMessage("Answer corrected.");
+    } catch (error) {
+      setErrorMessage((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Accept what the detector read. A low-confidence mark is usually simply
+   *  correct, and confirming it is faster than retyping the same letter. */
+  async function handleConfirmDetected(row: DetectedRowResultModel) {
+    if (!selectedBatchId || !selectedSheet) return;
+    setBusy(true);
+    try {
+      if (row.kind === "numeric_response") {
+        await overrideRowResult(selectedBatchId, selectedSheet.id, row.question_id, {
+          overrideValue: row.detected_value ?? null,
+        });
+      } else {
+        await overrideRowResult(selectedBatchId, selectedSheet.id, row.question_id, {
+          overrideChoiceIndices: row.detected_choice_indices,
+        });
+      }
+      await refreshSelectedBatch(selectedBatchId);
+      setStatusMessage(`Question ${row.sheet_item_number} confirmed.`);
+    } catch (error) {
+      setErrorMessage((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Several letters at once: a question may be multiple-select, and even when
+   *  it is not, two marks is what the student actually did and should be
+   *  recorded as such rather than quietly reduced to one. */
+  async function handleApplyChoices(row: DetectedRowResultModel, letters: string) {
+    if (!selectedBatchId || !selectedSheet) return;
+    const indices = [
+      ...new Set(
+        letters
+          .toUpperCase()
+          .split(/[^A-Z]+/)
+          .join("")
+          .split("")
+          .map((letter) => letter.charCodeAt(0) - 65)
+          .filter((index) => index >= 0 && index < 26),
+      ),
+    ].sort((left, right) => left - right);
+
+    if (indices.length === 0) return;
+    setBusy(true);
+    try {
+      await overrideRowResult(selectedBatchId, selectedSheet.id, row.question_id, {
+        overrideChoiceIndices: indices,
+      });
+      await refreshSelectedBatch(selectedBatchId);
+      setStatusMessage(`Question ${row.sheet_item_number} set to ${letters.toUpperCase()}.`);
     } catch (error) {
       setErrorMessage((error as Error).message);
     } finally {
@@ -400,14 +580,178 @@ export default function ScanReviewWorkspace() {
             <>
               <div className="scan-review-split">
                 <div className="scan-review-sheet-column">
-                  <img
-                    className="scan-review-image"
-                    src={getSheetImageUrl(selectedBatchId ?? "", selectedSheet.id)}
-                    alt="Scanned response sheet"
-                  />
+                  <div
+                    className={`scan-review-image-frame ${zoomPoint ? "zoomed" : ""}`}
+                    onClick={(event) => {
+                      // Click toggles a 3x crop centred where you clicked. The
+                      // frame keeps its size, so the layout never shifts under
+                      // the cards beside it.
+                      if (zoomPoint) {
+                        setZoomPoint(null);
+                        return;
+                      }
+                      const bounds = event.currentTarget.getBoundingClientRect();
+                      setZoomPoint({
+                        x: (event.clientX - bounds.left) / bounds.width,
+                        y: (event.clientY - bounds.top) / bounds.height,
+                      });
+                    }}
+                    onMouseMove={(event) => {
+                      const image = sheetImageRef.current;
+                      if (!image) return;
+                      // Two frames of reference: the loupe is positioned inside
+                      // the frame, but what it magnifies is found in the image,
+                      // whose box the zoom transform has moved.
+                      const column = event.currentTarget.parentElement;
+                      if (!column) return;
+                      const columnBounds = column.getBoundingClientRect();
+                      const bounds = image.getBoundingClientRect();
+                      const x = (event.clientX - bounds.left) / bounds.width;
+                      const y = (event.clientY - bounds.top) / bounds.height;
+                      // Stop just short of the paper's edge: right on the border
+                      // the loupe would be showing mostly nothing.
+                      const edgeX = LOUPE_EDGE_GUARD_PX / bounds.width;
+                      const edgeY = LOUPE_EDGE_GUARD_PX / bounds.height;
+                      if (x < edgeX || x > 1 - edgeX || y < edgeY || y > 1 - edgeY) {
+                        setLoupe(null);
+                        return;
+                      }
+                      setLoupe({
+                        cursorX: event.clientX - columnBounds.left,
+                        cursorY: event.clientY - columnBounds.top,
+                        x,
+                        y,
+                        // Layout size, not the transformed box: the loupe should
+                        // magnify the sheet by the same amount whether or not
+                        // the click zoom is on, rather than compounding with it
+                        // until it is showing blank paper between bubbles.
+                        width: image.offsetWidth,
+                        height: image.offsetHeight,
+                      });
+                    }}
+                    onMouseLeave={() => setLoupe(null)}
+                    title={zoomPoint ? "Click to fit the whole page" : "Click to zoom in here"}
+                  >
+                    <img
+                      ref={sheetImageRef}
+                      className="scan-review-image"
+                      style={zoomPoint ? sheetZoomStyle(zoomPoint) : undefined}
+                      src={getSheetImageUrl(selectedBatchId ?? "", selectedSheet.id)}
+                      alt="Scanned response sheet"
+                      draggable={false}
+                    />
+
+                  </div>
+                    {loupe ? (
+                      <div
+                        className="scan-review-loupe"
+                        style={{
+                          left: loupe.cursorX,
+                          top: loupe.cursorY,
+                          backgroundImage: `url(${getSheetImageUrl(
+                            selectedBatchId ?? "",
+                            selectedSheet.id,
+                          )})`,
+                          ...(() => {
+                            const sheetWidthIn = snapshot
+                              ? snapshot.layout.page_width_pt / 72
+                              : null;
+                            // Render the whole sheet at the scale that puts
+                            // LOUPE_SPAN_IN of it across the window.
+                            const fullWidth = sheetWidthIn
+                              ? (LOUPE_SIZE_PX / LOUPE_SPAN_IN) * sheetWidthIn
+                              : loupe.width * LOUPE_ZOOM;
+                            const fullHeight = fullWidth * (loupe.height / loupe.width);
+                            return {
+                              backgroundSize: `${fullWidth}px ${fullHeight}px`,
+                              backgroundPosition: `${
+                                LOUPE_SIZE_PX / 2 - loupe.x * fullWidth
+                              }px ${LOUPE_SIZE_PX / 2 - loupe.y * fullHeight}px`,
+                            };
+                          })(),
+                        }}
+                      />
+                    ) : null}
+
+                  <p className="scan-review-image-hint">
+                    {zoomPoint
+                      ? "Zoomed 3x - click the sheet to fit the page again."
+                      : "Hover to magnify, click to zoom in."}
+                  </p>
                 </div>
 
                 <div className="scan-review-review-column">
+                  <div className="scan-review-nav">
+                    <button
+                      type="button"
+                      onClick={() => stepSheet(-1)}
+                      disabled={sheetPosition <= 0}
+                    >
+                      Previous
+                    </button>
+                    <span>
+                      {sheetPosition >= 0 ? sheetPosition + 1 : "-"} of {visibleSheets.length}
+                      {filter === "needs_review" ? " needing review" : " sheets"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => stepSheet(1)}
+                      disabled={sheetPosition < 0 || sheetPosition >= visibleSheets.length - 1}
+                    >
+                      Next
+                    </button>
+                  </div>
+
+                  {sheetProblems(selectedSheet, selectedBatch?.snapshot_id ?? null).length > 0 ? (
+                    <div className="standards-panel scan-review-problems">
+                      <h3>This sheet cannot be scored</h3>
+                      <ul>
+                        {sheetProblems(
+                          selectedSheet,
+                          selectedBatch?.snapshot_id ?? null,
+                        ).map((problem) => (
+                          <li key={problem}>{problem}</li>
+                        ))}
+                      </ul>
+                      <p>
+                        Naming the student does not fix these -- the page itself could not be
+                        read. Try one of these instead:
+                      </p>
+                      <ol className="scan-review-fixes">
+                        <li>
+                          <strong>Say which test this is.</strong> If the QR is damaged but the
+                          page is otherwise clean, matching it by hand lets the corner markers
+                          line it up and the answers read normally.
+                          <div className="gradebook-manual-open">
+                            <select
+                              value=""
+                              disabled={busy || printings.length === 0}
+                              onChange={(event) => {
+                                if (event.target.value) void handleReassign(event.target.value);
+                              }}
+                            >
+                              <option value="">
+                                {printings.length === 0
+                                  ? "No printings in this gradebook"
+                                  : "Match to a printing..."}
+                              </option>
+                              {printings.map((printing) => (
+                                <option key={printing.id} value={printing.id}>
+                                  {printing.title} - Version {printing.version} (
+                                  {new Date(printing.printed_at).toLocaleDateString()})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </li>
+                        <li>
+                          <strong>Rescan it.</strong> Flat, fully in frame, right way up. This is
+                          the only fix when the corner markers cannot be found at all.
+                        </li>
+                      </ol>
+                    </div>
+                  ) : null}
+
                   <div className="standards-panel scan-review-identity">
                     <h3>Identity: {identityLabel(selectedSheet)}</h3>
                     {selectedSheet.identity_status !== "pre_identified" ? (
@@ -491,6 +835,25 @@ export default function ScanReviewWorkspace() {
 
                               {expanded ? (
                                 <div className="scan-review-row-body">
+                                  {/* Only when there is a real reading to accept. A numeric
+                                      row whose digits came back "?" has nothing to confirm --
+                                      offering it would record an unusable value as settled. */}
+                                  {row.kind !== "manual_capture" &&
+                                  needsReview &&
+                                  (row.kind === "numeric_response"
+                                    ? row.detected_value != null
+                                    : row.detected_choice_indices.length > 0) ? (
+                                    <button
+                                      type="button"
+                                      className="scan-review-confirm"
+                                      disabled={busy}
+                                      onClick={() => void handleConfirmDetected(row)}
+                                      title="Accept what was read and clear the flag"
+                                    >
+                                      Confirm {shortAnswer(row)}
+                                    </button>
+                                  ) : null}
+
                                   {row.kind !== "manual_capture" ? (
                                     <p className="scan-review-row-detail">
                                       {row.flag === "none" ? "Clear read" : row.flag.replace(/_/g, " ")}
@@ -574,8 +937,8 @@ export default function ScanReviewWorkspace() {
                                     <div className="gradebook-manual-open">
                                       <input
                                         type="text"
-                                        maxLength={1}
-                                        placeholder="A, B, C..."
+                                        maxLength={6}
+                                        placeholder="A, or AC for two marks"
                                         value={rowDrafts[row.question_id] ?? ""}
                                         onChange={(event) =>
                                           setRowDrafts((current) => ({
@@ -583,19 +946,24 @@ export default function ScanReviewWorkspace() {
                                             [row.question_id]: event.target.value,
                                           }))
                                         }
+                                        onKeyDown={(event) => {
+                                          if (event.key === "Enter" && rowDrafts[row.question_id]) {
+                                            void handleApplyChoices(
+                                              row,
+                                              rowDrafts[row.question_id] ?? "",
+                                            );
+                                          }
+                                        }}
                                       />
                                       <button
                                         type="button"
                                         disabled={busy || !rowDrafts[row.question_id]}
-                                        onClick={() => {
-                                          const letter = (rowDrafts[row.question_id] ?? "")
-                                            .trim()
-                                            .toUpperCase();
-                                          const choiceIndex = letter.charCodeAt(0) - 65;
-                                          if (letter.length === 1 && choiceIndex >= 0) {
-                                            void handleOverrideChoice(row, choiceIndex);
-                                          }
-                                        }}
+                                        onClick={() =>
+                                          void handleApplyChoices(
+                                            row,
+                                            rowDrafts[row.question_id] ?? "",
+                                          )
+                                        }
                                       >
                                         Apply
                                       </button>
@@ -650,6 +1018,27 @@ export default function ScanReviewWorkspace() {
                       </div>
                     </section>
                   ))}
+
+                  <div className="scan-review-nav">
+                    <button
+                      type="button"
+                      onClick={() => stepSheet(-1)}
+                      disabled={sheetPosition <= 0}
+                    >
+                      Previous
+                    </button>
+                    <span>
+                      {sheetPosition >= 0 ? sheetPosition + 1 : "-"} of {visibleSheets.length}
+                      {filter === "needs_review" ? " needing review" : " sheets"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => stepSheet(1)}
+                      disabled={sheetPosition < 0 || sheetPosition >= visibleSheets.length - 1}
+                    >
+                      Next
+                    </button>
+                  </div>
                 </div>
               </div>
             </>

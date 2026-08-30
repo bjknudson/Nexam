@@ -320,3 +320,144 @@ def test_a_sheet_of_blanks_can_be_fully_reviewed(
 
     # Every question answered "nothing" still finishes review.
     assert sheet.needs_review is False
+
+
+def test_a_sheet_with_an_unreadable_qr_can_be_matched_to_a_printing_by_hand(
+    bank_service: BankWorkspaceService, demo_bok: Path, tmp_path: Path
+) -> None:
+    """A damaged QR leaves a readable page unscoreable. If a human can say which
+    test it is, the corner markers still line it up and it scores normally."""
+
+    import cv2
+    from app.backend.tests.grading_test_utils import png_bytes, rasterize_layout_page
+
+    bank_service.open_bank(str(demo_bok))
+    gradebook_service = GradebookService()
+    snapshot = _hand_off(bank_service, gradebook_service, tmp_path)
+
+    # A real page with its QR scribbled out.
+    image = rasterize_layout_page(snapshot.layout, 0, 300)
+    page = snapshot.layout.pages[0]
+    scale = 300 / 72
+    box = page.qr_box
+    cv2.rectangle(
+        image,
+        (int(box.x_pt * scale), int((snapshot.layout.page_height_pt - box.y_pt - box.height_pt) * scale)),
+        (
+            int((box.x_pt + box.width_pt) * scale),
+            int((snapshot.layout.page_height_pt - box.y_pt) * scale),
+        ),
+        0,
+        -1,
+    )
+    correct = snapshot.answer_key.items[0].correct_choice_indices[0]
+    from app.backend.tests.grading_test_utils import fill_cells
+
+    fill_cells(image, snapshot.layout, [page.rows[0].cells[correct]], 300)
+
+    batch = gradebook_service.create_scan_batch(snapshot.id, None)
+    updated = gradebook_service.ingest_scan_batch(batch.id, [("damaged.png", png_bytes(image))])
+    sheet = updated.sheets[0]
+
+    # As ingested it is unusable: no printing, no rows.
+    assert sheet.identity_status == "qr_unreadable"
+    assert sheet.row_results == []
+
+    recovered = gradebook_service.reassign_sheet_to_printing(batch.id, sheet.id, snapshot.id)
+
+    assert recovered.snapshot_id == snapshot.id
+    assert recovered.fiducial_confidence is not None
+    assert recovered.row_results, "the page should read once it is matched by hand"
+    assert recovered.row_results[0].detected_choice_indices == [correct]
+
+
+def test_matching_by_hand_still_fails_loudly_on_a_page_that_cannot_be_lined_up(
+    bank_service: BankWorkspaceService, demo_bok: Path, tmp_path: Path
+) -> None:
+    """Naming a printing must not become a way to pretend a blank page was read."""
+
+    import numpy as np
+    from app.backend.tests.grading_test_utils import png_bytes
+
+    bank_service.open_bank(str(demo_bok))
+    gradebook_service = GradebookService()
+    snapshot = _hand_off(bank_service, gradebook_service, tmp_path)
+    batch = gradebook_service.create_scan_batch(snapshot.id, None)
+    updated = gradebook_service.ingest_scan_batch(
+        batch.id, [("blank.png", png_bytes(np.full((3300, 2550), 255, dtype=np.uint8)))]
+    )
+
+    with pytest.raises(BankWorkspaceError) as exc_info:
+        gradebook_service.reassign_sheet_to_printing(
+            batch.id, updated.sheets[0].id, snapshot.id
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "corner markers" in exc_info.value.message
+
+
+def test_confirming_a_low_confidence_read_resolves_it_without_retyping(
+    bank_service: BankWorkspaceService, demo_bok: Path, tmp_path: Path
+) -> None:
+    """A faint but correct mark is the common case; accepting the read is the
+    whole interaction, and it must clear the flag."""
+
+    bank_service.open_bank(str(demo_bok))
+    gradebook_service = GradebookService()
+    snapshot = _hand_off(bank_service, gradebook_service, tmp_path)
+    student = gradebook_service.upsert_student(
+        None, UpsertStudentRequest(first_name="Ada", last_name="Lovelace")
+    )
+    batch_id, sheet_id = _ingest_blank_sheet(gradebook_service, snapshot)
+    gradebook_service.resolve_sheet_identity(batch_id, sheet_id, student_id=student.id)
+
+    question_id = snapshot.answer_key.items[0].question_id
+    # Confirming is an override set to exactly what the detector read.
+    updated = gradebook_service.override_row_result(
+        batch_id, sheet_id, question_id, override_choice_indices=[2]
+    )
+
+    row = next(r for r in updated.row_results if r.question_id == question_id)
+    assert row.override_choice_indices == [2]
+    assert updated.needs_review is False
+
+
+def test_two_marks_score_against_a_multi_select_key(
+    bank_service: BankWorkspaceService, demo_bok: Path, tmp_path: Path
+) -> None:
+    """A multiple-select question is right only when the marks match the key
+    exactly, and the same two marks on a single-select question are wrong."""
+
+    from app.backend.grading.scoring import score_batch
+    from app.backend.models import AnswerKeyItemModel
+
+    bank_service.open_bank(str(demo_bok))
+    gradebook_service = GradebookService()
+    snapshot = _hand_off(bank_service, gradebook_service, tmp_path)
+    student = gradebook_service.upsert_student(
+        None, UpsertStudentRequest(first_name="Ada", last_name="Lovelace")
+    )
+    batch_id, sheet_id = _ingest_blank_sheet(gradebook_service, snapshot)
+    gradebook_service.resolve_sheet_identity(batch_id, sheet_id, student_id=student.id)
+
+    question_id = snapshot.answer_key.items[0].question_id
+    gradebook_service.override_row_result(
+        batch_id, sheet_id, question_id, override_choice_indices=[0, 2]
+    )
+    batch = gradebook_service.get_scan_batch(batch_id)
+    students = gradebook_service.list_students().items
+
+    # Against a key that wants exactly those two, the answer is right.
+    multi = snapshot.model_copy(deep=True)
+    multi.answer_key.items[0] = AnswerKeyItemModel(
+        **{**snapshot.answer_key.items[0].model_dump(), "correct_choice_indices": [0, 2]}
+    )
+    assert score_batch(batch, multi, students).student_scores[0].points_earned > 0
+
+    # Against a single-answer key, two marks are wrong -- not silently reduced.
+    single = snapshot.model_copy(deep=True)
+    single.answer_key.items[0] = AnswerKeyItemModel(
+        **{**snapshot.answer_key.items[0].model_dump(), "correct_choice_indices": [0]}
+    )
+    by_item = {item.question_id: item for item in score_batch(batch, single, students).by_item}
+    assert by_item[question_id].full_credit_count == 0

@@ -9,7 +9,7 @@ exactly what was filled. See docs/grading-plan.md's verification section.
 
 from __future__ import annotations
 
-from app.backend.grading.detect import decode_qr_payload, read_sheet
+from app.backend.grading.detect import decode_qr_payload, locate_fiducials, read_sheet
 from app.backend.grading.layout import SheetCopySpec, build_sheet_layout
 from app.backend.models import AnswerKeyItemModel, AnswerKeyModel
 
@@ -153,14 +153,9 @@ def test_qr_reads_correctly_alongside_filled_bubbles():
     mc_row = page.rows[0]
     fill_cells(image, layout, [mc_row.cells[2]], 300)
 
-    payload = decode_qr_payload(image)
-    assert payload == {
-        "test_id": "t1",
-        "version": "A",
-        "sheet_id": "sheet-1",
-        "page_index": 0,
-        "student_id": None,
-    }
+    # The payload is just the sheet id: everything else is already in the
+    # snapshot it resolves to, and every extra character made the code denser.
+    assert decode_qr_payload(image) == {"sheet_id": "sheet-1"}
 
 
 def test_corrupted_qr_region_is_unreadable():
@@ -175,3 +170,56 @@ def test_corrupted_qr_region_is_unreadable():
     image[y0:y1, x0:x1] = 0
 
     assert decode_qr_payload(image) is None
+
+
+def test_old_json_payloads_still_decode():
+    """Sheets printed before the payload was trimmed are paper that already
+    exists, so their QR has to keep working."""
+
+    from app.backend.grading.detect import parse_qr_payload
+
+    old_style = (
+        '{"test_id":"t1","version":"A","sheet_id":"sheet-1","page_index":0,"student_id":null}'
+    )
+    assert parse_qr_payload(old_style) == {
+        "test_id": "t1",
+        "version": "A",
+        "sheet_id": "sheet-1",
+        "page_index": 0,
+        "student_id": None,
+    }
+    assert parse_qr_payload("nzs1:sheet-1") == {"sheet_id": "sheet-1"}
+    assert parse_qr_payload("not a payload") is None
+
+
+def test_the_qr_is_never_mistaken_for_a_corner_marker():
+    """A QR's finder patterns are solid dark squares of about a fiducial's size.
+
+    Picking one as the top-right marker skews the homography, which does not
+    fail loudly -- it quietly misreads most of the answers on the page. This is
+    checked across many payloads because the code pattern changes with the id.
+    """
+
+    import uuid
+    from app.backend.grading.layout import SheetCopySpec, build_sheet_layout
+
+    for _ in range(8):
+        layout = build_sheet_layout(
+            layout_id="L",
+            answer_key=_mixed_answer_key(),
+            mode="blank",
+            page_size="letter",
+            copies=[SheetCopySpec(sheet_id=uuid.uuid4().hex[:16])],
+        )
+        page = layout.pages[0]
+        image = rasterize_layout_page(layout, 0, 300)
+
+        found = locate_fiducials(image, page, layout.page_width_pt, layout.page_height_pt)
+        assert found is not None
+
+        for marker in page.fiducials:
+            expected_x = (marker.center_x_pt / layout.page_width_pt) * image.shape[1]
+            expected_y = (1 - marker.center_y_pt / layout.page_height_pt) * image.shape[0]
+            actual_x, actual_y = found[marker.corner]
+            drift = ((actual_x - expected_x) ** 2 + (actual_y - expected_y) ** 2) ** 0.5
+            assert drift < 10, f"{marker.corner} drifted {drift:.0f}px -- the QR was picked up"

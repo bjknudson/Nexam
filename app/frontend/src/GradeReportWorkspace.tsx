@@ -145,6 +145,28 @@ export default function GradeReportWorkspace() {
             <span className="status-pill">{report.average_percent_correct.toFixed(1)}% average</span>
           </div>
 
+          {(report.excluded_sheets ?? []).length > 0 ? (
+            <section className="standards-panel report-excluded">
+              <h3>
+                {(report.excluded_sheets ?? []).length} sheet
+                {(report.excluded_sheets ?? []).length === 1 ? "" : "s"} not scored
+              </h3>
+              <p>
+                These pages are not counted in anything below. Each one says what stopped it.
+              </p>
+              {(report.excluded_sheets ?? []).map((excluded) => (
+                <div className="report-excluded-sheet" key={excluded.sheet_id}>
+                  <strong>{excluded.student_display_name || "Unidentified sheet"}</strong>
+                  <ul>
+                    {excluded.reasons.map((reason) => (
+                      <li key={reason}>{reason}</li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </section>
+          ) : null}
+
           <section className="standards-panel">
             <h3>Score distribution</h3>
             <ScoreHistogram histogram={report.score_histogram} />

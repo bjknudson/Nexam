@@ -833,6 +833,27 @@ export async function resolveSheetIdentity(
   );
 }
 
+/** Match a scan to a printing by hand when its QR could not be read. */
+export async function reassignSheetToPrinting(
+  batchId: string,
+  sheetId: string,
+  snapshotId: string,
+  pageIndex = 0,
+): Promise<ScannedSheetModel> {
+  return handleResponse(
+    await fetch(
+      buildApiUrl(
+        `/api/gradebook/batches/${encodeURIComponent(batchId)}/sheets/${encodeURIComponent(sheetId)}/printing`,
+      ),
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ snapshot_id: snapshotId, page_index: pageIndex }),
+      },
+    ),
+  );
+}
+
 export async function overrideRowResult(
   batchId: string,
   sheetId: string,

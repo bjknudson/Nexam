@@ -20,10 +20,10 @@
   "teacher_notes": "Tests understanding of the formal definition of continuity.",
   "answer": {
     "choices": [
-      "\\lim_{x \\to c} f(x) = f(c)",
-      "f'(c) exists",
-      "\\lim_{x \\to c} f(x) = 0",
-      "f(c) = 0"
+      "$\\lim_{x \\to c} f(x) = f(c)$",
+      "$f'(c)$ exists",
+      "$\\lim_{x \\to c} f(x) = 0$",
+      "$f(c) = 0$"
     ],
     "correct_choice_index": 0
   },

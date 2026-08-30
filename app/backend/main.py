@@ -35,6 +35,7 @@ from .models import (
     QuestionImportRowUpdateRequest,
     QuestionModel,
     QuestionType,
+    ReassignSheetRequest,
     RecordPerformanceRunRequest,
     ResolveSheetIdentityRequest,
     SaveBankRequest,
@@ -306,6 +307,13 @@ def resolve_sheet_identity(batch_id: str, sheet_id: str, request: ResolveSheetId
         sheet_id,
         student_id=request.student_id,
         free_text_name=request.free_text_name,
+    )
+
+
+@app.put("/api/gradebook/batches/{batch_id}/sheets/{sheet_id}/printing")
+def reassign_sheet_to_printing(batch_id: str, sheet_id: str, request: ReassignSheetRequest):
+    return gradebook_service.reassign_sheet_to_printing(
+        batch_id, sheet_id, request.snapshot_id, request.page_index
     )
 
 

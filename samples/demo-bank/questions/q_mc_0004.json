@@ -21,10 +21,10 @@
   "teacher_notes": null,
   "answer": {
     "choices": [
-      "y - \\frac{\\sqrt{3}}{2} = \\frac{1}{2}\\left(x - \\frac{\\pi}{3}\\right)",
-      "y - \\frac{1}{2} = \\frac{\\sqrt{3}}{2}\\left(x - \\frac{\\pi}{3}\\right)",
-      "y - \\frac{\\sqrt{3}}{2} = -\\frac{1}{2}\\left(x - \\frac{\\pi}{3}\\right)",
-      "y - \\frac{\\sqrt{3}}{2} = \\frac{1}{2}x"
+      "$y - \\frac{\\sqrt{3}}{2} = \\frac{1}{2}\\left(x - \\frac{\\pi}{3}\\right)$",
+      "$y - \\frac{1}{2} = \\frac{\\sqrt{3}}{2}\\left(x - \\frac{\\pi}{3}\\right)$",
+      "$y - \\frac{\\sqrt{3}}{2} = -\\frac{1}{2}\\left(x - \\frac{\\pi}{3}\\right)$",
+      "$y - \\frac{\\sqrt{3}}{2} = \\frac{1}{2}x$"
     ],
     "correct_choice_index": 0
   },

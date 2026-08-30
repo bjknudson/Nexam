@@ -14,7 +14,7 @@ import pymupdf
 from PIL import Image
 
 from .grading.answer_key import derive_answer_key
-from .grading.detect import decode_qr_payload, read_sheet
+from .grading.detect import decode_qr_payload, parse_qr_payload, read_sheet
 from .grading.layout import SheetCopySpec, build_sheet_layout
 from .grading.pdf import render_sheet_layout_to_pdf
 from .grading.scoring import combine_by_standard, score_batch
@@ -48,6 +48,18 @@ _SCAN_RASTER_DPI = 300
 
 
 _UNSET_PAYLOAD: dict = {"__unset__": True}
+
+
+def _new_sheet_id() -> str:
+    """12 uppercase hex characters.
+
+    48 bits is unique enough for every sheet a gradebook will ever hold, and
+    uppercase keeps the payload inside QR's alphanumeric character set. The two
+    together fit the smallest QR there is, which is what decides how many
+    scanner pixels land on each module.
+    """
+
+    return uuid.uuid4().hex[:12].upper()
 
 
 class GradebookService:
@@ -331,7 +343,7 @@ class GradebookService:
                     raise BankWorkspaceError(f"Student not found: {student_id}", status_code=404)
                 copies.append(
                     SheetCopySpec(
-                        sheet_id=uuid.uuid4().hex,
+                        sheet_id=_new_sheet_id(),
                         student_id=student.id,
                         printed_name=f"{student.first_name} {student.last_name}",
                     )
@@ -339,7 +351,7 @@ class GradebookService:
             return copies
 
         count = blank_count if blank_count and blank_count > 0 else 1
-        return [SheetCopySpec(sheet_id=uuid.uuid4().hex) for _ in range(count)]
+        return [SheetCopySpec(sheet_id=_new_sheet_id()) for _ in range(count)]
 
     def list_administered_tests(self) -> AdministeredTestSnapshotListResponseModel:
         summaries = [self._snapshot_summary(snapshot) for snapshot in self._read_all_snapshots()]
@@ -577,6 +589,74 @@ class GradebookService:
         sheet = self._find_sheet(batch, sheet_id)
         return (workspace_path / sheet.source_image_path).read_bytes()
 
+    def reassign_sheet_to_printing(
+        self, batch_id: str, sheet_id: str, snapshot_id: str, page_index: int = 0
+    ) -> ScannedSheetModel:
+        """Read a scan against a printing the teacher names, instead of the QR.
+
+        A damaged or unreadable QR leaves a perfectly good page unscoreable, and
+        a page from an earlier printing lands in the wrong batch. Both are
+        recoverable when a human can say which test the paper is: the corner
+        markers still line the page up, and the layout supplies the rest.
+
+        The read is redone from the stored scan, so this is not a way to assert
+        answers -- if the page still cannot be lined up, it still fails, and it
+        says so.
+        """
+
+        _, workspace_path = self.ensure_open()
+        batch = self._read_batch(batch_id)
+        sheet = self._find_sheet(batch, sheet_id)
+        snapshot = self.get_snapshot(snapshot_id)
+
+        if snapshot.id != batch.snapshot_id:
+            raise BankWorkspaceError(
+                "That printing belongs to a different batch. Move the sheet to that batch, or "
+                "pick the printing this batch was made for.",
+                status_code=400,
+            )
+
+        pages = snapshot.layout.pages
+        page = next((p for p in pages if p.page_index == page_index), pages[0] if pages else None)
+        if page is None:
+            raise BankWorkspaceError("That printing has no pages to match.", status_code=400)
+
+        image_bytes = (workspace_path / sheet.source_image_path).read_bytes()
+        images = list(self._rasterize_upload(sheet.source_image_path, image_bytes))
+        if not images:
+            raise BankWorkspaceError("The stored scan could not be read back.", status_code=400)
+
+        row_results, fiducial_confidence, detected_version = read_sheet(
+            images[0],
+            page,
+            snapshot.layout.page_width_pt,
+            snapshot.layout.page_height_pt,
+            version_labels=snapshot.layout.version_labels,
+        )
+
+        if fiducial_confidence is None:
+            raise BankWorkspaceError(
+                "The page still could not be lined up: its corner markers were not found. "
+                "Rescan it flat, fully in frame, and right way up.",
+                status_code=400,
+            )
+
+        sheet.snapshot_id = snapshot.id
+        sheet.layout_id = snapshot.layout.id
+        sheet.page_index = page.page_index
+        sheet.fiducial_confidence = fiducial_confidence
+        sheet.detected_version = detected_version
+        sheet.row_results = row_results
+        # The page is now matched by hand; keep whoever it was already attributed to.
+        if sheet.identity_status in ("qr_unreadable", "wrong_snapshot", "unresolved"):
+            sheet.identity_status = (
+                "manually_resolved" if (sheet.student_id or sheet.free_text_name) else "unresolved"
+            )
+        sheet.needs_review = sheet_needs_review(sheet)
+
+        self._write_batch(workspace_path, batch)
+        return sheet
+
     def resolve_sheet_identity(
         self,
         batch_id: str,
@@ -690,7 +770,9 @@ class GradebookService:
             )
 
         snapshot, page = match
-        student_id = payload.get("student_id")
+        # From the page, falling back to the payload for sheets printed before
+        # the student id was taken out of the QR.
+        student_id = page.student_id or payload.get("student_id")
         if snapshot.id != batch.snapshot_id:
             identity_status = "wrong_snapshot"
         elif student_id:
@@ -712,7 +794,7 @@ class GradebookService:
             layout_id=snapshot.layout.id,
             sheet_id=sheet_id,
             source_image_path=relative_image_path,
-            page_index=payload.get("page_index", 0),
+            page_index=page.page_index,
             student_id=student_id,
             identity_status=identity_status,
             fiducial_confidence=fiducial_confidence,
@@ -733,9 +815,8 @@ class GradebookService:
         lookup: dict[str, tuple[AdministeredTestSnapshotModel, SheetPageModel]] = {}
         for snapshot in self._read_all_snapshots():
             for page in snapshot.layout.pages:
-                try:
-                    page_payload = json.loads(page.qr_payload)
-                except (json.JSONDecodeError, TypeError):
+                page_payload = parse_qr_payload(page.qr_payload)
+                if page_payload is None:
                     continue
                 page_sheet_id = page_payload.get("sheet_id")
                 if isinstance(page_sheet_id, str):
