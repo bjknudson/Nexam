@@ -15,6 +15,9 @@ type PaneKind =
 
 interface OpenPaneWindowOptions {
   mode?: string;
+  /** An administered-test snapshot id, for panes that can render from a
+   *  frozen gradebook snapshot instead of (or in addition to) `mode`. */
+  snapshotId?: string;
   width?: number;
   height?: number;
 }
@@ -128,12 +131,20 @@ export async function openPaneWindow(
   options: OpenPaneWindowOptions = {},
 ): Promise<void> {
   const url = new URL(window.location.href);
+  // Reset rather than reuse the caller's query string: a pane opened from
+  // within the gradebook window (`?app=gradebook`) must not carry that param
+  // into the new window, or it would render the gradebook shell instead of
+  // this pane.
+  url.search = "";
   url.searchParams.set("pane", pane);
   if (options.mode) {
     url.searchParams.set("mode", options.mode);
   }
+  if (options.snapshotId) {
+    url.searchParams.set("snapshot", options.snapshotId);
+  }
 
-  const label = getPaneWindowLabel(pane, options.mode);
+  const label = getPaneWindowLabel(pane, options.mode ?? options.snapshotId);
 
   if (!isDesktopShell()) {
     const popup = window.open(
@@ -205,6 +216,18 @@ export async function openGradebookWindow(
   const existing = await WebviewWindow.getByLabel(GRADEBOOK_WINDOW_LABEL);
 
   if (existing) {
+    // Reusing the window means it never reloads, so a fresh `intent` in the
+    // URL would otherwise just be silently ignored -- this is what made
+    // "Open Gradebook" while one was already open look like it did nothing.
+    if (intent) {
+      try {
+        const channel = new BroadcastChannel("nexzam-pane-sync");
+        channel.postMessage({ type: "gradebook-open-intent", intent });
+        channel.close();
+      } catch {
+        // BroadcastChannel is a convenience here, never a requirement.
+      }
+    }
     await existing.show();
     await existing.setFocus();
     return;

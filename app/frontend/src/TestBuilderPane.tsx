@@ -33,6 +33,9 @@ interface TestBuilderPaneProps {
   onArchiveTest: (testId: string) => void;
   onOpenPrintPreview: () => void;
   onOpenResponseSheetPrint: () => void;
+  /** Finish the open test (if not already) and open the response sheet pane
+   *  scoped to its lineage. Only finished tests are eligible for sheets. */
+  onFinishAndCreateResponseSheets: () => void;
   onUpdateTest: (test: TestDraftModel) => void;
   /** Fork the open test into a new draft, optionally reverting the original. */
   onCopyTest: (
@@ -403,6 +406,7 @@ function TestBuilderPane({
   onArchiveTest,
   onOpenPrintPreview,
   onOpenResponseSheetPrint,
+  onFinishAndCreateResponseSheets,
   onUpdateTest,
   onCopyTest,
   onApplyTestJson,
@@ -809,14 +813,25 @@ function TestBuilderPane({
               >
                 Preview Print
               </button>
-              <button
-                type="button"
-                onClick={onOpenResponseSheetPrint}
-                disabled={questionItemCount === 0}
-                title="Hand this test off to an open gradebook and print bubble/grid-in response sheets"
-              >
-                Create Response Sheets...
-              </button>
+              {selectedTest.test.finished ? (
+                <button
+                  type="button"
+                  onClick={onOpenResponseSheetPrint}
+                  disabled={questionItemCount === 0}
+                  title="Hand this test off to an open gradebook and print bubble/grid-in response sheets"
+                >
+                  Create Response Sheets...
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={onFinishAndCreateResponseSheets}
+                  disabled={questionItemCount === 0 || loading}
+                  title="Lock this test's item order and answer key, then hand it off to print response sheets. Further edits that would move a bubble will need a new version."
+                >
+                  Finish and Create Response Sheets...
+                </button>
+              )}
               <label
                 className="test-builder-toggle test-interchangeable-toggle"
                 title={

@@ -34,6 +34,7 @@ import {
   updateQuestion,
   updateTestDraft as updateTestDraftApi,
 } from "./api";
+import type { ApiError } from "./api";
 import {
   closeCurrentPaneWindow,
   getAppVersion,
@@ -2260,9 +2261,61 @@ function App() {
       setStatusMessage(`Saved ${detail.test.id} to the working copy.`);
       setErrorMessage("");
     } catch (error) {
+      if ((error as ApiError).status === 422) {
+        await handleForkKeyBreakingEdit(test);
+        return;
+      }
       setErrorMessage((error as Error).message);
     } finally {
       setLoading(false);
+    }
+  }
+
+  /** The edit would move a bubble out from under sheets already printed for
+   *  this test (service.update_test_draft's 422). Offer to save it as a new
+   *  version instead, seeded with the edit the teacher just tried to make. */
+  async function handleForkKeyBreakingEdit(attemptedEdit: TestDraftModel) {
+    const source = testDrafts.find((item) => item.test.id === attemptedEdit.id);
+    if (!source) {
+      setErrorMessage("This test already has response sheets printed for it.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "This test already has response sheets printed for it. Save this change as a new version instead of editing in place?",
+    );
+    if (!confirmed) {
+      setErrorMessage("Change discarded: this test already has response sheets printed for it.");
+      return;
+    }
+
+    const takenVersions = new Set(
+      testDrafts
+        .filter((item) => item.test.title === source.test.title)
+        .map((item) => item.test.version),
+    );
+    try {
+      const created = await createTestDraft({
+        title: source.test.title,
+        version: nextVersionLabel(source.test.version, takenVersions),
+      });
+      const detail = await updateTestDraftApi(created.test.id, {
+        ...attemptedEdit,
+        id: created.test.id,
+        version: created.test.version,
+        finished: false,
+        has_generated_sheets: false,
+        performance_runs: [],
+      });
+      replaceTestDraft(detail);
+      handleOpenTest(detail.test.id);
+      setWorkspaceDirty(true);
+      setStatusMessage(
+        `This edit needed a new version -- saved as ${detail.test.id} (version ${detail.test.version}).`,
+      );
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage((error as Error).message);
     }
   }
 
@@ -2850,6 +2903,34 @@ function App() {
     }
   }
 
+  /** Only finished tests are eligible for response sheets, so this finishes
+   *  the open test first (if it isn't already) before handing off. */
+  async function handleFinishAndCreateResponseSheets() {
+    if (!selectedTestId) return;
+    const current = testDrafts.find((item) => item.test.id === selectedTestId);
+    if (!current) return;
+
+    if (!current.test.finished) {
+      setLoading(true);
+      try {
+        const detail = await updateTestDraftApi(selectedTestId, {
+          ...current.test,
+          finished: true,
+        });
+        replaceTestDraft(detail);
+        setWorkspaceDirty(true);
+        setErrorMessage("");
+      } catch (error) {
+        setErrorMessage((error as Error).message);
+        return;
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    await handleOpenResponseSheetPrintPane();
+  }
+
   async function handleDockPane(pane: PaneKind) {
     if (isMainWindow) {
       if (pane === "questions") {
@@ -3283,10 +3364,13 @@ function App() {
   }
 
   if (paneMode === "test-preview") {
-    const testId = new URLSearchParams(window.location.search).get("mode");
+    const paneSearchParams = new URLSearchParams(window.location.search);
+    const testId = paneSearchParams.get("mode");
+    const snapshotId = paneSearchParams.get("snapshot");
     return (
       <TestPrintPreview
         testId={testId}
+        snapshotId={snapshotId}
         onClose={() => {
           void closeCurrentPaneWindow();
         }}
@@ -4451,6 +4535,7 @@ function App() {
                 onArchiveTest={handleArchiveTest}
                 onOpenPrintPreview={() => void handleOpenTestPrintPreview()}
                 onOpenResponseSheetPrint={() => void handleOpenResponseSheetPrintPane()}
+                onFinishAndCreateResponseSheets={() => void handleFinishAndCreateResponseSheets()}
                 onUpdateTest={(test) => void handleUpdateTestDraft(test)}
                 onCopyTest={(testId, payload) => void handleCopyTestDraft(testId, payload)}
                 onApplyTestJson={(testId, raw) => void handleApplyTestJson(testId, raw)}

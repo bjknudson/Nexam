@@ -52,6 +52,7 @@ def derive_answer_key(
                 points=points,
                 standard_ids=standard_ids,
             )
+        answer_key_item.difficulty = question.difficulty
         items.append(answer_key_item)
 
     return AnswerKeyModel(

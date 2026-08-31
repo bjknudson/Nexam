@@ -13,6 +13,7 @@ import re
 
 from pydantic import ValidationError
 
+from .grading.answer_key import derive_answer_key
 from .models import (
     AssetInspectionBatchRequest,
     AssetInspectionBatchResponseModel,
@@ -1123,12 +1124,55 @@ class BankWorkspaceService:
                 status_code=409,
             )
 
+        existing = tests.items[existing_index]
+        if existing.has_generated_sheets:
+            questions_by_id = {question.id: question for question in self._load_questions()}
+            if self._answer_key_shape(existing, questions_by_id) != self._answer_key_shape(
+                payload, questions_by_id
+            ):
+                raise BankWorkspaceError(
+                    "This test already has response sheets printed for it. "
+                    "Save this change as a new version instead of editing in place.",
+                    status_code=422,
+                )
+
         self._validate_test_question_references(payload)
         payload.course_ids = self._validate_course_ids(payload.course_ids)
+        # Server-controlled lock: only mark_test_administered may set this, so a
+        # client can't clear it by round-tripping a full payload back through PUT.
+        payload.has_generated_sheets = existing.has_generated_sheets
         tests.items[existing_index] = payload
         tests.items.sort(key=lambda item: item.id)
         self._write_tests(tests)
         return self.get_test_draft(payload.id)
+
+    def _answer_key_shape(
+        self, test: TestDraftModel, questions_by_id: dict[str, QuestionModel]
+    ) -> list[str]:
+        """The sequence of row kinds an answer key derived from `test` would have.
+
+        Two tests have interchangeable printed layouts only if this sequence
+        matches -- the same check `_compatible_alternate_keys` in
+        gradebook_service.py uses to decide which sibling versions can share a
+        sheet. Used here to tell whether an edit would move a bubble out from
+        under sheets that have already been printed.
+        """
+
+        return [item.row_kind for item in derive_answer_key(test, questions_by_id).items]
+
+    def mark_test_administered(self, test_id: str) -> None:
+        """Lock a test's item shape once response sheets have been printed for it.
+
+        Called after a hand-off to the gradebook actually succeeds, so a test
+        that's still only being drafted stays freely editable.
+        """
+
+        tests = self._read_tests()
+        index = next((i for i, item in enumerate(tests.items) if item.id == test_id), None)
+        if index is None:
+            raise BankWorkspaceError(f"Test draft not found: {test_id}", status_code=404)
+        tests.items[index].has_generated_sheets = True
+        self._write_tests(tests)
 
     def copy_test_draft(
         self,

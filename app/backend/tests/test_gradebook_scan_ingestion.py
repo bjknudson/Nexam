@@ -181,6 +181,9 @@ def test_ingest_via_api(gradebook_client, demo_bok: Path, tmp_path: Path) -> Non
     create_response = gradebook_client.post("/api/tests", json={"title": "Unit 1", "version": "A"})
     test_id = create_response.json()["test"]["id"]
     gradebook_client.post(f"/api/tests/{test_id}/items", json={"question_id": "q_mc_0001"})
+    test_payload = gradebook_client.get(f"/api/tests/{test_id}").json()["test"]
+    test_payload["finished"] = True
+    gradebook_client.put(f"/api/tests/{test_id}", json=test_payload)
 
     gradebook_client.post(
         "/api/gradebook/create",

@@ -8,11 +8,13 @@ gradebook's own roster -- consistent with the snapshot being self-contained.
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from ..models import (
     AdministeredTestSnapshotModel,
     AnswerKeyItemModel,
+    AnswerKeyModel,
     ChoiceDistributionEntryModel,
     DetectedRowResultModel,
     ExcludedSheetModel,
@@ -21,12 +23,114 @@ from ..models import (
     GradeReportStandardModel,
     GradingBatchModel,
     ScannedSheetModel,
+    SheetRowKind,
     StudentModel,
     StudentScoreModel,
 )
 from .review_state import row_is_resolved
 
 _RESOLVED_IDENTITY_STATUSES = ("pre_identified", "manually_resolved")
+
+
+@dataclass(frozen=True)
+class RowScore:
+    """One answered row, scored, with the key's descriptive fields alongside.
+
+    Carrying `standard_ids` and `difficulty` here rather than making callers
+    re-join to the answer key is what lets by-standard and difficulty-weighted
+    aggregation be a plain sum over these.
+    """
+
+    question_id: str
+    row_kind: SheetRowKind
+    standard_ids: tuple[str, ...]
+    difficulty: int | None
+    # What the student actually marked, override applied -- empty for the two
+    # row kinds that have no choices. Kept here so choice-distribution
+    # reporting doesn't have to go back to the raw row for it.
+    chosen_choice_indices: tuple[int, ...]
+    points_earned: float
+    points_possible: float
+    is_full_credit: bool
+    is_unscored_manual: bool
+    is_flagged: bool
+
+
+@dataclass(frozen=True)
+class SheetScore:
+    """One scanned sheet scored against one answer key.
+
+    `points_possible` is the whole key's total, not the sum of the rows that
+    happened to be read: a page that lost a row still gets graded out of the
+    whole test.
+    """
+
+    sheet_id: str
+    student_id: str | None
+    version: str
+    rows: tuple[RowScore, ...]
+    points_earned: float
+    points_possible: float
+    flagged_count: int
+    contains_unscored_manual_items: bool
+
+    @property
+    def percent_correct(self) -> float:
+        return 100.0 * self.points_earned / self.points_possible if self.points_possible else 0.0
+
+
+def score_sheet(sheet: ScannedSheetModel, key: AnswerKeyModel) -> SheetScore:
+    """Score one sheet against one key. Rows with no matching key item -- a
+    page read against the wrong printing -- are skipped rather than guessed at."""
+
+    key_by_question = {item.question_id: item for item in key.items}
+    rows: list[RowScore] = []
+    for row in sheet.row_results:
+        key_item = key_by_question.get(row.question_id)
+        if key_item is None:
+            continue
+        points_earned, is_full_credit, unscored = _score_row(row, key_item)
+        rows.append(
+            RowScore(
+                question_id=row.question_id,
+                row_kind=row.kind,
+                standard_ids=tuple(key_item.standard_ids),
+                difficulty=key_item.difficulty,
+                chosen_choice_indices=(
+                    tuple(_chosen_choice_indices(row)) if row.kind == "multiple_choice" else ()
+                ),
+                points_earned=points_earned,
+                points_possible=key_item.points,
+                is_full_credit=is_full_credit,
+                is_unscored_manual=unscored,
+                is_flagged=not row_is_resolved(row),
+            )
+        )
+
+    return SheetScore(
+        sheet_id=sheet.id,
+        student_id=sheet.student_id,
+        version=key.version,
+        rows=tuple(rows),
+        points_earned=sum(row.points_earned for row in rows),
+        points_possible=key.total_points,
+        flagged_count=sum(1 for row in rows if row.is_flagged),
+        contains_unscored_manual_items=any(row.is_unscored_manual for row in rows),
+    )
+
+
+def has_resolved_identity(sheet: ScannedSheetModel) -> bool:
+    return sheet.identity_status in _RESOLVED_IDENTITY_STATUSES
+
+
+def _chosen_choice_indices(row: DetectedRowResultModel) -> list[int]:
+    """A human override wins over the detector; absent one, what was detected."""
+
+    return (
+        row.override_choice_indices
+        if row.override_choice_indices is not None
+        else row.detected_choice_indices
+    )
 
 
 class _ItemAccumulator:
@@ -37,20 +141,14 @@ class _ItemAccumulator:
         self.flagged_count = 0
         self.choice_counts: dict[int, int] = defaultdict(int)
 
-    def record(self, row: DetectedRowResultModel, is_full_credit: bool) -> None:
+    def record(self, row: RowScore) -> None:
         self.attempts += 1
-        if is_full_credit:
+        if row.is_full_credit:
             self.full_credit_count += 1
-        if not row_is_resolved(row):
+        if row.is_flagged:
             self.flagged_count += 1
-        if row.kind == "multiple_choice":
-            chosen = (
-                row.override_choice_indices
-                if row.override_choice_indices is not None
-                else row.detected_choice_indices
-            )
-            for choice_index in chosen:
-                self.choice_counts[choice_index] += 1
+        for choice_index in row.chosen_choice_indices:
+            self.choice_counts[choice_index] += 1
 
     def to_item_model(self) -> GradeReportItemModel:
         percent = 100.0 * self.full_credit_count / self.attempts if self.attempts else 0.0
@@ -84,11 +182,8 @@ def score_batch(
     for alternate in snapshot.alternate_answer_keys:
         keys_by_version[alternate.version] = alternate
 
-    def key_for(sheet: ScannedSheetModel) -> dict[str, AnswerKeyItemModel]:
-        chosen = keys_by_version.get(sheet.detected_version or "", snapshot.answer_key)
-        return {item.question_id: item for item in chosen.items}
-
-    answer_key_by_question = {item.question_id: item for item in snapshot.answer_key.items}
+    def key_for(sheet: ScannedSheetModel) -> AnswerKeyModel:
+        return keys_by_version.get(sheet.detected_version or "", snapshot.answer_key)
 
     scoreable_sheets = [sheet for sheet in batch.sheets if _is_scoreable(sheet, batch.snapshot_id)]
     excluded_count = len(batch.sheets) - len(scoreable_sheets)
@@ -118,28 +213,24 @@ def score_batch(
     contains_unscored_manual_items = False
 
     for sheet in scoreable_sheets:
-        sheet_key = key_for(sheet)
-        points_earned_total = 0.0
-        flagged_count = 0
-        for row in sheet.row_results:
-            key_item = sheet_key.get(row.question_id)
-            if key_item is None:
-                continue
-            points_earned, is_full_credit, unscored = _score_row(row, key_item)
-            points_earned_total += points_earned
-            if unscored:
-                contains_unscored_manual_items = True
-            if not row_is_resolved(row):
-                flagged_count += 1
-            accumulators[row.question_id].record(row, is_full_credit)
+        sheet_score = score_sheet(sheet, key_for(sheet))
+        if sheet_score.contains_unscored_manual_items:
+            contains_unscored_manual_items = True
+        for row_score in sheet_score.rows:
+            # An interchangeable sheet scored against an alternate version asks
+            # different questions, so by-item stats only accumulate the items
+            # this snapshot's own key actually has.
+            accumulator = accumulators.get(row_score.question_id)
+            if accumulator is not None:
+                accumulator.record(row_score)
 
-        if sheet.identity_status in _RESOLVED_IDENTITY_STATUSES:
+        if has_resolved_identity(sheet):
             student_scores.append(
                 _build_student_score(
                     sheet,
-                    points_earned_total,
-                    snapshot.answer_key.total_points,
-                    flagged_count,
+                    sheet_score.points_earned,
+                    sheet_score.points_possible,
+                    sheet_score.flagged_count,
                     students_by_id,
                 )
             )
@@ -248,11 +339,7 @@ def _score_row(
         return row.manual_score, row.manual_score >= max_score, False
 
     if row.kind == "multiple_choice":
-        chosen = (
-            row.override_choice_indices
-            if row.override_choice_indices is not None
-            else row.detected_choice_indices
-        )
+        chosen = _chosen_choice_indices(row)
         correct = sorted(chosen) == sorted(key_item.correct_choice_indices or [])
         return (key_item.points if correct else 0.0), correct, False
 

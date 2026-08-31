@@ -62,6 +62,9 @@ we need.
   given window was opened against, the same way `desktop.ts` already distinguishes pane kinds.
 - The gradebook window gets its own internal pages, mirroring the bank's `WorkspacePage` pattern
   but scoped to grading: **Roster**, **Administered Tests**, **Scan & Review**, **Reports**.
+  *Superseded in build:* scanning and reporting turned out to be questions about one *test*, so
+  they became drill-downs inside Administered Tests rather than pages of their own. The shipped
+  pages are **Students**, **Tests**, and **Export** — see "Page layout" in `docs/grading.md`.
 
 **Shared package plumbing (recommended, not mandatory for v1):** `BankWorkspaceService`'s
 unpack-to-temp-workspace / repack-to-zip logic (`service.py:112-200`) is generic enough to extract

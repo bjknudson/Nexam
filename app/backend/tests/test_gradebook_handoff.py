@@ -167,6 +167,10 @@ def test_handoff_via_api(gradebook_client, demo_bok: Path, tmp_path: Path) -> No
     gradebook_client.post(f"/api/tests/{test_id}/items", json={"question_id": "q_mc_0001"})
     gradebook_client.post(f"/api/tests/{test_id}/items", json={"question_id": "q_num_0001"})
 
+    test_payload = gradebook_client.get(f"/api/tests/{test_id}").json()["test"]
+    test_payload["finished"] = True
+    gradebook_client.put(f"/api/tests/{test_id}", json=test_payload)
+
     gradebook_client.post(
         "/api/gradebook/create",
         json={"title": "Period 2", "destination_path": str(tmp_path / "period-2.nxgb")},
@@ -180,9 +184,16 @@ def test_handoff_via_api(gradebook_client, demo_bok: Path, tmp_path: Path) -> No
     body = handoff_response.json()
     assert body["source_test_id"] == test_id
     layout_id = body["layout"]["id"]
+    # Frozen alongside items/questions so the test paper -- not just the bubble
+    # sheet -- can be printed from the gradebook later without the bank open.
+    assert body["print_settings"] == test_payload["print_settings"]
 
     list_response = gradebook_client.get("/api/gradebook/administered-tests")
     assert len(list_response.json()["items"]) == 1
+
+    snapshot_response = gradebook_client.get(f"/api/gradebook/administered-tests/{body['id']}")
+    assert snapshot_response.status_code == 200
+    assert snapshot_response.json()["print_settings"] == test_payload["print_settings"]
 
     pdf_response = gradebook_client.get(f"/api/gradebook/sheets/{layout_id}/pdf")
     assert pdf_response.status_code == 200
@@ -310,6 +321,244 @@ def test_a_sheet_is_scored_against_the_version_the_student_bubbled(
     # B is a copy of A here, so the same mark is correct under either key -- what
     # matters is that scoring used B's key rather than ignoring the bubble.
     assert report.student_scores[0].points_earned == snapshot.answer_key.total_points
+
+
+def test_non_key_breaking_edit_stays_in_place_after_sheets_generated(
+    bank_service: BankWorkspaceService, demo_bok: Path
+) -> None:
+    bank_service.open_bank(str(demo_bok))
+    detail = bank_service.add_question_to_test(
+        bank_service.create_test_draft("Locked Unit", "A").test.id, "q_mc_0001"
+    )
+    bank_service.update_test_draft(
+        detail.test.id, detail.test.model_copy(update={"finished": True})
+    )
+    bank_service.mark_test_administered(detail.test.id)
+
+    locked = bank_service.get_test_draft(detail.test.id).test
+    updated = bank_service.update_test_draft(
+        locked.id, locked.model_copy(update={"version_description": "Retake copy"})
+    )
+    assert updated.test.version_description == "Retake copy"
+    assert updated.test.has_generated_sheets is True
+
+
+def test_key_breaking_edit_after_sheets_generated_is_rejected(
+    bank_service: BankWorkspaceService, demo_bok: Path
+) -> None:
+    bank_service.open_bank(str(demo_bok))
+    detail = bank_service.add_question_to_test(
+        bank_service.create_test_draft("Locked Unit 2", "A").test.id, "q_mc_0001"
+    )
+    bank_service.update_test_draft(
+        detail.test.id, detail.test.model_copy(update={"finished": True})
+    )
+    bank_service.mark_test_administered(detail.test.id)
+
+    locked = bank_service.get_test_draft(detail.test.id).test
+    with pytest.raises(BankWorkspaceError):
+        bank_service.update_test_draft(locked.id, locked.model_copy(update={"items": []}))
+
+    # Rejected edit must not have been applied.
+    assert bank_service.get_test_draft(locked.id).test.items != []
+
+
+def test_response_sheets_require_a_finished_test(
+    gradebook_client, demo_bok: Path, tmp_path: Path
+) -> None:
+    gradebook_client.post("/api/banks/open", json={"path": str(demo_bok)})
+    create_response = gradebook_client.post("/api/tests", json={"title": "Draft Unit", "version": "A"})
+    test_id = create_response.json()["test"]["id"]
+    gradebook_client.post(f"/api/tests/{test_id}/items", json={"question_id": "q_mc_0001"})
+
+    gradebook_client.post(
+        "/api/gradebook/create",
+        json={"title": "Period 2", "destination_path": str(tmp_path / "period-2.nxgb")},
+    )
+    response = gradebook_client.post(
+        "/api/gradebook/administered-tests",
+        json={"test_id": test_id, "mode": "blank", "blank_count": 1},
+    )
+    assert response.status_code == 400
+
+
+def test_response_sheet_bubbles_only_include_finished_sibling_versions(
+    gradebook_client, demo_bok: Path, tmp_path: Path
+) -> None:
+    gradebook_client.post("/api/banks/open", json={"path": str(demo_bok)})
+
+    def make_version(version: str, finished: bool) -> str:
+        create = gradebook_client.post(
+            "/api/tests", json={"title": "Phantom Unit", "version": version}
+        )
+        test_id = create.json()["test"]["id"]
+        gradebook_client.post(f"/api/tests/{test_id}/items", json={"question_id": "q_mc_0001"})
+        payload = gradebook_client.get(f"/api/tests/{test_id}").json()["test"]
+        payload["interchangeable_sheets"] = True
+        payload["finished"] = finished
+        gradebook_client.put(f"/api/tests/{test_id}", json=payload)
+        return test_id
+
+    version_a = make_version("A", finished=True)
+    make_version("B", finished=True)
+    make_version("C", finished=False)  # stray/unfinished -- must not leak a phantom bubble
+
+    gradebook_client.post(
+        "/api/gradebook/create",
+        json={"title": "Period 2", "destination_path": str(tmp_path / "period-2.nxgb")},
+    )
+    response = gradebook_client.post(
+        "/api/gradebook/administered-tests",
+        json={"test_id": version_a, "mode": "blank", "blank_count": 1},
+    )
+    assert response.status_code == 200
+    assert response.json()["layout"]["version_labels"] == ["A", "B"]
+
+
+def test_response_sheet_batch_generates_one_snapshot_per_assigned_version(
+    gradebook_client, demo_bok: Path, tmp_path: Path
+) -> None:
+    gradebook_client.post("/api/banks/open", json={"path": str(demo_bok)})
+
+    def make_version(version: str) -> str:
+        create = gradebook_client.post(
+            "/api/tests", json={"title": "Batch Unit", "version": version}
+        )
+        test_id = create.json()["test"]["id"]
+        gradebook_client.post(f"/api/tests/{test_id}/items", json={"question_id": "q_mc_0001"})
+        payload = gradebook_client.get(f"/api/tests/{test_id}").json()["test"]
+        payload["finished"] = True
+        gradebook_client.put(f"/api/tests/{test_id}", json=payload)
+        return test_id
+
+    version_a = make_version("A")
+    make_version("B")
+
+    gradebook_client.post(
+        "/api/gradebook/create",
+        json={"title": "Period 2", "destination_path": str(tmp_path / "period-2.nxgb")},
+    )
+    ada = gradebook_client.post(
+        "/api/gradebook/students", json={"first_name": "Ada", "last_name": "Lovelace"}
+    ).json()
+    grace = gradebook_client.post(
+        "/api/gradebook/students", json={"first_name": "Grace", "last_name": "Hopper"}
+    ).json()
+
+    response = gradebook_client.post(
+        f"/api/tests/{version_a}/response-sheets/batch",
+        json={
+            "mode": "pre_id",
+            "assignments": [
+                {"version": "A", "student_ids": [ada["id"]]},
+                {"version": "B", "student_ids": [grace["id"]]},
+            ],
+        },
+    )
+    assert response.status_code == 200
+    snapshots = response.json()["items"]
+    assert {s["version"] for s in snapshots} == {"A", "B"}
+    batch_ids = {s["generation_batch_id"] for s in snapshots}
+    assert len(batch_ids) == 1
+    assert None not in batch_ids
+
+    pdf_response = gradebook_client.get(
+        f"/api/gradebook/response-sheets/batches/{batch_ids.pop()}/pdf"
+    )
+    assert pdf_response.status_code == 200
+    assert pdf_response.content.startswith(b"%PDF")
+
+
+def test_response_sheet_batch_allows_a_partial_roster(
+    gradebook_client, demo_bok: Path, tmp_path: Path
+) -> None:
+    """Only some students assigned a version is fine -- a teacher may only be
+    printing for who's here today."""
+
+    gradebook_client.post("/api/banks/open", json={"path": str(demo_bok)})
+
+    def make_version(version: str) -> str:
+        create = gradebook_client.post(
+            "/api/tests", json={"title": "Partial Unit", "version": version}
+        )
+        test_id = create.json()["test"]["id"]
+        gradebook_client.post(f"/api/tests/{test_id}/items", json={"question_id": "q_mc_0001"})
+        payload = gradebook_client.get(f"/api/tests/{test_id}").json()["test"]
+        payload["finished"] = True
+        gradebook_client.put(f"/api/tests/{test_id}", json=payload)
+        return test_id
+
+    version_a = make_version("A")
+    make_version("B")
+
+    gradebook_client.post(
+        "/api/gradebook/create",
+        json={"title": "Period 2", "destination_path": str(tmp_path / "period-2.nxgb")},
+    )
+    ada = gradebook_client.post(
+        "/api/gradebook/students", json={"first_name": "Ada", "last_name": "Lovelace"}
+    ).json()
+    gradebook_client.post(
+        "/api/gradebook/students", json={"first_name": "Absent", "last_name": "Today"}
+    )
+
+    # Only Ada (version A) is assigned; the absent student is left out entirely
+    # rather than blocking the whole batch.
+    response = gradebook_client.post(
+        f"/api/tests/{version_a}/response-sheets/batch",
+        json={
+            "mode": "pre_id",
+            "assignments": [{"version": "A", "student_ids": [ada["id"]]}],
+        },
+    )
+    assert response.status_code == 200
+    snapshots = response.json()["items"]
+    assert len(snapshots) == 1
+    assert snapshots[0]["version"] == "A"
+    assert len(snapshots[0]["layout"]["pages"]) == 1
+
+
+def test_response_sheet_batch_supports_per_version_blank_counts(
+    gradebook_client, demo_bok: Path, tmp_path: Path
+) -> None:
+    """Fill-in-name sheets can be pre-versioned too -- a count per version in
+    one batch, instead of generating each version's blanks separately."""
+
+    gradebook_client.post("/api/banks/open", json={"path": str(demo_bok)})
+
+    def make_version(version: str) -> str:
+        create = gradebook_client.post(
+            "/api/tests", json={"title": "Blank Batch Unit", "version": version}
+        )
+        test_id = create.json()["test"]["id"]
+        gradebook_client.post(f"/api/tests/{test_id}/items", json={"question_id": "q_mc_0001"})
+        payload = gradebook_client.get(f"/api/tests/{test_id}").json()["test"]
+        payload["finished"] = True
+        gradebook_client.put(f"/api/tests/{test_id}", json=payload)
+        return test_id
+
+    version_a = make_version("A")
+    make_version("B")
+
+    gradebook_client.post(
+        "/api/gradebook/create",
+        json={"title": "Period 2", "destination_path": str(tmp_path / "period-2.nxgb")},
+    )
+
+    response = gradebook_client.post(
+        f"/api/tests/{version_a}/response-sheets/batch",
+        json={
+            "mode": "blank",
+            "assignments": [
+                {"version": "A", "blank_count": 3},
+                {"version": "B", "blank_count": 2},
+            ],
+        },
+    )
+    assert response.status_code == 200
+    snapshots = {s["version"]: s for s in response.json()["items"]}
+    assert len(snapshots["A"]["layout"]["pages"]) == 3
+    assert len(snapshots["B"]["layout"]["pages"]) == 2
 
 
 @pytest.mark.parametrize("page_size", ["letter", "half_letter", "legal", "a4"])

@@ -378,6 +378,10 @@ export interface TestDraftModel {
   items: TestItemModel[];
   print_settings: TestPrintSettingsModel;
   performance_runs: TestPerformanceRunModel[];
+  /** Only finished tests are eligible as response-sheet siblings. */
+  finished?: boolean;
+  /** Once true, item-order/answer-key-breaking edits must fork a new version. */
+  has_generated_sheets?: boolean;
 }
 
 export interface TestStandardBalanceModel {
@@ -544,8 +548,23 @@ export interface AdministeredTestSnapshotModel {
   printed_at: string;
   items: TestItemModel[];
   questions: QuestionModel[];
+  /** Frozen so the test paper itself, not just the bubble sheet, can be
+   *  printed from the gradebook without needing the source bank open. */
+  print_settings: TestPrintSettingsModel;
   answer_key: AnswerKeyModel;
   layout: SheetLayoutModel;
+  /** Shared by every version's snapshot from one version-assignment run. */
+  generation_batch_id?: string | null;
+}
+
+export interface AdministeredTestSnapshotCollectionModel {
+  items: AdministeredTestSnapshotModel[];
+}
+
+export interface ResponseSheetVersionAssignment {
+  version: string;
+  student_ids?: string[];
+  blank_count?: number | null;
 }
 
 export interface AdministeredTestSnapshotSummaryModel {
@@ -559,6 +578,9 @@ export interface AdministeredTestSnapshotSummaryModel {
   total_points: number;
   page_count: number;
   mode: "blank" | "pre_id";
+  /** Which test lineage this printing belongs to -- shared by every version,
+   *  and by a retake linked to it. Always resolved by the backend. */
+  lineage_id: string;
 }
 
 export interface AdministeredTestSnapshotListResponseModel {
@@ -684,8 +706,84 @@ export interface GradeReportModel {
 
 export interface CombinedGradeReportModel {
   test_title: string;
+  lineage_id: string;
   snapshot_ids: string[];
   batch_ids: string[];
   scored_sheet_count: number;
   by_standard: GradeReportStandardModel[];
+}
+
+/** How a student's repeat attempts at one test collapse into the one score
+ *  that counts. Chosen at export time, never stored on the attempts. */
+export type RetakeResolution = "most_recent" | "highest" | "average";
+
+export type ScoreExportMethod = "total" | "by_standard" | "mastery";
+
+export interface StudentStandardScoreModel {
+  standard_id: string;
+  items_attempted: number;
+  items_full_credit: number;
+  points_earned: number;
+  points_possible: number;
+  percent_earned: number;
+  /** Difficulty-weighted: hard items count for more than easy ones. */
+  mastery_estimate: number;
+  average_difficulty: number;
+}
+
+export interface StudentAttemptModel {
+  lineage_id: string;
+  test_title: string;
+  version: string;
+  snapshot_id: string;
+  batch_id: string;
+  sheet_id: string;
+  /** 1-based within this student's attempts at this test, in print order. */
+  attempt_number: number;
+  printed_at: string;
+  scanned_at: string;
+  points_earned: number;
+  points_possible: number;
+  percent_correct: number;
+  flagged_answer_count: number;
+  contains_unscored_manual_items: boolean;
+  by_standard: StudentStandardScoreModel[];
+}
+
+export interface ResolvedLineageScoreModel {
+  resolution: RetakeResolution;
+  attempt_count: number;
+  source_attempt_numbers: number[];
+  points_earned: number;
+  points_possible: number;
+  percent_correct: number;
+  by_standard: StudentStandardScoreModel[];
+}
+
+export interface StudentLineagePerformanceModel {
+  lineage_id: string;
+  test_title: string;
+  attempts: StudentAttemptModel[];
+  resolved: ResolvedLineageScoreModel;
+}
+
+export interface StudentPerformanceModel {
+  student: StudentModel;
+  tests_taken: number;
+  attempt_count: number;
+  points_earned: number;
+  points_possible: number;
+  percent_correct: number;
+  unscored_manual_attempt_count: number;
+  by_standard: StudentStandardScoreModel[];
+  lineages: StudentLineagePerformanceModel[];
+}
+
+export interface StudentPerformanceListResponseModel {
+  generated_at: string;
+  retake_resolution: RetakeResolution;
+  items: StudentPerformanceModel[];
+  /** Scored sheets that were never matched to anyone on the roster, and so
+   *  count toward nobody's totals. */
+  unlinked_sheet_count: number;
 }

@@ -2747,6 +2747,24 @@ textarea {
   grid-column: 1 / -1;
 }
 
+.roster-detail-readonly {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.roster-detail-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+
+.roster-detail-label {
+  min-width: 140px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #475569;
+}
+
 .courses-section-tabs {
   display: flex;
   gap: 0.3rem;
@@ -4304,6 +4322,50 @@ textarea {
   font-size: 0.72rem;
 }
 
+.response-sheet-version-assignment {
+  display: grid;
+  gap: 0.5rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid #e2e8f0;
+  margin-bottom: 0.5rem;
+}
+
+.response-sheet-assign-by-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  color: #475569;
+  font-size: 0.85rem;
+}
+
+.response-sheet-assignment-grid {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.response-sheet-assignment-grid th,
+.response-sheet-assignment-grid td {
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid #e2e8f0;
+  text-align: center;
+}
+
+.response-sheet-assignment-grid th:first-child,
+.response-sheet-assignment-grid td:first-child {
+  text-align: left;
+}
+
+.response-sheet-partial-roster-warning {
+  margin: 0.4rem 0 0;
+  padding: 0.4rem 0.6rem;
+  border-radius: 8px;
+  background: #fff7ed;
+  color: #9a5b13;
+  font-size: 0.8rem;
+}
+
 .response-sheet-no-gradebook {
   display: grid;
   gap: 0.5rem;
@@ -4430,4 +4492,277 @@ textarea {
 
 .scan-review-fixes .gradebook-manual-open {
   margin-top: 0.3rem;
+}
+
+/* ---------------------------------------------------------------------------
+   Student performance and CSV export
+
+   The roster page leads with a student's record across every test, so it needs
+   a compact way to read a column of percentages: a bar for the shape, the
+   number beside it for the value. Reuses the histogram's blue and track
+   treatment so the two reporting surfaces read as one thing.
+   --------------------------------------------------------------------------- */
+
+.inline-select {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #475569;
+}
+
+.inline-select select {
+  font-weight: 400;
+}
+
+.roster-section-filter {
+  margin-bottom: 0.6rem;
+}
+
+.gradebook-notice {
+  border: 1px solid #93c5fd;
+  background: #eff6ff;
+  border-radius: 8px;
+  padding: 0.55rem 0.75rem;
+  margin: 0.4rem 0;
+  font-size: 0.88rem;
+  color: #1e3a5f;
+}
+
+.roster-list-row {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.roster-list-score {
+  font-size: 0.8rem;
+  color: #64748b;
+}
+
+.roster-performance {
+  display: grid;
+  gap: 1.1rem;
+}
+
+.roster-performance-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.roster-performance-header h3 {
+  margin: 0;
+}
+
+.roster-performance-header p {
+  margin: 0.15rem 0 0;
+  font-size: 0.85rem;
+  color: #64748b;
+}
+
+.roster-performance-section {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.roster-performance-section h4 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.roster-performance-section p {
+  margin: 0;
+  font-size: 0.83rem;
+  color: #64748b;
+}
+
+.performance-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 2.6rem;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 8rem;
+}
+
+.performance-bar-track {
+  background: #eef2f7;
+  border-radius: 4px;
+  height: 0.65rem;
+  overflow: hidden;
+}
+
+.performance-bar-fill {
+  height: 100%;
+  background: #2563eb;
+  border-radius: 4px;
+}
+
+.performance-bar-value {
+  text-align: right;
+  font-size: 0.82rem;
+  color: #475569;
+  font-variant-numeric: tabular-nums;
+}
+
+.performance-lineage-row td:first-child {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.performance-lineage-row .status-pill {
+  font-size: 0.72rem;
+  padding: 0.12rem 0.5rem;
+}
+
+/* An individual sitting under its test. Indented and quieter than the test row
+   above it -- the test's resolved score is the number that counts, and the
+   attempts are the working behind it. */
+.performance-attempt-row td {
+  font-size: 0.82rem;
+  color: #64748b;
+}
+
+.performance-attempt-row td:first-child {
+  padding-left: 1.5rem;
+}
+
+.performance-attempt-row.superseded td {
+  color: #94a3b8;
+}
+
+.performance-superseded-note {
+  margin-left: 0.5rem;
+  font-size: 0.72rem;
+  font-style: italic;
+}
+
+.roster-details-expander {
+  border-top: 1px solid #e2e8f0;
+  padding-top: 0.6rem;
+}
+
+.roster-details-expander summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #475569;
+}
+
+.roster-details-expander .roster-detail-readonly {
+  padding-top: 0.7rem;
+}
+
+.score-export-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  margin: 0.6rem 0;
+}
+
+.score-export-controls > label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #475569;
+  min-width: 15rem;
+}
+
+.score-export-controls select {
+  font-weight: 400;
+}
+
+.score-export-help {
+  margin: 0.2rem 0;
+  font-size: 0.83rem;
+  color: #64748b;
+}
+
+.administered-test-lineage {
+  margin-top: 0.45rem;
+}
+
+/* ---------------------------------------------------------------------------
+   Tests page: attention grouping and per-test drill-down
+
+   Scanning and reporting are questions about one test, so they live inside a
+   test rather than as pages of their own. The list's job is therefore to say
+   which test is waiting on the teacher, and to get them into it in one click.
+   --------------------------------------------------------------------------- */
+
+.test-attention-group {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.test-attention-group h3 {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+/* A left edge rather than a filled background: it marks the card without
+   fighting the buttons inside it for attention. */
+.administered-test-card.needs-attention {
+  border-left: 3px solid #f59e0b;
+}
+
+.administered-test-status {
+  font-size: 0.83rem;
+  color: #475569;
+}
+
+.administered-test-card.needs-attention .administered-test-status {
+  color: #b45309;
+  font-weight: 600;
+}
+
+/* The first button in a card's action group is the one the test is waiting on,
+   so it reads as the primary. */
+.administered-test-card .standards-import-actions > button:first-child {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #ffffff;
+}
+
+.test-drill-header h2 {
+  margin: 0.3rem 0 0.4rem;
+}
+
+.test-drill-header .administered-test-stack-toggle {
+  margin-top: 0;
+  border-style: solid;
+}
+
+.test-drill-tabs {
+  margin-bottom: 0.9rem;
+  border-bottom: 1px solid #e2e8f0;
+  padding-bottom: 0.6rem;
+}
+
+.tab-badge {
+  display: inline-block;
+  margin-left: 0.4rem;
+  min-width: 1.15rem;
+  padding: 0 0.32rem;
+  border-radius: 999px;
+  background: #f59e0b;
+  color: #ffffff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.gradebook-tabs button.active .tab-badge {
+  background: #ffffff;
+  color: #2563eb;
 }

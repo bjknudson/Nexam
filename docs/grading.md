@@ -131,6 +131,148 @@ counts across versions. This is the opposite of how course coverage reports work
 the max across versions to avoid double-counting how many times a standard is *taught*, but a score
 report is real, distinct student attempts per version, so summing is correct here.
 
+## Page layout
+
+The gradebook window has three pages, matching the three things a gradebook is for: who is in the
+class, what they were given, and getting the scores out.
+
+| Page | What it answers |
+| --- | --- |
+| **Students** | How is this student doing, across everything they have taken. |
+| **Tests** | What was printed, what has come back, and how the class did on it. |
+| **Export** | Get the scores out of here as a CSV. |
+
+Scanning and reporting were originally pages of their own (see `docs/grading-plan.md`). Both turned
+out to be questions about *one test*, and having them as separate pages meant the answer to "how did
+Unit 1 go" was spread across three places, each with its own picker for choosing the test again. They
+are now **drill-downs inside a test**: pick the test once on the way in, then move between its
+Printings, Scan & Review, and Report tabs. Export stays top-level because it is the one task that
+genuinely spans every test at once.
+
+`ScanReviewWorkspace` and `GradeReportWorkspace` are therefore scoped components rather than pages —
+they take the printings of one test and never show another's. `AdministeredTestsWorkspace` owns the
+join: it reads snapshots and scan batches together and hands each drill-down its own slice.
+
+The list itself leads with what is waiting on the teacher. Each test is in one of three states,
+derived from its snapshots and its scanned sheets:
+
+| State | Meaning | Primary button |
+| --- | --- | --- |
+| `needs_review` | Sheets came back and some could not be read without a human. | Review N sheets |
+| `awaiting_scans` | Paper was printed; nothing has been scanned back in. | Enter Scans... |
+| *(settled)* | Everything scanned has been reviewed. | View Report |
+
+Tests in the first two states are grouped above the rest under "Needs you", and each card's first
+button goes straight to the tab that resolves it.
+
+**Where an unreadable page is filed.** A page whose QR the scanner cannot read names no test, so it
+has to be filed somewhere real and flagged — a sheet a teacher cannot find is worse than one filed in
+the wrong place. Since scanning now happens inside a test, uploads pass that test as
+`fallback_snapshot_id`, and unreadable pages land under the test the teacher is looking at rather
+than under whichever test happens to have been printed most recently. A page whose QR *can* be read
+still goes to its own test regardless, so scanning a mixed pile from inside one test never misfiles
+anything; the upload's status message names where the strays went.
+
+## Test lineages and retakes
+
+Every printing gets its own snapshot, so "the same test" has to be a link rather than an identity.
+`AdministeredTestSnapshotModel.lineage_id` is that link, and `grading/lineage.py` owns it:
+
+- The default is **derived from the title** -- `sha1(title.strip().casefold())[:12]`. Derived, not
+  assigned at random, so every version of a test groups automatically, and snapshots written before
+  the field existed resolve to the same id as new ones with no migration and nothing rewritten on
+  disk.
+- `PUT /api/gradebook/administered-tests/{snapshot_id}/lineage` overrides it. That is how a retake
+  titled "Unit 1 Retake" gets counted as a second attempt at "Unit 1" instead of a separate test
+  nobody ever passed. Passing no target clears the override, putting the snapshot back under its
+  own title.
+
+Relinking is the **only** edit ever made to a stored snapshot, and it touches nothing that
+describes the paper -- not the items, the key, the layout, or `printed_at`. The promise that a
+snapshot is a faithful record of what was handed out still holds; only the pile it is filed under
+changes.
+
+Attempts themselves are never stored. A student's attempts at a test are every scored sheet of
+theirs in that lineage, ordered by `printed_at` (when they sat the paper), with the batch's
+`created_at` breaking ties between two piles scanned from one printing.
+
+## Cross-test student performance
+
+`grading/aggregate.py` answers the question batch reporting cannot: not "how did the class do on
+this test" but "how is this student doing, across everything they have taken."
+`GET /api/gradebook/students/performance` returns it for the whole roster in one pass -- scoring
+reads every batch either way, so answering for one student costs the same as answering for all of
+them.
+
+Like every other number in the gradebook it is **derived, never persisted**: totals are recomputed
+from the sheets on every call, so a scan-review correction or a relinked retake shows up everywhere
+at once with no stored score that can go stale.
+
+Two per-standard numbers come out of it, both from the same rows:
+
+- `percent_earned` -- points earned over points possible. The plain score.
+- `mastery_estimate` -- the same items weighted by question difficulty:
+
+      mastery = 100 * sum(difficulty_i * credit_i) / sum(difficulty_i)
+
+  where `credit_i` is the fraction of that item's points the student earned. A student who gets the
+  hard questions right and the easy ones wrong reads higher than one with the same raw score the
+  other way round. It is a weighted average, not a psychometric ability estimate.
+
+`difficulty` is frozen onto `AnswerKeyItemModel` at hand-off time for the same reason `standard_ids`
+already was: mastery has to be computable from the snapshot alone, and an alternate version's key
+carries no questions of its own to look it up from. Keys written before the field existed fall back
+to the middle of the 1-5 scale, which makes every item weigh the same -- an unweighted average.
+
+An item tagged with two standards counts in full toward both, matching how class-level by-standard
+reporting already works: the item really is evidence about both, and splitting its points would
+understate each.
+
+## Retake resolution
+
+When a student has more than one attempt at a lineage, exactly one score counts, chosen at export
+time rather than stored on the attempts:
+
+| Resolution | What it does |
+| --- | --- |
+| `most_recent` | The last sitting replaces the earlier ones. |
+| `highest` | The best sitting counts. |
+| `average` | The mean of the attempts' *percentages*. |
+
+`most_recent` and `highest` pick a real attempt and carry its numbers and its standard breakdown
+through unchanged, so the exported number is one a teacher can point at a specific paper for.
+`average` synthesises one instead: the mean of the percentages, not pooled points, because a
+teacher who says "average the retakes" means the average of the scores regardless of what each
+paper was out of. Per standard, `average` averages only over the attempts that actually tested that
+standard, so a standard that appeared only on the retake is reported from the retake rather than
+diluted by tests that never asked about it.
+
+## CSV export
+
+`GET /api/gradebook/export/scores.csv?method=&resolution=&section=` -- `grading/csv_export.py`.
+All three shapes are **wide** (one row per student, one column per test or per standard), which is
+what a gradebook or SIS import expects and what a teacher can read without pivoting anything:
+
+| `method` | Columns |
+| --- | --- |
+| `total` | Points and % per test, plus an overall % |
+| `by_standard` | One % column per standard |
+| `mastery` | One difficulty-weighted column per standard |
+
+Every export runs through the chosen retake resolution, so a cell is the one score that test
+contributes for that student -- never a first attempt and a retake fighting over one column.
+Test columns are keyed by lineage, not title, and the title is disambiguated only when two
+unlinked tests would otherwise collide.
+
+Students with no scored sheets are still exported, with empty cells: a roster that silently drops
+the absentees is worse than one that shows them blank. Scored sheets never matched to anyone on the
+roster count toward nobody, and are reported as `unlinked_sheet_count` so the UI can say so rather
+than quietly under-reporting.
+
+Standard **codes** live only in a bank, so they label the columns when one happens to be open and
+standard ids stand in when it is not. The export never requires a bank -- a gradebook has to stay
+exportable on its own.
+
 ## Recording a performance run
 
 `POST /api/gradebook/batches/{batch_id}/record-performance-run` is the **only** place a grading

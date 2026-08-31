@@ -24,6 +24,21 @@ import type {
 
 type SheetFilter = "all" | "needs_review";
 
+interface ScanReviewWorkspaceProps {
+  /** Called after any mutation so the gradebook shell can mark itself dirty --
+   *  none of scan review's edits save on their own, unlike a roster edit. */
+  onChanged?: () => void;
+  /** The printings of the one test this is scoped to. Review lives inside a
+   *  test's drill-down now, so the batch picker filters within that test rather
+   *  than across the whole gradebook.
+   *
+   *  A scan whose QR names a *different* test still lands in its own batch --
+   *  ingestion sorts by what the paper says, not by what page you were on --
+   *  so uploads are reported by test rather than silently vanishing from view. */
+  snapshotIds: string[];
+  testTitle: string;
+}
+
 function describeDetectedAnswer(row: DetectedRowResultModel): string {
   if (row.override_choice_indices && row.override_choice_indices.length > 0) {
     return `${row.override_choice_indices.map((index) => String.fromCharCode(65 + index)).join(", ")} (corrected)`;
@@ -184,7 +199,11 @@ function identityLabel(sheet: ScannedSheetModel): string {
   }
 }
 
-export default function ScanReviewWorkspace() {
+export default function ScanReviewWorkspace({
+  onChanged,
+  snapshotIds,
+  testTitle,
+}: ScanReviewWorkspaceProps) {
   const [batches, setBatches] = useState<GradingBatchModel[]>([]);
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
   const [selectedSheetId, setSelectedSheetId] = useState<string | null>(null);
@@ -215,9 +234,12 @@ export default function ScanReviewWorkspace() {
     setLoading(true);
     try {
       const response = await listScanBatches();
-      setBatches(response.items);
+      const mine = response.items.filter((batch) => snapshotIds.includes(batch.snapshot_id));
+      setBatches(mine);
       setErrorMessage("");
-      if (!selectedBatchId && response.items[0]) setSelectedBatchId(response.items[0].id);
+      setSelectedBatchId((current) =>
+        current && mine.some((batch) => batch.id === current) ? current : mine[0]?.id ?? null,
+      );
     } catch (error) {
       setErrorMessage((error as Error).message);
     } finally {
@@ -236,6 +258,10 @@ export default function ScanReviewWorkspace() {
 
   useEffect(() => {
     void refreshBatches();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapshotIds.join(",")]);
+
+  useEffect(() => {
     void listStudents()
       .then((response) => setStudents(response.items))
       .catch(() => undefined);
@@ -314,6 +340,7 @@ export default function ScanReviewWorkspace() {
       await reassignSheetToPrinting(selectedBatchId, selectedSheet.id, snapshotId);
       await refreshSelectedBatch(selectedBatchId);
       setStatusMessage("Matched to that printing and read again.");
+      onChanged?.();
       setErrorMessage("");
     } catch (error) {
       setErrorMessage((error as Error).message);
@@ -326,25 +353,42 @@ export default function ScanReviewWorkspace() {
     (snapshot?.questions ?? []).map((question) => [question.id, question]),
   );
 
-  /** No batch has to be chosen first -- each sheet's QR says which test it is,
-   *  so the scans sort themselves and the batch picker becomes a filter rather
-   *  than a thing to set up in advance. */
+  /** Each sheet's QR says which test it is, so the scans sort themselves rather
+   *  than needing a batch chosen up front.
+   *
+   *  That also means a page from another test can come out of the same stack of
+   *  paper. It still lands correctly -- under that test, not this one -- so the
+   *  status message says where the scans went instead of leaving a teacher
+   *  looking at a page that seems to have swallowed them. */
   async function handleUpload(files: FileList | null) {
     if (!files || files.length === 0) return;
     setBusy(true);
     try {
-      const response = await ingestScans(Array.from(files));
+      // Unreadable pages file themselves under this test rather than under
+      // whichever test was printed most recently -- the teacher is looking at
+      // this one, so this is where they will go looking for a lost page.
+      const landed = (await ingestScans(Array.from(files), snapshotIds[0] ?? null)).items;
       await refreshBatches();
-      const landed = response.items;
-      if (landed.length > 0) {
-        setSelectedBatchId(landed[0].id);
-        await refreshSelectedBatch(landed[0].id);
+
+      const here = landed.filter((batch) => snapshotIds.includes(batch.snapshot_id));
+      const elsewhere = landed.length - here.length;
+      if (here[0]) {
+        setSelectedBatchId(here[0].id);
+        await refreshSelectedBatch(here[0].id);
       }
+
+      const sheetsHere = here.reduce((total, batch) => total + batch.sheets.length, 0);
+      const elsewhereNames = landed
+        .filter((batch) => !snapshotIds.includes(batch.snapshot_id))
+        .map((batch) => batch.source_description || "another test");
       setStatusMessage(
-        landed.length <= 1
-          ? "Scans sorted into their test."
-          : `Scans sorted into ${landed.length} tests.`,
+        elsewhere === 0
+          ? `${sheetsHere} sheet${sheetsHere === 1 ? "" : "s"} added to ${testTitle}.`
+          : `${sheetsHere} sheet${sheetsHere === 1 ? "" : "s"} added to ${testTitle}. ` +
+            `Pages belonging to ${elsewhereNames.join(", ")} were filed under ` +
+            `${elsewhere === 1 ? "that test" : "those tests"} instead.`,
       );
+      onChanged?.();
     } catch (error) {
       setErrorMessage((error as Error).message);
     } finally {
@@ -363,6 +407,7 @@ export default function ScanReviewWorkspace() {
       });
       await refreshSelectedBatch(selectedBatchId);
       setStatusMessage("Identity resolved.");
+      onChanged?.();
     } catch (error) {
       setErrorMessage((error as Error).message);
     } finally {
@@ -379,6 +424,7 @@ export default function ScanReviewWorkspace() {
       });
       await refreshSelectedBatch(selectedBatchId);
       setStatusMessage("Answer corrected.");
+      onChanged?.();
     } catch (error) {
       setErrorMessage((error as Error).message);
     } finally {
@@ -398,6 +444,7 @@ export default function ScanReviewWorkspace() {
       });
       await refreshSelectedBatch(selectedBatchId);
       setStatusMessage("Answer corrected.");
+      onChanged?.();
     } catch (error) {
       setErrorMessage((error as Error).message);
     } finally {
@@ -422,6 +469,7 @@ export default function ScanReviewWorkspace() {
       }
       await refreshSelectedBatch(selectedBatchId);
       setStatusMessage(`Question ${row.sheet_item_number} confirmed.`);
+      onChanged?.();
     } catch (error) {
       setErrorMessage((error as Error).message);
     } finally {
@@ -454,6 +502,7 @@ export default function ScanReviewWorkspace() {
       });
       await refreshSelectedBatch(selectedBatchId);
       setStatusMessage(`Question ${row.sheet_item_number} set to ${letters.toUpperCase()}.`);
+      onChanged?.();
     } catch (error) {
       setErrorMessage((error as Error).message);
     } finally {
@@ -473,6 +522,7 @@ export default function ScanReviewWorkspace() {
       });
       await refreshSelectedBatch(selectedBatchId);
       setStatusMessage(`Question ${row.sheet_item_number} recorded as no response.`);
+      onChanged?.();
     } catch (error) {
       setErrorMessage((error as Error).message);
     } finally {
@@ -492,6 +542,7 @@ export default function ScanReviewWorkspace() {
       });
       await refreshSelectedBatch(selectedBatchId);
       setStatusMessage("Score recorded.");
+      onChanged?.();
     } catch (error) {
       setErrorMessage((error as Error).message);
     } finally {
@@ -501,37 +552,10 @@ export default function ScanReviewWorkspace() {
 
   return (
     <div className="scan-review-workspace">
-      <header className="standards-panel-header">
-        <div>
-          <h2>Scan & Review</h2>
-          <p>Resolve identity, correct flagged marks, and score manual-response rows.</p>
-        </div>
-        {statusMessage ? <span className="status-pill saved">{statusMessage}</span> : null}
-      </header>
-
+      {statusMessage ? <span className="status-pill saved">{statusMessage}</span> : null}
       {errorMessage ? <p className="gradebook-error">{errorMessage}</p> : null}
 
       <div className="standards-import-grid">
-        <label>
-          Batch
-          <select
-            value={selectedBatchId ?? ""}
-            onChange={(event) => {
-              setSelectedBatchId(event.target.value || null);
-              setSelectedSheetId(null);
-            }}
-          >
-            <option value="" disabled>
-              {loading ? "Loading..." : "Select a batch"}
-            </option>
-            {batches.map((batch) => (
-              <option key={batch.id} value={batch.id}>
-                {batch.source_description || batch.id} ({batch.sheets.length} sheet
-                {batch.sheets.length === 1 ? "" : "s"})
-              </option>
-            ))}
-          </select>
-        </label>
         <label>
           Upload scans
           <input
@@ -543,6 +567,26 @@ export default function ScanReviewWorkspace() {
             onChange={(event) => void handleUpload(event.target.files)}
           />
         </label>
+        {batches.length > 1 ? (
+          <label>
+            Scan batch
+            <select
+              value={selectedBatchId ?? ""}
+              onChange={(event) => {
+                setSelectedBatchId(event.target.value || null);
+                setSelectedSheetId(null);
+              }}
+            >
+              {batches.map((batch) => (
+                <option key={batch.id} value={batch.id}>
+                  {batch.source_description ||
+                    `Scanned ${new Date(batch.created_at).toLocaleDateString()}`}{" "}
+                  ({batch.sheets.length} sheet{batch.sheets.length === 1 ? "" : "s"})
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         <label>
           Show
           <select value={filter} onChange={(event) => setFilter(event.target.value as SheetFilter)}>
@@ -551,6 +595,14 @@ export default function ScanReviewWorkspace() {
           </select>
         </label>
       </div>
+
+      {loading ? <p>Loading...</p> : null}
+      {!loading && batches.length === 0 ? (
+        <p>
+          No sheets have been scanned for {testTitle} yet. Upload the scanned pages above -- each
+          page's QR code says which test and which student it is, so they sort themselves.
+        </p>
+      ) : null}
 
       <div className="question-import-review scan-review-layout">
         <section className="question-import-table-panel">

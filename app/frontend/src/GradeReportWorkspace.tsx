@@ -1,7 +1,21 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-import { getCombinedLineageReport, getGradeReport, listScanBatches, recordPerformanceRun } from "./api";
-import type { CombinedGradeReportModel, GradeReportModel, GradingBatchModel } from "./types";
+import { getCombinedLineageReport, getGradeReport, recordPerformanceRun } from "./api";
+import type {
+  AdministeredTestSnapshotSummaryModel,
+  CombinedGradeReportModel,
+  GradeReportModel,
+  GradingBatchModel,
+} from "./types";
+
+interface GradeReportWorkspaceProps {
+  /** The test being drilled into. Batches arrive already filtered to it by the
+   *  caller, so this panel never has to think about any other test. */
+  lineageId: string;
+  testTitle: string;
+  batches: GradingBatchModel[];
+  printings: AdministeredTestSnapshotSummaryModel[];
+}
 
 function bucketLowerBound(bucket: string): number {
   return Number(bucket.split("-")[0]) || 0;
@@ -34,38 +48,79 @@ function ScoreHistogram({ histogram }: { histogram: Record<string, number> }) {
   );
 }
 
-export default function GradeReportWorkspace() {
-  const [batches, setBatches] = useState<GradingBatchModel[]>([]);
+/** One test's results. Scoped to a single lineage by the Administered Tests
+ *  drill-down that owns it, so there is no test picker here -- you got here by
+ *  picking a test.
+ *
+ *  Computed straight from a batch and its snapshot's frozen answer key; no bank
+ *  needs to be open, except to record a performance run back into one. */
+export default function GradeReportWorkspace({
+  lineageId,
+  testTitle,
+  batches,
+  printings,
+}: GradeReportWorkspaceProps) {
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
   const [report, setReport] = useState<GradeReportModel | null>(null);
   const [cohortLabel, setCohortLabel] = useState("");
-  const [lineageTitle, setLineageTitle] = useState("");
   const [lineageReport, setLineageReport] = useState<CombinedGradeReportModel | null>(null);
-  const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
 
+  const versionBySnapshotId = useMemo(
+    () => Object.fromEntries(printings.map((printing) => [printing.id, printing.version])),
+    [printings],
+  );
+
+  function batchLabel(batch: GradingBatchModel): string {
+    const version = versionBySnapshotId[batch.snapshot_id];
+    const name =
+      batch.source_description || `Scanned ${new Date(batch.created_at).toLocaleDateString()}`;
+    return version ? `${name} - version ${version}` : name;
+  }
+
+  // Land on the newest batch, which is almost always the one just scanned.
   useEffect(() => {
-    setLoading(true);
-    listScanBatches()
-      .then((response) => {
-        setBatches(response.items);
-        if (response.items[0]) setSelectedBatchId(response.items[0].id);
-      })
-      .catch((error) => setErrorMessage((error as Error).message))
-      .finally(() => setLoading(false));
-  }, []);
+    setSelectedBatchId((current) =>
+      current && batches.some((batch) => batch.id === current) ? current : batches[0]?.id ?? null,
+    );
+  }, [batches]);
 
   useEffect(() => {
     if (!selectedBatchId) {
       setReport(null);
       return;
     }
+    let cancelled = false;
     getGradeReport(selectedBatchId)
-      .then(setReport)
-      .catch((error) => setErrorMessage((error as Error).message));
+      .then((loaded) => {
+        if (!cancelled) setReport(loaded);
+      })
+      .catch((error) => {
+        if (!cancelled) setErrorMessage((error as Error).message);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [selectedBatchId]);
+
+  // Unlike the single-batch report this one needs no setting up: the drill-down
+  // already knows which test it is. Keyed on lineage rather than title, so a
+  // retake linked in under a different title is counted here too.
+  useEffect(() => {
+    let cancelled = false;
+    getCombinedLineageReport({ lineageId })
+      .then((loaded) => {
+        if (!cancelled) setLineageReport(loaded);
+      })
+      .catch(() => {
+        if (!cancelled) setLineageReport(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [lineageId, batches]);
 
   useEffect(() => {
     if (!statusMessage) return;
@@ -79,18 +134,6 @@ export default function GradeReportWorkspace() {
     try {
       await recordPerformanceRun(selectedBatchId, cohortLabel.trim() || null);
       setStatusMessage("Recorded into the bank's test performance history.");
-    } catch (error) {
-      setErrorMessage((error as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleLoadLineage() {
-    if (!lineageTitle.trim()) return;
-    setBusy(true);
-    try {
-      setLineageReport(await getCombinedLineageReport(lineageTitle.trim()));
       setErrorMessage("");
     } catch (error) {
       setErrorMessage((error as Error).message);
@@ -99,34 +142,38 @@ export default function GradeReportWorkspace() {
     }
   }
 
+  if (batches.length === 0) {
+    return (
+      <div className="grade-report-workspace">
+        <p>
+          Nothing has been scanned for {testTitle} yet. Once sheets are scanned in, this is where
+          the score distribution, the by-item breakdown, and each student's score appear.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="grade-report-workspace">
-      <header className="standards-panel-header">
-        <div>
-          <h2>Reports</h2>
-          <p>Computed straight from a batch and its snapshot's answer key -- no bank needs to be open.</p>
-        </div>
-        {statusMessage ? <span className="status-pill saved">{statusMessage}</span> : null}
-      </header>
-
+      {statusMessage ? <span className="status-pill saved">{statusMessage}</span> : null}
       {errorMessage ? <p className="gradebook-error">{errorMessage}</p> : null}
 
-      <label>
-        Batch
-        <select
-          value={selectedBatchId ?? ""}
-          onChange={(event) => setSelectedBatchId(event.target.value || null)}
-        >
-          <option value="" disabled>
-            {loading ? "Loading..." : "Select a batch"}
-          </option>
-          {batches.map((batch) => (
-            <option key={batch.id} value={batch.id}>
-              {batch.source_description || batch.id}
-            </option>
-          ))}
-        </select>
-      </label>
+      {batches.length > 1 ? (
+        <label className="inline-select">
+          Scan batch
+          <select
+            value={selectedBatchId ?? ""}
+            onChange={(event) => setSelectedBatchId(event.target.value || null)}
+          >
+            {batches.map((batch) => (
+              <option key={batch.id} value={batch.id}>
+                {batchLabel(batch)} ({batch.sheets.length} sheet
+                {batch.sheets.length === 1 ? "" : "s"})
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
 
       {report ? (
         <>
@@ -255,44 +302,17 @@ export default function GradeReportWorkspace() {
               </tbody>
             </table>
           </section>
-
-          <section className="standards-panel">
-            <h3>Record into the bank</h3>
-            <p>
-              Only aggregate per-question statistics cross back into the bank -- never student
-              identities -- and only when you ask for it. Requires the matching bank to still be
-              open.
-            </p>
-            <div className="gradebook-manual-open">
-              <input
-                type="text"
-                placeholder="Cohort label (optional)"
-                value={cohortLabel}
-                onChange={(event) => setCohortLabel(event.target.value)}
-              />
-              <button type="button" disabled={busy} onClick={() => void handleRecordPerformanceRun()}>
-                Record as Performance Run
-              </button>
-            </div>
-          </section>
         </>
       ) : null}
 
-      <section className="standards-panel">
-        <h3>Combined report across versions</h3>
-        <p>Sums by-standard stats across every version of a test sharing this title.</p>
-        <div className="gradebook-manual-open">
-          <input
-            type="text"
-            placeholder="Test title"
-            value={lineageTitle}
-            onChange={(event) => setLineageTitle(event.target.value)}
-          />
-          <button type="button" disabled={busy} onClick={() => void handleLoadLineage()}>
-            Load
-          </button>
-        </div>
-        {lineageReport ? (
+      {lineageReport && lineageReport.batch_ids.length > 1 ? (
+        <section className="standards-panel">
+          <h3>Every version combined</h3>
+          <p>
+            By-standard results summed across all {lineageReport.batch_ids.length} scan batches of
+            this test, including any retakes linked to it -- {lineageReport.scored_sheet_count}{" "}
+            scored sheets in total.
+          </p>
           <table className="scan-review-table">
             <thead>
               <tr>
@@ -313,7 +333,30 @@ export default function GradeReportWorkspace() {
               ))}
             </tbody>
           </table>
-        ) : null}
+        </section>
+      ) : null}
+
+      <section className="standards-panel">
+        <h3>Record into the bank</h3>
+        <p>
+          Only aggregate per-question statistics cross back into the bank -- never student
+          identities -- and only when you ask for it. Requires the matching bank to still be open.
+        </p>
+        <div className="gradebook-manual-open">
+          <input
+            type="text"
+            placeholder="Cohort label (optional)"
+            value={cohortLabel}
+            onChange={(event) => setCohortLabel(event.target.value)}
+          />
+          <button
+            type="button"
+            disabled={busy || !selectedBatchId}
+            onClick={() => void handleRecordPerformanceRun()}
+          >
+            Record as Performance Run
+          </button>
+        </div>
       </section>
     </div>
   );

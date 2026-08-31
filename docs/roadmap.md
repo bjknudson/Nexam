@@ -153,6 +153,22 @@ Full design in `docs/grading-plan.md`; format reference in `docs/grading.md`.
   full print -> scan -> detect -> review -> report pipeline, verified without
   a physical printer or scanner via synthetic render/rasterize/fill/detect
   round-trip tests (including perspective skew and noise tolerance).
+- Cross-test student performance and CSV export: snapshots carry a
+  `lineage_id` (derived from the title, overridable by hand) so a retake links
+  to the test it retakes; `grading/aggregate.py` rolls every scored sheet up
+  per student across every test, resolving retakes as most-recent / highest /
+  average at export time; and `grading/csv_export.py` writes three wide CSV
+  shapes -- total per test, percent by standard, and a difficulty-weighted
+  mastery estimate per standard that reuses `QuestionModel.difficulty`, frozen
+  onto the answer key at hand-off. The roster page is built around a student's
+  record rather than their contact fields. See `docs/grading.md`.
+- Administered Tests became the centre of the gradebook: scanning and reporting
+  are per-test drill-downs inside it rather than top-level tabs, the list groups
+  tests that need the teacher (pending review, printed-but-not-scanned) above the
+  rest with a one-click route into the tab that resolves them, and each card
+  generates response sheets for its own test across every version in one run.
+  The gradebook's pages are now Students / Tests / Export. See "Page layout" in
+  `docs/grading.md`.
 - Remaining Phase 6 work: `ResponseSheetPrintPane.tsx`, `RosterWorkspace.tsx`,
   `ScanReviewWorkspace.tsx`, and `GradeReportWorkspace.tsx` on the frontend;
   the `save_bytes_dialog` Tauri command for exporting a generated PDF; and a

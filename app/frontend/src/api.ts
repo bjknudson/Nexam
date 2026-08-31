@@ -1,6 +1,8 @@
 import type {
+  AdministeredTestSnapshotCollectionModel,
   AdministeredTestSnapshotListResponseModel,
   AdministeredTestSnapshotModel,
+  AdministeredTestSnapshotSummaryModel,
   AssetInspectionBatchResponseModel,
   AssetInspectionResponseModel,
   AssetListResponseModel,
@@ -23,6 +25,7 @@ import type {
   QuestionImportStageModel,
   QuestionListResponseModel,
   QuestionModel,
+  ResponseSheetVersionAssignment,
   ScannedSheetModel,
   SheetPageSize,
   StandardImportResponseModel,
@@ -30,8 +33,12 @@ import type {
   StandardRecordModel,
   StandardReferenceModel,
   StandardSearchResponseModel,
+  RetakeResolution,
+  ScoreExportMethod,
   StudentListResponseModel,
   StudentModel,
+  StudentPerformanceListResponseModel,
+  StudentPerformanceModel,
   TestDraftDetailModel,
   TestDraftListResponseModel,
   TestDraftModel,
@@ -47,6 +54,10 @@ function buildApiUrl(path: string): string {
   return apiBaseUrl ? `${apiBaseUrl}${path}` : path;
 }
 
+export interface ApiError extends Error {
+  status?: number;
+}
+
 async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const payload = await response.json().catch(() => ({ detail: "Request failed." }));
@@ -54,7 +65,9 @@ async function handleResponse<T>(response: Response): Promise<T> {
       typeof payload.detail === "string"
         ? payload.detail
         : JSON.stringify(payload.detail ?? "Request failed.");
-    throw new Error(detail);
+    const error: ApiError = new Error(detail);
+    error.status = response.status;
+    throw error;
   }
   return response.json() as Promise<T>;
 }
@@ -735,6 +748,31 @@ export async function createAdministeredTest(payload: {
   );
 }
 
+export async function createResponseSheetBatch(payload: {
+  testId: string;
+  mode: "blank" | "pre_id";
+  pageSize?: SheetPageSize;
+  assignments: ResponseSheetVersionAssignment[];
+}): Promise<AdministeredTestSnapshotCollectionModel> {
+  return handleResponse(
+    await fetch(buildApiUrl(`/api/tests/${encodeURIComponent(payload.testId)}/response-sheets/batch`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mode: payload.mode,
+        page_size: payload.pageSize ?? "letter",
+        assignments: payload.assignments,
+      }),
+    }),
+  );
+}
+
+export function getResponseSheetBatchPdfUrl(generationBatchId: string): string {
+  return buildApiUrl(
+    `/api/gradebook/response-sheets/batches/${encodeURIComponent(generationBatchId)}/pdf`,
+  );
+}
+
 export async function listAdministeredTests(): Promise<AdministeredTestSnapshotListResponseModel> {
   return handleResponse(await fetch(buildApiUrl("/api/gradebook/administered-tests")));
 }
@@ -777,10 +815,18 @@ export async function getScanBatch(batchId: string): Promise<GradingBatchModel> 
   return handleResponse(await fetch(buildApiUrl(`/api/gradebook/batches/${encodeURIComponent(batchId)}`)));
 }
 
-/** Upload scans without naming a batch: each sheet's QR decides where it goes. */
-export async function ingestScans(files: File[]): Promise<{ items: GradingBatchModel[] }> {
+/** Upload scans without naming a batch: each sheet's QR decides where it goes.
+ *
+ *  `fallbackSnapshotId` is where pages with an unreadable QR land -- pass the
+ *  printing the teacher is scanning from, so a page the scanner could not read
+ *  files itself under the test they are looking at. */
+export async function ingestScans(
+  files: File[],
+  fallbackSnapshotId?: string | null,
+): Promise<{ items: GradingBatchModel[] }> {
   const form = new FormData();
   for (const file of files) form.append("files", file);
+  if (fallbackSnapshotId) form.append("fallback_snapshot_id", fallbackSnapshotId);
   return handleResponse(
     await fetch(buildApiUrl("/api/gradebook/scans/ingest"), { method: "POST", body: form }),
   );
@@ -896,9 +942,15 @@ export async function getGradeReport(batchId: string): Promise<GradeReportModel>
   );
 }
 
-export async function getCombinedLineageReport(testTitle: string): Promise<CombinedGradeReportModel> {
+/** Pass `lineageId` where you have one -- it follows the explicit retake link,
+ *  so a retake linked in under a different title is included. `testTitle` is
+ *  for callers that only know the title. */
+export async function getCombinedLineageReport(
+  target: { lineageId?: string | null; testTitle?: string | null },
+): Promise<CombinedGradeReportModel> {
   const searchParams = new URLSearchParams();
-  searchParams.set("test_title", testTitle);
+  if (target.lineageId) searchParams.set("lineage_id", target.lineageId);
+  else if (target.testTitle) searchParams.set("test_title", target.testTitle);
   return handleResponse(
     await fetch(buildApiUrl(`/api/gradebook/report/combined?${searchParams.toString()}`)),
   );
@@ -918,4 +970,81 @@ export async function recordPerformanceRun(
       },
     ),
   );
+}
+
+export async function getStudentPerformance(
+  resolution: RetakeResolution = "most_recent",
+): Promise<StudentPerformanceListResponseModel> {
+  const searchParams = new URLSearchParams({ resolution });
+  return handleResponse(
+    await fetch(buildApiUrl(`/api/gradebook/students/performance?${searchParams.toString()}`)),
+  );
+}
+
+export async function getOneStudentPerformance(
+  studentId: string,
+  resolution: RetakeResolution = "most_recent",
+): Promise<StudentPerformanceModel> {
+  const searchParams = new URLSearchParams({ resolution });
+  return handleResponse(
+    await fetch(
+      buildApiUrl(
+        `/api/gradebook/students/${encodeURIComponent(studentId)}/performance?${searchParams.toString()}`,
+      ),
+    ),
+  );
+}
+
+/** Link a printing to another as the same test, so a retake reads as a second
+ *  attempt rather than a separate test. Pass neither id to unlink it, which
+ *  puts it back under whatever its own title says. */
+export async function relinkSnapshotLineage(
+  snapshotId: string,
+  payload: { lineageOfSnapshotId?: string | null; lineageId?: string | null } = {},
+): Promise<AdministeredTestSnapshotSummaryModel> {
+  return handleResponse(
+    await fetch(
+      buildApiUrl(`/api/gradebook/administered-tests/${encodeURIComponent(snapshotId)}/lineage`),
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lineage_of_snapshot_id: payload.lineageOfSnapshotId ?? null,
+          lineage_id: payload.lineageId ?? null,
+        }),
+      },
+    ),
+  );
+}
+
+/** Fetches the CSV as text plus the filename the backend suggests, rather than
+ *  navigating to the URL: `<a download>` is inert inside the macOS webview, so
+ *  the caller hands the bytes to the shell's save dialog instead. */
+export async function fetchScoresCsv(options: {
+  method: ScoreExportMethod;
+  resolution: RetakeResolution;
+  section?: string | null;
+}): Promise<{ csv: string; filename: string }> {
+  const searchParams = new URLSearchParams({
+    method: options.method,
+    resolution: options.resolution,
+  });
+  if (options.section) searchParams.set("section", options.section);
+
+  const response = await fetch(
+    buildApiUrl(`/api/gradebook/export/scores.csv?${searchParams.toString()}`),
+  );
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({ detail: "Could not build the export." }));
+    throw new Error(
+      typeof payload.detail === "string" ? payload.detail : "Could not build the export.",
+    );
+  }
+
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const match = disposition.match(/filename="([^"]+)"/);
+  return {
+    csv: await response.text(),
+    filename: match ? match[1] : `scores-${options.method}.csv`,
+  };
 }

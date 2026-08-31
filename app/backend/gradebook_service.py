@@ -13,9 +13,12 @@ import numpy as np
 import pymupdf
 from PIL import Image
 
+from .grading.aggregate import build_student_performance
 from .grading.answer_key import derive_answer_key
+from .grading.csv_export import build_scores_csv, suggested_filename
 from .grading.detect import decode_qr_payload, parse_qr_payload, read_sheet
 from .grading.layout import SheetCopySpec, build_sheet_layout
+from .grading.lineage import lineage_id_for_title, lineage_title, resolve_lineage_id
 from .grading.pdf import render_sheet_layout_to_pdf
 from .grading.scoring import combine_by_standard, score_batch
 from .models import (
@@ -31,11 +34,15 @@ from .models import (
     GradingBatchListResponseModel,
     GradingBatchModel,
     QuestionModel,
+    RetakeResolution,
     ScannedSheetModel,
+    ScoreExportMethod,
     SheetPageModel,
     StudentCollectionModel,
     StudentListResponseModel,
     StudentModel,
+    StudentPerformanceListResponseModel,
+    StudentPerformanceModel,
     TestDraftModel,
     TestPerformanceItemModel,
     TestPerformanceRunModel,
@@ -250,6 +257,7 @@ class GradebookService:
         blank_count: int | None,
         student_ids: list[str] | None,
         alternates: list[tuple[TestDraftModel, list[QuestionModel]]] | None = None,
+        generation_batch_id: str | None = None,
     ) -> AdministeredTestSnapshotModel:
         _, workspace_path = self.ensure_open()
 
@@ -289,9 +297,12 @@ class GradebookService:
             printed_at=datetime.now(UTC),
             items=test.items,
             questions=questions,
+            print_settings=test.print_settings,
             answer_key=answer_key,
             alternate_answer_keys=alternate_keys,
             layout=layout,
+            generation_batch_id=generation_batch_id,
+            lineage_id=lineage_id_for_title(test.title),
         )
 
         snapshot_dir = workspace_path / "snapshots" / snapshot.id
@@ -379,6 +390,35 @@ class GradebookService:
                 return pdf_path.read_bytes()
         raise BankWorkspaceError(f"No sheet found for layout: {layout_id}", status_code=404)
 
+    def get_batch_pdf_bytes(self, generation_batch_id: str) -> bytes:
+        """One print job's worth of pages, across every version in a batch.
+
+        A version-assignment run produces one snapshot per version (each keeps
+        its own frozen answer key), but the teacher wants to print them as a
+        single job -- so their PDFs are concatenated here rather than at
+        generation time, reusing pymupdf the same way scan ingestion already
+        does for reading uploaded PDFs.
+        """
+
+        _, workspace_path = self.ensure_open()
+        batch_snapshots = [
+            snapshot
+            for snapshot in self._read_all_snapshots()
+            if snapshot.generation_batch_id == generation_batch_id
+        ]
+        if not batch_snapshots:
+            raise BankWorkspaceError(
+                f"No response sheets found for batch: {generation_batch_id}", status_code=404
+            )
+        batch_snapshots.sort(key=lambda snapshot: snapshot.version)
+
+        merged = pymupdf.open()
+        for snapshot in batch_snapshots:
+            pdf_path = workspace_path / "snapshots" / snapshot.id / "sheet.pdf"
+            with pymupdf.open(pdf_path) as document:
+                merged.insert_pdf(document)
+        return merged.tobytes()
+
     def _snapshot_summary(
         self, snapshot: AdministeredTestSnapshotModel
     ) -> AdministeredTestSnapshotSummaryModel:
@@ -393,6 +433,7 @@ class GradebookService:
             total_points=snapshot.answer_key.total_points,
             page_count=len(snapshot.layout.pages),
             mode=snapshot.layout.mode,
+            lineage_id=resolve_lineage_id(snapshot),
         )
 
     def _read_all_snapshots(self) -> list[AdministeredTestSnapshotModel]:
@@ -445,16 +486,26 @@ class GradebookService:
         self._write_batch(workspace_path, batch)
         return batch
 
-    def ingest_scans(self, files: list[tuple[str, bytes]]) -> list[GradingBatchModel]:
+    def ingest_scans(
+        self, files: list[tuple[str, bytes]], fallback_snapshot_id: str | None = None
+    ) -> list[GradingBatchModel]:
         """Take a pile of scans and sort them by the test each sheet says it is.
 
         Every sheet already carries a QR naming the exact printing it came from,
         so asking the teacher to declare a batch first was asking for something
         the paper already knows. Pages are routed to the batch for their own
         snapshot, one batch per test and version, created on first sight.
+
+        `fallback_snapshot_id` is where pages whose QR could not be read go. The
+        caller passes the test the teacher is actually looking at, so an
+        unreadable page files itself under the test they were scanning rather
+        than under whichever test happens to have been printed most recently.
         """
 
         _, workspace_path = self.ensure_open()
+        if fallback_snapshot_id is not None:
+            # Fail now rather than filing pages against an id that isn't real.
+            self.get_snapshot(fallback_snapshot_id)
         sheet_lookup = self._build_sheet_lookup()
         touched: dict[str, GradingBatchModel] = {}
 
@@ -467,7 +518,7 @@ class GradebookService:
                     if match is not None:
                         snapshot_id = match[0].id
 
-                batch = self._batch_for_snapshot(snapshot_id, touched)
+                batch = self._batch_for_snapshot(snapshot_id, touched, fallback_snapshot_id)
                 scans_dir = workspace_path / "scans" / batch.id
                 scans_dir.mkdir(parents=True, exist_ok=True)
                 sheet = self._ingest_page(
@@ -480,27 +531,35 @@ class GradebookService:
         return sorted(touched.values(), key=lambda item: item.created_at)
 
     def _batch_for_snapshot(
-        self, snapshot_id: str | None, touched: dict[str, GradingBatchModel]
+        self,
+        snapshot_id: str | None,
+        touched: dict[str, GradingBatchModel],
+        fallback_snapshot_id: str | None = None,
     ) -> GradingBatchModel:
         """The open batch for a snapshot, reused across this upload and across
         uploads, so re-scanning a few stragglers does not fragment a class set.
 
-        A page whose QR could not be read has no snapshot to sort by. It lands
-        in the most recently printed test's batch, flagged for review, because a
-        sheet a teacher cannot find is worse than one filed in the wrong place.
+        A page whose QR could not be read has no snapshot to sort by, and is
+        filed somewhere real and flagged for review -- a sheet a teacher cannot
+        find is worse than one filed in the wrong place. In order of preference:
+        the test the caller says they are working on, then whatever this upload
+        has already landed in, then the most recently printed test.
         """
 
         if snapshot_id is None:
-            if touched:
+            if fallback_snapshot_id is not None:
+                snapshot_id = fallback_snapshot_id
+            elif touched:
                 return next(reversed(list(touched.values())))
-            snapshots = self._read_all_snapshots()
-            if not snapshots:
-                raise BankWorkspaceError(
-                    "No tests have been handed off to this gradebook yet, so there is "
-                    "nothing for these scans to belong to.",
-                    status_code=400,
-                )
-            snapshot_id = max(snapshots, key=lambda item: item.printed_at).id
+            else:
+                snapshots = self._read_all_snapshots()
+                if not snapshots:
+                    raise BankWorkspaceError(
+                        "No tests have been handed off to this gradebook yet, so there is "
+                        "nothing for these scans to belong to.",
+                        status_code=400,
+                    )
+                snapshot_id = max(snapshots, key=lambda item: item.printed_at).id
 
         if snapshot_id in touched:
             return touched[snapshot_id]
@@ -530,19 +589,132 @@ class GradebookService:
         snapshot = self.get_snapshot(batch.snapshot_id)
         return score_batch(batch, snapshot, self._read_students().items)
 
-    def get_combined_lineage_report(self, test_title: str) -> CombinedGradeReportModel:
-        lineage_key = test_title.strip().casefold()
-        snapshots = [s for s in self._read_all_snapshots() if s.title.strip().casefold() == lineage_key]
+    def get_combined_lineage_report(
+        self, test_title: str | None = None, lineage_id: str | None = None
+    ) -> CombinedGradeReportModel:
+        """Score-by-standard across every version of one test.
+
+        `lineage_id` is the accurate way in -- it follows the explicit retake
+        link, so a retake titled differently is included and a test deliberately
+        split out is not. Title lookup stays for callers that only have a title,
+        and resolves through the same lineage so it picks up linked retakes too.
+        """
+
+        all_snapshots = self._read_all_snapshots()
+        if lineage_id:
+            target_lineage = lineage_id
+        elif test_title:
+            target_lineage = lineage_id_for_title(test_title)
+        else:
+            raise BankWorkspaceError(
+                "A combined report needs either a lineage_id or a test_title.", status_code=400
+            )
+
+        snapshots = [s for s in all_snapshots if resolve_lineage_id(s) == target_lineage]
         snapshot_ids = {s.id for s in snapshots}
         batches = [b for b in self._read_all_batches() if b.snapshot_id in snapshot_ids]
 
         reports = [self.get_grade_report(batch.id) for batch in batches]
         return CombinedGradeReportModel(
-            test_title=test_title,
+            test_title=lineage_title(snapshots) or (test_title or ""),
+            lineage_id=target_lineage,
             snapshot_ids=sorted(snapshot_ids),
             batch_ids=[batch.id for batch in batches],
             scored_sheet_count=sum(report.scored_sheet_count for report in reports),
             by_standard=combine_by_standard(reports),
+        )
+
+    # -- Cross-test student performance ---------------------------------------
+
+    def get_student_performance(
+        self, resolution: RetakeResolution = "most_recent"
+    ) -> StudentPerformanceListResponseModel:
+        """Every student's whole record in this gradebook, in one pass.
+
+        Deliberately computed for the whole roster at once rather than per
+        student: scoring is driven off the batches, so answering for one student
+        costs the same read-and-score of every batch that answering for all of
+        them does. One call, one pass, and the caller filters.
+        """
+
+        return build_student_performance(
+            students=self._read_students().items,
+            snapshots=self._read_all_snapshots(),
+            batches=self._read_all_batches(),
+            resolution=resolution,
+        )
+
+    def get_one_student_performance(
+        self, student_id: str, resolution: RetakeResolution = "most_recent"
+    ) -> StudentPerformanceModel:
+        performance = self.get_student_performance(resolution)
+        for item in performance.items:
+            if item.student.id == student_id:
+                return item
+        raise BankWorkspaceError(f"Student not found: {student_id}", status_code=404)
+
+    def relink_snapshot_lineage(
+        self,
+        snapshot_id: str,
+        *,
+        lineage_of_snapshot_id: str | None,
+        lineage_id: str | None,
+    ) -> AdministeredTestSnapshotSummaryModel:
+        """Say that this printing is (or is no longer) the same test as another.
+
+        The only edit ever made to a stored snapshot. It touches nothing that
+        describes what was printed -- not the items, not the key, not the layout
+        -- so the promise that a snapshot is a faithful record of the paper
+        still holds; it only changes which pile the gradebook files it under.
+        """
+
+        _, workspace_path = self.ensure_open()
+        snapshot = self.get_snapshot(snapshot_id)
+
+        if lineage_of_snapshot_id:
+            snapshot.lineage_id = resolve_lineage_id(self.get_snapshot(lineage_of_snapshot_id))
+        elif lineage_id:
+            snapshot.lineage_id = lineage_id
+        else:
+            # Back to whatever the title says, which is where it started.
+            snapshot.lineage_id = lineage_id_for_title(snapshot.title)
+
+        snapshot_path = workspace_path / "snapshots" / snapshot.id / "snapshot.json"
+        snapshot_path.write_text(snapshot.model_dump_json(indent=2) + "\n")
+        return self._snapshot_summary(snapshot)
+
+    # -- CSV export -----------------------------------------------------------
+
+    def export_scores_csv(
+        self,
+        method: ScoreExportMethod = "total",
+        resolution: RetakeResolution = "most_recent",
+        section: str | None = None,
+        standard_codes: dict[str, str] | None = None,
+    ) -> tuple[str, str]:
+        """Returns (csv_text, suggested_filename).
+
+        `section` filters the roster the same way response-sheet generation
+        does, so a teacher can export one class period at a time out of a
+        gradebook that holds several.
+        """
+
+        performance = self.get_student_performance(resolution)
+        if section:
+            wanted = section.strip().casefold()
+            performance = performance.model_copy(
+                update={
+                    "items": [
+                        item
+                        for item in performance.items
+                        if (item.student.section or "").strip().casefold() == wanted
+                    ]
+                }
+            )
+
+        return (
+            build_scores_csv(performance, method, standard_codes),
+            suggested_filename(method, resolution),
         )
 
     def build_performance_run(self, batch_id: str, cohort_label: str | None = None) -> TestPerformanceRunModel:

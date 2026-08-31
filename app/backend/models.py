@@ -457,6 +457,15 @@ class TestDraftModel(BaseModel):
     items: list[TestItemModel] = Field(default_factory=list)
     print_settings: TestPrintSettingsModel = Field(default_factory=TestPrintSettingsModel)
     performance_runs: list[TestPerformanceRunModel] = Field(default_factory=list)
+    # Only finished tests are eligible as response-sheet siblings, so an
+    # abandoned same-titled draft can never leak into another version's bubble
+    # sheet. Toggling this is never a key-breaking edit.
+    finished: bool = False
+    # Set once response sheets have actually been generated for this version.
+    # From then on, edits that would change the printed answer key/bubble
+    # layout (item order/count, correct answers, point values) must fork a new
+    # version instead of editing in place.
+    has_generated_sheets: bool = False
 
     @field_validator("course_ids")
     @classmethod
@@ -854,6 +863,12 @@ class AnswerKeyItemModel(BaseModel):
     # Carried on the frozen key itself (not looked up from the bank later) so
     # by-standard reporting works even if the bank isn't open anymore.
     standard_ids: list[str] = Field(default_factory=list)
+    # QuestionModel.difficulty, 1 (easy) to 5 (hard), frozen here for the same
+    # reason as standard_ids: the difficulty-weighted mastery estimate has to be
+    # computable from the snapshot alone, and an alternate version's key carries
+    # no questions of its own to look it up from. None on keys frozen before
+    # this field existed -- see grading/aggregate.py for the fallback.
+    difficulty: int | None = None
     choice_count: int | None = None
     correct_choice_indices: list[int] | None = None
     numeric_value: float | None = None
@@ -977,12 +992,27 @@ class AdministeredTestSnapshotModel(BaseModel):
     printed_at: datetime
     items: list[TestItemModel]
     questions: list["QuestionModel"]
+    # Frozen alongside items/questions so the test paper itself -- not just the
+    # bubble sheet -- can be printed from the gradebook later without needing
+    # the source bank open.
+    print_settings: TestPrintSettingsModel
     answer_key: AnswerKeyModel
     # Keys for the other versions of this test, present only for interchangeable
     # sheets. Scoring picks by the version the student bubbled; `answer_key`
     # stays the version this paper was printed from.
     alternate_answer_keys: list[AnswerKeyModel] = Field(default_factory=list)
     layout: SheetLayoutModel
+    # Shared by every version's snapshot produced from one version-assignment
+    # generation run, so they can be grouped/printed together. None for
+    # snapshots created before this existed, or via the single-version path.
+    generation_batch_id: str | None = None
+    # Which test lineage this printing belongs to -- the link that makes two
+    # snapshots count as first attempt and retake of the same test rather than
+    # two unrelated tests. Defaulted from the title (see grading/lineage.py) so
+    # snapshots created before this field existed, and versions of one test,
+    # group together with no teacher action. Set explicitly to link a retake
+    # that was titled differently, or to split one that shouldn't be linked.
+    lineage_id: str | None = None
 
 
 class AdministeredTestSnapshotCollectionModel(BaseModel):
@@ -1002,6 +1032,9 @@ class AdministeredTestSnapshotSummaryModel(BaseModel):
     total_points: float
     page_count: int
     mode: Literal["blank", "pre_id"]
+    # Always resolved, never None: falls back to the title-derived id for
+    # snapshots that carry no explicit link. See grading/lineage.py.
+    lineage_id: str = ""
 
 
 class AdministeredTestSnapshotListResponseModel(BaseModel):
@@ -1014,6 +1047,34 @@ class CreateAdministeredTestRequest(BaseModel):
     page_size: Literal["letter", "legal", "a4", "half_letter"] = "letter"
     blank_count: int | None = None
     student_ids: list[str] | None = None
+
+
+class ResponseSheetVersionAssignmentModel(BaseModel):
+    """One version's share of a batch-generation call.
+
+    In `pre_id` mode, `student_ids` names who takes this version -- a partial
+    roster is fine, since a teacher may only be printing for the students
+    present today. In `blank` mode, `blank_count` is how many unnamed copies
+    of this version to print instead.
+    """
+
+    version: str
+    student_ids: list[str] = Field(default_factory=list)
+    blank_count: int | None = None
+
+
+class CreateResponseSheetBatchRequest(BaseModel):
+    """Generate response sheets across several versions of one lineage at once.
+
+    Each assignment gets its own dedicated (non-interchangeable) sheet -- the
+    teacher already knows which version each student is taking, so there's no
+    need for the "mark your version" generic sheet `interchangeable_sheets`
+    produces for the single-version endpoint.
+    """
+
+    mode: Literal["blank", "pre_id"] = "pre_id"
+    page_size: Literal["letter", "legal", "a4", "half_letter"] = "letter"
+    assignments: list[ResponseSheetVersionAssignmentModel]
 
 
 DetectionFlag = Literal["none", "low_confidence", "multi_mark", "no_mark"]
@@ -1199,14 +1260,18 @@ class CombinedGradeReportModel(BaseModel):
     """One test lineage's score-by-standard, combined across every version's
     batches in this gradebook.
 
-    Reuses the lineage-grouping idea from course coverage reporting (group
-    by title.strip().casefold()), but sums attempts/full_credit_count across
-    versions rather than taking the max: coverage avoids double-counting how
-    many times a standard is *taught*, but a score report is real, distinct
-    student attempts per version, so summing is the correct aggregation here.
+    Sums attempts/full_credit_count across versions rather than taking the max:
+    course coverage avoids double-counting how many times a standard is
+    *taught*, but a score report is real, distinct student attempts per version,
+    so summing is the correct aggregation here.
+
+    Grouped by `lineage_id` when the caller names one, which is what makes a
+    retake linked in under a different title count toward the test it retakes.
+    Grouping by title is still supported for callers that only know the title.
     """
 
     test_title: str
+    lineage_id: str = ""
     snapshot_ids: list[str] = Field(default_factory=list)
     batch_ids: list[str] = Field(default_factory=list)
     scored_sheet_count: int
@@ -1215,3 +1280,139 @@ class CombinedGradeReportModel(BaseModel):
 
 class RecordPerformanceRunRequest(BaseModel):
     cohort_label: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Cross-test student performance and CSV export
+#
+# Everything below is *derived*: nothing here is persisted. A gradebook stores
+# snapshots and scan batches; scores are recomputed from them on demand, so a
+# review correction or a re-linked retake shows up everywhere at once with no
+# stored total to go stale. See docs/grading.md.
+# ---------------------------------------------------------------------------
+
+
+RetakeResolution = Literal["most_recent", "highest", "average"]
+
+ScoreExportMethod = Literal["total", "by_standard", "mastery"]
+
+
+class StudentStandardScoreModel(BaseModel):
+    """One standard's worth of one student's work.
+
+    `percent_earned` is plain points earned over points possible. `mastery_estimate`
+    weights each item by its difficulty (1-5), so getting the hard items right
+    counts for more than getting the easy ones right:
+
+        mastery = 100 * sum(difficulty_i * credit_i) / sum(difficulty_i)
+
+    where credit_i is the fraction of the item's points the student earned. It
+    is a weighted average, not a psychometric ability estimate -- with one test's
+    worth of items it is a reading of this evidence, not a claim about the
+    student. Items whose frozen key predates the difficulty field fall back to
+    the middle of the scale, which makes them weigh the same as everything else.
+    """
+
+    standard_id: str
+    items_attempted: int
+    items_full_credit: int
+    points_earned: float
+    points_possible: float
+    percent_earned: float
+    mastery_estimate: float
+    average_difficulty: float
+
+
+class StudentAttemptModel(BaseModel):
+    """One student's one sitting of one test -- a single scored sheet.
+
+    `attempt_number` counts within (student, lineage) in the order the papers
+    were printed, so the second time a student sits the same test it reads as
+    attempt 2 whether or not anyone called it a retake.
+    """
+
+    lineage_id: str
+    test_title: str
+    version: str
+    snapshot_id: str
+    batch_id: str
+    sheet_id: str
+    attempt_number: int
+    printed_at: datetime
+    scanned_at: datetime
+    points_earned: float
+    points_possible: float
+    percent_correct: float
+    flagged_answer_count: int
+    contains_unscored_manual_items: bool
+    by_standard: list[StudentStandardScoreModel] = Field(default_factory=list)
+
+
+class ResolvedLineageScoreModel(BaseModel):
+    """The one score a lineage contributes once retakes are resolved.
+
+    `most_recent` and `highest` pick a real attempt and carry its numbers
+    through unchanged. `average` synthesises one: the mean of the attempts'
+    percentages (not pooled points -- a teacher who says "average the retakes"
+    means the average of the scores, regardless of how many points each paper
+    was out of).
+    """
+
+    resolution: RetakeResolution
+    attempt_count: int
+    # Which attempt(s) the numbers came from: one entry for most_recent/highest,
+    # every attempt for average.
+    source_attempt_numbers: list[int] = Field(default_factory=list)
+    points_earned: float
+    points_possible: float
+    percent_correct: float
+    by_standard: list[StudentStandardScoreModel] = Field(default_factory=list)
+
+
+class StudentLineagePerformanceModel(BaseModel):
+    lineage_id: str
+    test_title: str
+    attempts: list[StudentAttemptModel] = Field(default_factory=list)
+    resolved: ResolvedLineageScoreModel
+
+
+class StudentPerformanceModel(BaseModel):
+    """Everything one student has taken in this gradebook, in one object.
+
+    `by_standard` pools the *resolved* per-lineage standard entries, so a
+    retake counts once under whichever rule was asked for rather than dragging
+    the student's standard history down with a superseded first try.
+    """
+
+    student: StudentModel
+    tests_taken: int
+    attempt_count: int
+    points_earned: float
+    points_possible: float
+    percent_correct: float
+    unscored_manual_attempt_count: int
+    by_standard: list[StudentStandardScoreModel] = Field(default_factory=list)
+    lineages: list[StudentLineagePerformanceModel] = Field(default_factory=list)
+
+
+class StudentPerformanceListResponseModel(BaseModel):
+    generated_at: datetime
+    retake_resolution: RetakeResolution
+    items: list[StudentPerformanceModel] = Field(default_factory=list)
+    # Scored sheets that could not be attached to anyone on the roster (a
+    # hand-written name that was never resolved to a student). They are absent
+    # from every total above, so the caller can say so rather than quietly
+    # under-reporting.
+    unlinked_sheet_count: int = 0
+
+
+class RelinkSnapshotLineageRequest(BaseModel):
+    """Move a printing into another lineage, or back to its title's default.
+
+    Passing another snapshot's id is the usual way in: "this retake is the same
+    test as that one." Passing null clears the explicit link so the title
+    decides again.
+    """
+
+    lineage_of_snapshot_id: str | None = None
+    lineage_id: str | None = None
