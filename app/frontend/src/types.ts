@@ -183,6 +183,10 @@ export interface CreateQuestionsFromJsonResponse {
 export interface RubricRowModel {
   criterion: string;
   points: number;
+  /** This component's own difficulty, numbered like QuestionModel.difficulty.
+   *  Optional: a rubric without them grades normally, it just cannot be
+   *  laddered component by component under Rubric Levels. */
+  difficulty?: number | null;
 }
 
 export interface ManifestModel {
@@ -468,6 +472,8 @@ export interface AnswerKeyItemModel {
   row_kind: SheetRowKind;
   points: number;
   standard_ids: string[];
+  difficulty?: number | null;
+  rubric_components?: RubricRowModel[];
   choice_count?: number | null;
   correct_choice_indices?: number[] | null;
   numeric_value?: number | null;
@@ -611,6 +617,9 @@ export interface DetectedRowResultModel {
   manual_score?: number | null;
   manual_score_max?: number | null;
   manual_grader_note?: string | null;
+  /** One score per frozen rubric component, when the parts were scored
+   *  separately. `manual_score` stays the row total either way. */
+  component_scores?: number[] | null;
   override_choice_indices?: number[] | null;
   override_value?: number | null;
   override_note?: string | null;
@@ -719,6 +728,54 @@ export type RetakeResolution = "most_recent" | "highest" | "average";
 
 export type ScoreExportMethod = "total" | "by_standard" | "mastery";
 
+/** How a mastery level is calculated. Two words, one numbering: an author sets
+ *  a question's *difficulty*; a student reaches a *level*. See docs/grading.md.
+ *  - level_ladder: clear each level in turn; mastery is the last cleared plus
+ *    progress into the next.
+ *  - difficulty_weighted: partial credit on a hard question counts as partial
+ *    evidence of that level, without assuming the levels below it were cleared.
+ *  - rubric_levels: the ladder, applied to a multipart task's own components. */
+export type MasteryCalculation = "level_ladder" | "difficulty_weighted" | "rubric_levels";
+
+/** exact = two decimals. half_steps = nearest 0.5. */
+export type MasteryReporting = "exact" | "half_steps";
+
+export interface MasterySettingsModel {
+  calculation: MasteryCalculation;
+  reporting: MasteryReporting;
+}
+
+export interface GradebookMasteryConfigModel {
+  default: MasterySettingsModel;
+  /** Per-test overrides, keyed by lineage id. */
+  by_lineage: Record<string, MasterySettingsModel>;
+}
+
+export interface MasteryLevelBreakdownModel {
+  level: number;
+  points_earned: number;
+  points_possible: number;
+  accuracy: number;
+  mastered: boolean;
+}
+
+export interface MasteryResultModel {
+  calculation: MasteryCalculation;
+  reporting: MasteryReporting;
+  /** Already rounded by the reporting mode -- this is the one to display. */
+  level: number;
+  level_exact: number;
+  /** The highest level the evidence reaches, so "2.5" can be shown "of 4". */
+  scale_max: number;
+  levels: MasteryLevelBreakdownModel[];
+  /** A level above the first unmastered one was mastered anyway. */
+  inconsistent_evidence: boolean;
+  /** The levels present skip a rung, or do not start at 1. */
+  has_level_gaps: boolean;
+  /** Rubric Levels was asked for, but nothing carried component levels. */
+  components_unavailable: boolean;
+}
+
 export interface StudentStandardScoreModel {
   standard_id: string;
   items_attempted: number;
@@ -726,9 +783,10 @@ export interface StudentStandardScoreModel {
   points_earned: number;
   points_possible: number;
   percent_earned: number;
-  /** Difficulty-weighted: hard items count for more than easy ones. */
-  mastery_estimate: number;
   average_difficulty: number;
+  /** How far up the mastery ladder the evidence reaches. A level, not a
+   *  percentage -- see percent_earned for the plain score. */
+  mastery: MasteryResultModel;
 }
 
 export interface StudentAttemptModel {
@@ -782,6 +840,8 @@ export interface StudentPerformanceModel {
 export interface StudentPerformanceListResponseModel {
   generated_at: string;
   retake_resolution: RetakeResolution;
+  /** The gradebook default; individual tests may override it. */
+  mastery: MasterySettingsModel;
   items: StudentPerformanceModel[];
   /** Scored sheets that were never matched to anyone on the roster, and so
    *  count toward nobody's totals. */

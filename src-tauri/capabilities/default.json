@@ -4,8 +4,8 @@
   "description": "Default desktop permissions for the main editor window, pane pop-out windows, and the gradebook window.",
   "windows": [
     "main",
-    "nexzam-*-pane",
-    "nexzam-gradebook"
+    "nexam-*-pane",
+    "nexam-gradebook"
   ],
   "permissions": [
     "core:default",

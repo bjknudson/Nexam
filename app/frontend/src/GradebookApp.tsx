@@ -43,7 +43,7 @@ const GRADEBOOK_PAGE_LABEL: Record<GradebookPage, string> = {
 // broadcast "gradebook-data-changed" on, and the one openGradebookWindow now
 // broadcasts a re-issued File-menu intent on when this window is reused
 // instead of freshly opened.
-const PANE_SYNC_CHANNEL = "nexzam-pane-sync";
+const PANE_SYNC_CHANNEL = "nexam-pane-sync";
 
 /** The gradebook is a wholly separate document from a bank -- its own file
  *  (.nxgb), its own window, its own state. It never reads bank state and a
@@ -322,7 +322,7 @@ export default function GradebookApp() {
       <div className="gradebook-app gradebook-launch">
         <header className="standards-header">
           <div>
-            <h1>Nexzam Gradebook</h1>
+            <h1>Nexam Gradebook</h1>
             <p>
               A gradebook is a separate file from a bank -- it holds roster names, scans, and
               scores, which never live inside a shareable bank. See docs/grading.md.

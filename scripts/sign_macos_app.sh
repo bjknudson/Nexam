@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Sign Nexzam.app, including the PyInstaller-frozen Python backend nested
+# Sign Nexam.app, including the PyInstaller-frozen Python backend nested
 # in Contents/Resources.
 #
-#   ./scripts/sign_macos_app.sh <identity> <path/to/Nexzam.app>
+#   ./scripts/sign_macos_app.sh <identity> <path/to/Nexam.app>
 #
 # Pass "-" as the identity for an ad-hoc signature (local testing only --
 # ad-hoc signatures cannot be notarized).
@@ -72,7 +72,7 @@ find "$RESOURCES" -type f -not -path '*.framework/*' -print0 |
 # the libraries themselves -- disable-library-validation is what lets this
 # process load the .so files signed above.
 sign --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" \
-  "$RESOURCES/nexzam-backend/nexzam-backend"
+  "$RESOURCES/nexam-backend/nexam-backend"
 
 # 4. The app bundle itself, last, now that everything inside it is sealed.
 sign --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$APP"

@@ -1,20 +1,27 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { fetchScoresCsv, listStudents } from "./api";
+import { fetchScoresCsv, getMasterySettings, listStudents, setDefaultMasterySettings } from "./api";
 import { isDesktopShell, saveBytesDialog } from "./desktop";
-import type { RetakeResolution, ScoreExportMethod } from "./types";
+import MasteryModePicker, { CALCULATION_LABEL, REPORTING_LABEL } from "./MasteryModePicker";
+import type {
+  GradebookMasteryConfigModel,
+  MasteryCalculation,
+  MasteryReporting,
+  RetakeResolution,
+  ScoreExportMethod,
+} from "./types";
 
 const EXPORT_METHOD_LABEL: Record<ScoreExportMethod, string> = {
   total: "Total score per test",
   by_standard: "Score broken out by standard",
-  mastery: "Difficulty-weighted mastery per standard",
+  mastery: "Mastery level per standard",
 };
 
 const EXPORT_METHOD_HELP: Record<ScoreExportMethod, string> = {
   total: "One column pair -- points and percent -- per test, plus an overall percent.",
   by_standard: "One percent column per standard: points earned over points possible.",
   mastery:
-    "One column per standard, with each question weighted by its difficulty (1-5), so getting the hard questions right counts for more than getting the easy ones right.",
+    "One column per standard, as a mastery level rather than a percentage -- how far up the ladder the evidence reaches.",
 };
 
 const RESOLUTION_LABEL: Record<RetakeResolution, string> = {
@@ -40,6 +47,7 @@ export default function ScoreExportWorkspace() {
   const [busy, setBusy] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
+  const [mastery, setMastery] = useState<GradebookMasteryConfigModel | null>(null);
 
   // Offer only sections the roster actually uses, so the filter can never
   // produce an empty file by naming one that doesn't exist.
@@ -58,6 +66,28 @@ export default function ScoreExportWorkspace() {
       )
       .catch(() => setSections([]));
   }, []);
+
+  useEffect(() => {
+    getMasterySettings()
+      .then(setMastery)
+      .catch(() => setMastery(null));
+  }, []);
+
+  async function handleMasteryChange(next: {
+    calculation?: MasteryCalculation;
+    reporting?: MasteryReporting;
+  }) {
+    setBusy(true);
+    try {
+      setMastery(await setDefaultMasterySettings(next));
+      setStatusMessage("Mastery default saved.");
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (!statusMessage) return;
@@ -163,6 +193,14 @@ export default function ScoreExportWorkspace() {
         </div>
 
         <p className="score-export-help">{EXPORT_METHOD_HELP[method]}</p>
+        {method === "mastery" && mastery ? (
+          <p className="score-export-help">
+            Exported under <strong>{CALCULATION_LABEL[mastery.default.calculation]}</strong>,{" "}
+            {REPORTING_LABEL[mastery.default.reporting].toLowerCase()} -- except for tests set
+            apart below, which keep their own. The filename records the calculation, so two
+            exports of the same students under different modes stay tellable apart.
+          </p>
+        ) : null}
         <p className="score-export-help">
           {RESOLUTION_HELP[resolution]} Students with no scored sheets are still exported, with
           empty cells. Standard codes come from the open bank when there is one; otherwise columns
@@ -174,6 +212,34 @@ export default function ScoreExportWorkspace() {
             Export CSV ({fileLabel})
           </button>
         </div>
+      </section>
+
+      <section className="standards-panel">
+        <h3>How mastery is calculated</h3>
+        <p>
+          Mastery is reported as a <strong>level</strong>, not a percentage: 2.5 means Level 2
+          cleared and halfway through Level 3. Levels are numbered like question difficulty -- a
+          question's difficulty is the level it gives evidence about. This is the gradebook-wide
+          default; a test that needs a different reading can be set apart in its own Report tab.
+        </p>
+        {mastery ? (
+          <>
+            <MasteryModePicker
+              settings={mastery.default}
+              busy={busy}
+              onChange={(next) => void handleMasteryChange(next)}
+            />
+            {Object.keys(mastery.by_lineage).length > 0 ? (
+              <p className="score-export-help">
+                {Object.keys(mastery.by_lineage).length} test
+                {Object.keys(mastery.by_lineage).length === 1 ? " is" : "s are"} set apart from this
+                default and will not follow changes made here.
+              </p>
+            ) : null}
+          </>
+        ) : (
+          <p>Loading...</p>
+        )}
       </section>
     </div>
   );

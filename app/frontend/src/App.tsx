@@ -177,7 +177,7 @@ type PaneMessage =
   | { type: "pane-closed"; pane: PaneKind };
 
 const AUTOSAVE_DELAY_MS = 700;
-const PANE_SYNC_CHANNEL = "nexzam-pane-sync";
+const PANE_SYNC_CHANNEL = "nexam-pane-sync";
 
 const emptyQuestion = (): QuestionModel => ({
   id: "",
@@ -1061,6 +1061,12 @@ function App() {
     SETTINGS_KEYS.questionsShortenText,
     true,
   );
+  // Off unless a teacher opts in: levelling a rubric is an authoring commitment,
+  // and every other way of reporting mastery works without it.
+  const [rubricMasteryLevels, setRubricMasteryLevels] = usePersistedBoolean(
+    SETTINGS_KEYS.rubricMasteryLevels,
+    false,
+  );
   const [bankDirectory, setBankDirectory] = usePersistedString(SETTINGS_KEYS.bankDirectory, "");
   const [bankPropertiesOpen, setBankPropertiesOpen] = useState(false);
   const [bankPropertiesMode, setBankPropertiesMode] = useState<BankPropertiesMode>("create");
@@ -1183,10 +1189,10 @@ function App() {
       if (appVersion === backendVersion) return;
 
       setBackendVersionWarning(
-        `Nexzam ${appVersion} is running a ${backendVersion} backend. Some features may not work. Reinstalling Nexzam should fix it.`,
+        `Nexam ${appVersion} is running a ${backendVersion} backend. Some features may not work. Reinstalling Nexam should fix it.`,
       );
       console.warn(
-        `[nexzam] backend version mismatch: app ${appVersion}, backend ${backendVersion} (${health?.build ?? "unknown"} build). ` +
+        `[nexam] backend version mismatch: app ${appVersion}, backend ${backendVersion} (${health?.build ?? "unknown"} build). ` +
           "If you build from source, rerun scripts/build_backend_binary.sh to refresh dist/backend.",
       );
     })();
@@ -1284,7 +1290,7 @@ function App() {
       (item) => (item.item_type ?? "question") === "question" && item.question_id === selectedId,
     );
 
-  const openTestsStorageKey = bank ? `nexzam:open-tests:${bank.manifest.bank_id}` : null;
+  const openTestsStorageKey = bank ? `nexam:open-tests:${bank.manifest.bank_id}` : null;
 
   useEffect(() => {
     if (!isMainWindow || !bank || !standardsLoaded) return;
@@ -1708,7 +1714,7 @@ function App() {
       setStatusMessage("Closed the gradebook.");
       // The gradebook window shows its own state, so tell it to re-read.
       try {
-        const channel = new BroadcastChannel("nexzam-pane-sync");
+        const channel = new BroadcastChannel("nexam-pane-sync");
         channel.postMessage({ type: "gradebook-data-changed" });
         channel.close();
       } catch {
@@ -2741,14 +2747,14 @@ function App() {
 
   function updateRubricRow(index: number, field: keyof RubricRowModel, value: string) {
     if (!draftQuestionRef.current) return;
-    const rubric = draftQuestionRef.current.rubric.map((row, rowIndex) =>
-      rowIndex === index
-        ? {
-            ...row,
-            [field]: field === "points" ? Number(value) : value,
-          }
-        : row,
-    );
+    const rubric = draftQuestionRef.current.rubric.map((row, rowIndex) => {
+      if (rowIndex !== index) return row;
+      if (field === "points") return { ...row, points: Number(value) };
+      // Blank means "no difficulty set" -- a rubric only needs them when it was
+      // written around mastery levels, and 0 is not a level.
+      if (field === "difficulty") return { ...row, difficulty: value ? Number(value) : null };
+      return { ...row, [field]: value };
+    });
     updateDraft("rubric", rubric);
   }
 
@@ -3212,18 +3218,18 @@ function App() {
   useEffect(() => {
     document.title =
       paneMode === "questions"
-        ? "Questions - Nexzam"
+        ? "Questions - Nexam"
         : paneMode === "assets"
-          ? "Assets - Nexzam"
+          ? "Assets - Nexam"
           : paneMode === "standards"
-            ? "Library - Nexzam"
+            ? "Library - Nexam"
             : paneMode === "courses"
-              ? "Courses - Nexzam"
+              ? "Courses - Nexam"
               : paneMode === "test-preview"
-                ? "Printable Test Preview - Nexzam"
+                ? "Printable Test Preview - Nexam"
                 : paneMode === "response-sheet-print"
-                  ? "Response Sheet Preview - Nexzam"
-          : "Nexzam";
+                  ? "Response Sheet Preview - Nexam"
+          : "Nexam";
   }, [paneMode]);
 
   const workingCopyLabel =
@@ -3256,7 +3262,7 @@ function App() {
     return (
       <div className="startup-screen">
         <div className="startup-card">
-          <h1>Nexzam</h1>
+          <h1>Nexam</h1>
           <p>{desktopContext?.backendError ? "Backend startup failed." : "Starting local backend..."}</p>
           <p className="startup-detail">
             {desktopContext?.backendError ??
@@ -3409,6 +3415,8 @@ function App() {
         onQuestionsShowStatusFilterChange={setQuestionsShowStatusFilter}
         questionsShortenText={questionsShortenText}
         onQuestionsShortenTextChange={setQuestionsShortenText}
+        rubricMasteryLevels={rubricMasteryLevels}
+        onRubricMasteryLevelsChange={setRubricMasteryLevels}
         bankDirectory={bankDirectory}
         onBankDirectoryChange={setBankDirectory}
       />
@@ -3584,7 +3592,7 @@ function App() {
 
       <header className="topbar">
         <div className="topbar-title">
-          <h1>Nexzam</h1>
+          <h1>Nexam</h1>
           <p>{bank ? bank.manifest.title : "No bank open"}</p>
         </div>
 
@@ -4475,6 +4483,29 @@ function App() {
                                 placeholder="Points"
                               />
                             </label>
+                            {rubricMasteryLevels ||
+                            draftQuestion.rubric.some((r) => r.difficulty != null) ? (
+                            <label
+                              className="rubric-points-field"
+                              title="How hard this part of the task is, numbered like the question's own difficulty. It is the level this part gives evidence about. Only needed for Rubric Levels reporting -- leave it blank otherwise."
+                            >
+                              Difficulty
+                              {/* A free number rather than a fixed list: the
+                                  scale is the bank's to choose, and blank means
+                                  no difficulty set. */}
+                              <input
+                                className="compact-number-input"
+                                type="number"
+                                min={1}
+                                step="1"
+                                placeholder="-"
+                                value={row.difficulty ?? ""}
+                                onChange={(event) =>
+                                  updateRubricRow(index, "difficulty", event.target.value)
+                                }
+                              />
+                            </label>
+                            ) : null}
                           </div>
                         ))}
                         <button

@@ -7,6 +7,7 @@ import uuid
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
@@ -29,10 +30,13 @@ from .models import (
     CombinedGradeReportModel,
     DetectedRowResultModel,
     GradebookManifestModel,
+    GradebookMasteryConfigModel,
     GradebookSummaryModel,
     GradeReportModel,
     GradingBatchListResponseModel,
     GradingBatchModel,
+    MasteryCalculation,
+    MasteryReporting,
     QuestionModel,
     RetakeResolution,
     ScannedSheetModel,
@@ -55,6 +59,11 @@ _SCAN_RASTER_DPI = 300
 
 
 _UNSET_PAYLOAD: dict = {"__unset__": True}
+
+# "The caller said nothing about this field", as distinct from "the caller set
+# this field to null". A partial update has to be able to tell those apart, and
+# None cannot carry both meanings.
+UNSET: Any = object()
 
 
 def _new_sheet_id() -> str:
@@ -624,6 +633,56 @@ class GradebookService:
             by_standard=combine_by_standard(reports),
         )
 
+    # -- Mastery settings -----------------------------------------------------
+
+    def get_mastery_config(self) -> GradebookMasteryConfigModel:
+        _, workspace_path = self.ensure_open()
+        path = workspace_path / "mastery.json"
+        if not path.exists():
+            return GradebookMasteryConfigModel()
+        return GradebookMasteryConfigModel.model_validate_json(path.read_text())
+
+    def _write_mastery_config(self, config: GradebookMasteryConfigModel) -> None:
+        _, workspace_path = self.ensure_open()
+        (workspace_path / "mastery.json").write_text(config.model_dump_json(indent=2) + "\n")
+
+    def set_default_mastery_settings(
+        self, calculation: MasteryCalculation | None, reporting: MasteryReporting | None
+    ) -> GradebookMasteryConfigModel:
+        """Change the gradebook default. Tests with their own override keep it --
+        changing the default should not silently rescore a test someone
+        deliberately set apart."""
+
+        config = self.get_mastery_config()
+        if calculation is not None:
+            config.default.calculation = calculation
+        if reporting is not None:
+            config.default.reporting = reporting
+        self._write_mastery_config(config)
+        return config
+
+    def set_lineage_mastery_settings(
+        self,
+        lineage_id: str,
+        calculation: MasteryCalculation | None,
+        reporting: MasteryReporting | None,
+    ) -> GradebookMasteryConfigModel:
+        """Override one test's mode. Passing neither field clears the override,
+        putting the test back on the gradebook default."""
+
+        config = self.get_mastery_config()
+        if calculation is None and reporting is None:
+            config.by_lineage.pop(lineage_id, None)
+        else:
+            current = config.by_lineage.get(lineage_id) or config.default.model_copy(deep=True)
+            if calculation is not None:
+                current.calculation = calculation
+            if reporting is not None:
+                current.reporting = reporting
+            config.by_lineage[lineage_id] = current
+        self._write_mastery_config(config)
+        return config
+
     # -- Cross-test student performance ---------------------------------------
 
     def get_student_performance(
@@ -642,6 +701,7 @@ class GradebookService:
             snapshots=self._read_all_snapshots(),
             batches=self._read_all_batches(),
             resolution=resolution,
+            config=self.get_mastery_config(),
         )
 
     def get_one_student_performance(
@@ -714,7 +774,7 @@ class GradebookService:
 
         return (
             build_scores_csv(performance, method, standard_codes),
-            suggested_filename(method, resolution),
+            suggested_filename(method, resolution, performance.mastery.calculation),
         )
 
     def build_performance_run(self, batch_id: str, cohort_label: str | None = None) -> TestPerformanceRunModel:
@@ -867,14 +927,23 @@ class GradebookService:
         sheet_id: str,
         question_id: str,
         *,
-        override_choice_indices: list[int] | None = None,
-        override_value: float | None = None,
-        override_blank: bool | None = None,
-        override_note: str | None = None,
-        manual_score: float | None = None,
-        manual_score_max: float | None = None,
-        manual_grader_note: str | None = None,
+        override_choice_indices: list[int] | None = UNSET,
+        override_value: float | None = UNSET,
+        override_blank: bool | None = UNSET,
+        override_note: str | None = UNSET,
+        manual_score: float | None = UNSET,
+        manual_score_max: float | None = UNSET,
+        manual_grader_note: str | None = UNSET,
+        component_scores: list[float] | None = UNSET,
     ) -> ScannedSheetModel:
+        """Apply only the fields the caller actually named.
+
+        A partial update, deliberately: correcting a flagged answer must not wipe
+        the grader's note, and entering a score must not wipe the points-possible
+        it was scored out of. Passing an explicit null still clears a field --
+        that is the caller saying so, which is different from not mentioning it.
+        """
+
         _, workspace_path = self.ensure_open()
         batch = self._read_batch(batch_id)
         sheet = self._find_sheet(batch, sheet_id)
@@ -885,15 +954,33 @@ class GradebookService:
             )
 
         if row.kind == "manual_capture":
-            row.manual_score = manual_score
-            row.manual_score_max = manual_score_max
-            row.manual_grader_note = manual_grader_note
+            if component_scores is not UNSET:
+                row.component_scores = component_scores
+                # Scoring the parts is a way of arriving at the total, not a
+                # replacement for it: everything except Rubric Levels reads the
+                # total, so it is kept in step rather than left behind.
+                if component_scores is not None:
+                    row.manual_score = sum(component_scores)
+            elif manual_score is not UNSET:
+                row.manual_score = manual_score
+                # A total entered directly supersedes any breakdown: the parts
+                # no longer add up to it, so they would be stale evidence.
+                row.component_scores = None
+            if manual_score_max is not UNSET:
+                row.manual_score_max = manual_score_max
+            if manual_grader_note is not UNSET:
+                row.manual_grader_note = manual_grader_note
         else:
-            row.override_choice_indices = override_choice_indices
-            row.override_value = override_value
-            if override_blank is not None:
+            if override_choice_indices is not UNSET:
+                row.override_choice_indices = override_choice_indices
+            if override_value is not UNSET:
+                row.override_value = override_value
+            # `override_blank` is a plain bool on the row, never null, so an
+            # explicit null is not a way of clearing it -- send false for that.
+            if override_blank is not UNSET and override_blank is not None:
                 row.override_blank = override_blank
-            row.override_note = override_note
+            if override_note is not UNSET:
+                row.override_note = override_note
 
         sheet.needs_review = sheet_needs_review(sheet)
         self._write_batch(workspace_path, batch)
@@ -1037,7 +1124,7 @@ class GradebookService:
     # -- Internal helpers -----------------------------------------------------
 
     def _new_workspace_dir(self, stem: str) -> Path:
-        workspace_root = Path(tempfile.gettempdir()) / "nexzam-gradebook-workspaces"
+        workspace_root = Path(tempfile.gettempdir()) / "nexam-gradebook-workspaces"
         workspace_root.mkdir(parents=True, exist_ok=True)
         workspace_path = workspace_root / f"{stem}-{uuid.uuid4().hex[:8]}"
         workspace_path.mkdir(parents=True, exist_ok=False)
@@ -1053,6 +1140,14 @@ class GradebookService:
         (workspace_path / "snapshots").mkdir(parents=True, exist_ok=True)
         (workspace_path / "batches").mkdir(parents=True, exist_ok=True)
         (workspace_path / "scans").mkdir(parents=True, exist_ok=True)
+
+        # A gradebook opened before mastery settings existed gets the defaults,
+        # which is also what it was already being reported under.
+        mastery_path = workspace_path / "mastery.json"
+        if not mastery_path.exists():
+            mastery_path.write_text(
+                GradebookMasteryConfigModel().model_dump_json(indent=2) + "\n"
+            )
 
     def _validate_workspace(self, workspace_path: Path) -> None:
         manifest_path = workspace_path / "manifest.json"

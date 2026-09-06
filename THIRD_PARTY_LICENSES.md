@@ -1,28 +1,28 @@
 # Third-party licenses
 
-Nexzam itself is licensed under the GNU General Public License v3.0 or
+Nexam itself is licensed under the GNU General Public License v3.0 or
 later — see [LICENSE](LICENSE). This file documents the licenses of
 the open-source components it's built on.
 
 ## Why GPL-3.0-or-later
 
-Every dependency across Nexzam's three toolchains — Python, npm, and
+Every dependency across Nexam's three toolchains — Python, npm, and
 Cargo — uses a permissive license (MIT, Apache-2.0, BSD, ISC, Zlib,
 0BSD, Unlicense, Unicode-3.0) or a weak/file-level copyleft license
 that is explicitly compatible with combination into a GPL-licensed
 work (MPL-2.0, Boost-1.0). None of them require or forbid any
-particular license for Nexzam itself, so GPL-3.0-or-later was chosen
+particular license for Nexam itself, so GPL-3.0-or-later was chosen
 deliberately: it's a share-alike license, meaning anyone who
-distributes a modified version of Nexzam has to pass the same
+distributes a modified version of Nexam has to pass the same
 freedoms — including source access — on to their users.
 
 The one build-time exception is [PyInstaller](https://pyinstaller.org),
 which is GPLv2-licensed but ships with an explicit bootloader
 exception: compiled programs produced with it (including the
-`nexzam-backend` binary bundled into Nexzam's releases) may be
+`nexam-backend` binary bundled into Nexam's releases) may be
 distributed under any license, GPL or not. That exception is what
 makes it possible to freeze the backend at all without it dictating
-Nexzam's license. See PyInstaller's `COPYING.txt` /
+Nexam's license. See PyInstaller's `COPYING.txt` /
 [license FAQ](https://pyinstaller.org/en/stable/license.html) for the
 exact text.
 
@@ -30,7 +30,7 @@ exact text.
 
 Collected from the active virtualenv with `pip-licenses`, filtered to
 what `requirements.txt` (and its `uvicorn[standard]` extras) actually
-pulls in and PyInstaller freezes into `nexzam-backend`:
+pulls in and PyInstaller freezes into `nexam-backend`:
 
 | Package | License |
 | --- | --- |

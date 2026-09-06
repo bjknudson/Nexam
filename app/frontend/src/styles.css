@@ -3819,14 +3819,28 @@ textarea {
 /* Gradebook (.nxgb) -- a separate document from a bank, see docs/grading.md */
 /* ---------------------------------------------------------------------- */
 
+/* An app shell, not a document: the window is the frame and the working panes
+   scroll inside it. Scan review is the case that forced this -- when the whole
+   page scrolled, reaching answer row 7 slid the scan being checked against it
+   off the top of the window. */
 .gradebook-app {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0.85rem 1.25rem 1rem;
+  background: #eef3f8;
+}
+
+/* The open/create screen really is a short document, so it keeps scrolling. */
+.gradebook-app.gradebook-launch {
   display: grid;
   align-content: start;
-  gap: 1rem;
+  height: auto;
   min-height: 100%;
   overflow-y: auto;
-  padding: 1rem 1.25rem;
-  background: #eef3f8;
 }
 
 .gradebook-launch {
@@ -3900,8 +3914,15 @@ textarea {
   color: #ffffff;
 }
 
+/* Takes the height the chrome above leaves. A page that is a plain document
+   (Students, Export) overflows and scrolls here; a page that fills the height
+   exactly (scan review) never does, and scrolls in its own panes instead. */
 .gradebook-page-body {
+  flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
 }
 
 .button-like {
@@ -3941,12 +3962,18 @@ textarea {
 
 .scan-review-workspace,
 .grade-report-workspace,
-.administered-tests-workspace,
 .roster-workspace {
   display: grid;
   align-content: start;
   gap: 1rem;
-  min-height: 100%;
+  min-height: 0;
+}
+
+.administered-tests-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-height: 0;
 }
 
 .scan-review-layout {
@@ -4040,13 +4067,15 @@ textarea {
 /* The sheet stays put while the corrections scroll beside it -- on a long test
    the answers run past the bottom, and scrolling the whole page would take the
    scan out of view exactly when it is needed for comparison. */
+/* Height comes from the flex chain above, not from a guess at how much chrome
+   sits on top -- `calc(100vh - 16rem)` assumed 256px of it when the real figure
+   was nearer 800, which is what pushed this column past the bottom of the
+   window and made the whole page scroll. */
 .scan-review-review-column {
   display: grid;
   gap: 0.7rem;
   align-content: start;
   min-width: 0;
-  max-height: calc(100vh - 16rem);
-  overflow-y: auto;
   padding-right: 0.35rem;
 }
 
@@ -4765,4 +4794,227 @@ textarea {
 .gradebook-tabs button.active .tab-badge {
   background: #ffffff;
   color: #2563eb;
+}
+
+/* ---------------------------------------------------------------------------
+   Scan review: a working surface, not a document
+
+   Reviewing a sheet means comparing a scan against the answers read off it, so
+   both have to stay on screen together. The review pane therefore takes the
+   height the chrome leaves and scrolls inside itself: the sheet list scrolls in
+   its own column, the answers scroll in theirs, and the scan stays put.
+   --------------------------------------------------------------------------- */
+
+.administered-tests-workspace.is-review-open {
+  flex: 1;
+  min-height: 0;
+}
+
+.administered-tests-workspace.is-review-open .scan-review-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  flex: 1;
+  min-height: 0;
+}
+
+.administered-tests-workspace.is-review-open .scan-review-layout {
+  flex: 1;
+  min-height: 0;
+}
+
+.administered-tests-workspace.is-review-open .question-import-table-panel,
+.administered-tests-workspace.is-review-open .scan-review-detail {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* One compact row instead of a three-column grid of labelled inputs. The file
+   input itself is hidden behind a button -- the native control is 300px of
+   chrome for something clicked once per batch. */
+.scan-review-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  font-size: 0.82rem;
+  color: #475569;
+}
+
+.scan-review-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: 600;
+}
+
+.scan-review-toolbar select {
+  font-weight: 400;
+}
+
+.scan-review-toolbar .scan-review-toolbar-spacer {
+  margin-left: auto;
+}
+
+/* Nothing to resolve, so it states the fact and gets out of the way -- it used
+   to be a full bordered panel wrapped around a single line of text, which is
+   the common case on a pre-identified sheet. */
+.scan-review-identity-line {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-size: 0.82rem;
+  color: #475569;
+}
+
+.scan-review-identity-line strong {
+  color: #1e293b;
+}
+
+/* Back link, title, and counts on one line: three stacked bands of header was
+   most of what stood between opening a test and reaching its first answer. */
+.test-drill-header.is-compact {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  row-gap: 0.4rem;
+}
+
+.test-drill-header.is-compact h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.test-drill-header.is-compact .standards-header-summary {
+  gap: 0.4rem;
+}
+
+.test-drill-header.is-compact .status-pill {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.55rem;
+}
+
+.test-drill-header.is-compact .administered-test-stack-toggle {
+  margin-top: 0;
+  border-style: solid;
+}
+
+.test-drill-header.is-compact .standards-header-actions {
+  margin-left: auto;
+}
+
+.test-drill-tabs.is-compact {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+/* ---------------------------------------------------------------------------
+   Mastery levels
+
+   A level is not a percentage, and the two sit in adjacent columns, so the
+   mastery bar is deliberately a different colour from the score bar and always
+   carries its ceiling ("2.5 / 4") rather than reading as a bare number.
+   --------------------------------------------------------------------------- */
+
+.performance-bar-fill.mastery {
+  background: #7c3aed;
+}
+
+.mastery-scale {
+  color: #94a3b8;
+  font-size: 0.75rem;
+}
+
+/* The evidence had something odd about it -- inconsistent levels, a gap in the
+   ladder, or a Rubric Levels report with no components. The hover text says
+   which; the marker is only here to prompt the hover. */
+.mastery-caveat {
+  color: #b45309;
+  font-weight: 700;
+  cursor: help;
+}
+
+.mastery-picker {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.link-button {
+  border: none;
+  background: none;
+  padding: 0;
+  color: #2563eb;
+  font-size: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* Scoring a rubric part by part, so Rubric Levels has components to
+   ladder rather than one undifferentiated total. */
+.scan-review-components {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.5rem;
+  border: 1px solid #ddd6fe;
+  border-radius: 8px;
+  background: #faf8ff;
+}
+
+.scan-review-component {
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr) 4.5rem 2.5rem;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+}
+
+.scan-review-component-level {
+  font-weight: 700;
+  color: #7c3aed;
+  font-size: 0.75rem;
+}
+
+.scan-review-component-criterion {
+  color: #475569;
+  min-width: 0;
+}
+
+.scan-review-component-max {
+  color: #94a3b8;
+  font-size: 0.78rem;
+}
+
+/* The rubric editor gained a level column beside points. */
+.rubric-row .rubric-points-field select.compact-number-input {
+  width: 100%;
+}
+
+/* The running total while a rubric's parts are being scored, so the row's
+   figure is visible as it is assembled rather than only after saving. */
+.scan-review-component-total {
+  margin: 0.15rem 0 0;
+  font-size: 0.82rem;
+  color: #475569;
+  text-align: right;
+}
+
+.scan-review-total-score {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #475569;
+}
+
+.scan-review-total-score input {
+  width: 6rem;
+  font-weight: 400;
+}
+
+.scan-review-save-score {
+  justify-self: start;
+  margin-top: 0.35rem;
 }

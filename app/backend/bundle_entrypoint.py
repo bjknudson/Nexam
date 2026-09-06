@@ -1,7 +1,7 @@
 """Entrypoint for the PyInstaller-frozen backend binary.
 
 Run:
-    nexzam-backend --port 8000
+    nexam-backend --port 8000
 """
 
 from __future__ import annotations

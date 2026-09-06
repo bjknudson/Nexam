@@ -134,7 +134,7 @@ fn start_backend_process<R: Runtime>(
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .context("Failed to launch the Nexzam backend process.")?;
+        .context("Failed to launch the Nexam backend process.")?;
 
     state.set_backend_started(child, base_url.clone());
 
@@ -169,7 +169,7 @@ fn build_dev_command(port: u16) -> Result<Command> {
 fn build_bundled_command<R: Runtime>(app_handle: &AppHandle<R>, port: u16) -> Result<Command> {
     let backend_binary = app_handle
         .path()
-        .resolve("nexzam-backend/nexzam-backend", BaseDirectory::Resource)
+        .resolve("nexam-backend/nexam-backend", BaseDirectory::Resource)
         .context("Failed to resolve the bundled backend binary path.")?;
     let demo_bank = app_handle
         .path()
@@ -183,8 +183,8 @@ fn build_bundled_command<R: Runtime>(app_handle: &AppHandle<R>, port: u16) -> Re
     let mut command = Command::new(&backend_binary);
     command
         .args(["--port", &port.to_string()])
-        .env("NEXZAM_DEMO_BANK_PATH", &demo_bank)
-        .env("NEXZAM_DEMO_GRADEBOOK_PATH", &demo_gradebook);
+        .env("NEXAM_DEMO_BANK_PATH", &demo_bank)
+        .env("NEXAM_DEMO_GRADEBOOK_PATH", &demo_gradebook);
     Ok(command)
 }
 
@@ -192,7 +192,7 @@ fn resolve_repo_root() -> Result<PathBuf> {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .map(Path::to_path_buf)
-        .ok_or_else(|| anyhow!("Could not resolve the Nexzam repo root from the Tauri project path."))
+        .ok_or_else(|| anyhow!("Could not resolve the Nexam repo root from the Tauri project path."))
 }
 
 fn resolve_python_path(repo_root: &Path) -> PathBuf {

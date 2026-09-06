@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Nexzam",
+  "productName": "Nexam",
   "version": "0.14.0",
-  "identifier": "com.nexzam.desktop",
+  "identifier": "com.nexam.desktop",
   "build": {
     "beforeDevCommand": "cd app/frontend && npm run dev",
     "beforeBuildCommand": "cd app/frontend && npm run build",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Nexzam",
+        "title": "Nexam",
         "width": 1440,
         "height": 960,
         "resizable": true
@@ -31,7 +31,7 @@
       "hardenedRuntime": true
     },
     "resources": {
-      "../dist/backend/nexzam-backend": "nexzam-backend",
+      "../dist/backend/nexam-backend": "nexam-backend",
       "../samples/demo-bank.bok": "samples/demo-bank.bok",
       "../samples/demo-gradebook.nxgb": "samples/demo-gradebook.nxgb"
     }

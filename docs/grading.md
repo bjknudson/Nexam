@@ -208,25 +208,160 @@ Like every other number in the gradebook it is **derived, never persisted**: tot
 from the sheets on every call, so a scan-review correction or a relinked retake shows up everywhere
 at once with no stored score that can go stale.
 
-Two per-standard numbers come out of it, both from the same rows:
+Two per-standard numbers come out of it, answering different questions:
 
-- `percent_earned` -- points earned over points possible. The plain score.
-- `mastery_estimate` -- the same items weighted by question difficulty:
-
-      mastery = 100 * sum(difficulty_i * credit_i) / sum(difficulty_i)
-
-  where `credit_i` is the fraction of that item's points the student earned. A student who gets the
-  hard questions right and the easy ones wrong reads higher than one with the same raw score the
-  other way round. It is a weighted average, not a psychometric ability estimate.
-
-`difficulty` is frozen onto `AnswerKeyItemModel` at hand-off time for the same reason `standard_ids`
-already was: mastery has to be computable from the snapshot alone, and an alternate version's key
-carries no questions of its own to look it up from. Keys written before the field existed fall back
-to the middle of the 1-5 scale, which makes every item weigh the same -- an unweighted average.
+- `percent_earned` -- points earned over points possible. **How much of the work was right.**
+- `mastery` -- a **level**. **How far up the mastery ladder the evidence reaches.** Two students on the same 50% can sit at different levels depending on *which*
+  questions they got right, which is the whole reason both are reported.
 
 An item tagged with two standards counts in full toward both, matching how class-level by-standard
 reporting already works: the item really is evidence about both, and splitting its points would
-understate each.
+understate each. Mastery is computed per standard from that standard's own rows -- a ladder built
+from the three questions about one standard says something; a ladder built from the whole paper
+does not.
+
+## Mastery levels
+
+`grading/mastery.py`.
+
+### Two words, one numbering
+
+| Term | Means | Where it lives |
+| --- | --- | --- |
+| **difficulty** | what an author assigns to a question or rubric component | `QuestionModel.difficulty`, `RubricRowModel.difficulty` |
+| **level** | a rung on the mastery ladder, which a student reaches | `Evidence.level`, `MasteryResultModel.level` |
+
+**A question's difficulty is the level it gives evidence about.** They share a numbering, which is
+why a difficulty-3 question tells you about Level 3 — but they are not the same thing, and only one
+of them is a claim about a student. Anything an author sets is a *difficulty*; anything a report
+says about a student is a *level*. The phrase "difficulty ladder" is therefore wrong: the ladder is
+made of levels.
+
+Mastery is a level, not a percentage: **2.50 means Level 2 cleared and halfway through Level 3.**
+Three calculations, because assessments differ in what evidence they carry, and one rounding choice
+that applies to all of them.
+
+**The scale is whatever difficulties the bank uses.** Nothing in the calculation assumes a ceiling:
+a bank using 1-4 tops out at 4, one using 1-6 at 6. `scale_max` reports the highest level the
+evidence actually reached, so a reader is never left guessing what "2.50" is out of, and the CSV
+header says `mastery (of 4)` rather than a fixed number.
+
+### Level Ladder
+
+For a test that walks the levels in sequence. A level is mastered at **75%** of its points:
+
+    A_d = points earned at level d / points possible at level d
+
+Climbing stops at the first level not mastered; mastery is the last level cleared plus progress
+into that one. Levels 1 and 2 at 100% with Level 3 at 50% gives `2 + 0.50 = 2.50`; 50% at Level 2
+after clearing Level 1 gives `1.50`.
+
+Stopping matters: a student who fails Level 2 but aces Level 3 is *not* carried up the ladder,
+because the ladder's whole claim is that levels are cleared in order. That higher performance is
+reported as `inconsistent_evidence` rather than discarded — in practice it usually means the level
+labels need revisiting, not the student.
+
+`has_level_gaps` says the levels present skip a rung or do not start at 1. The ladder assumes a
+complete sequence; without one, "cleared Level 2" may only mean "was never asked a Level 2
+question", and Difficulty Weighted is the better mode for that test.
+
+### Difficulty Weighted
+
+For a test with hard questions but no complete ladder of them:
+
+    mastery = sum(difficulty × points earned) / sum(points possible)
+
+One 15-point Level 4 question worth 5 earned points reads as `(4 × 5) / 15 = 1.33` — evidence of
+Level 1 with a third of Level 2, **not** of Level 3.33. Full marks on it reads as exactly `4.0`, so
+the question's own level is still the ceiling. This lets a difficult question supply evidence of
+lower-level mastery without assuming every level beneath it was cleared.
+
+### Rubric Levels
+
+For multipart tasks whose rubric was written around mastery levels. Each component carries its own
+difficulty (`RubricRowModel.difficulty`), and the **Level Ladder is applied to the components**
+rather than to whole questions.
+
+It needs both halves: a rubric whose components each have a difficulty, *and* a grader who scored
+the parts separately rather than entering one total (`DetectedRowResultModel.component_scores`; the
+row's `manual_score` is kept in step with the parts so every other report still agrees). A rubric
+where only some components have one is left alone rather than half-laddered. Missing either half,
+the mode falls back to laddering whole questions and says so via `components_unavailable` — a
+fallback the report admits to rather than quietly reporting a different mode's number.
+
+The whole feature is **off by default**: the per-component difficulty field is hidden and Rubric
+Levels is not offered until *Mastery levels on rubrics* is switched on in Settings (a local
+preference, `nexam:rubric-mastery-levels`). Giving a rubric's parts difficulties is an authoring
+commitment, and the other two calculations work without it. The setting only controls what is
+*shown*: difficulties already set stay in the bank and keep working, and a test already using
+Rubric Levels keeps the option visible.
+
+### Reporting
+
+| Mode | Result |
+| --- | --- |
+| `exact` | Two decimals: 1.33, 2.67, 3.80 |
+| `half_steps` | Nearest 0.5, halves up: 1.24 → 1.0, 1.25 → 1.5, 1.74 → 1.5, 1.75 → 2.0 |
+
+`floor(mastery × 2 + 0.5) / 2`. Rounding never touches the calculation — `level_exact` carries the
+raw figure alongside the rounded `level`, so the rounding stays visible rather than baked in.
+
+### Choosing a mode
+
+The default is **Level Ladder + Half Steps**: the ladder is what a standards-based report means by
+mastery, and half steps stop a 1.33 from reading as more precision than one test's worth of
+evidence supports. Difficulty Weighted is the fallback when an assessment carries only
+high-difficulty questions.
+
+Settings live in `mastery.json` inside the gradebook: a `default`, plus `by_lineage` overrides.
+Per *lineage*, not per printing — every version of a test, and any retake linked to it, is the same
+assessment and must be scored the same way. Changing the default deliberately leaves overridden
+tests alone; a test set apart was set apart on purpose.
+
+Where a student's standard entries are pooled across several tests, the levels are averaged weighted
+by items attempted, and the per-level breakdown is dropped: a ladder is only meaningful inside the
+assessment that built it. The pooled entry is labelled with the mode its inputs share, or with the
+gradebook default when they disagree.
+
+### Where difficulty comes from
+
+`difficulty` is frozen onto `AnswerKeyItemModel` at hand-off, for the same reason `standard_ids`
+already was: mastery has to be computable from the snapshot alone, and an alternate version's key
+carries no questions of its own to look it up from. The rubric's component difficulties are
+frozen alongside it.
+
+`QuestionModel.difficulty` is required, so an item without one only arises in a snapshot frozen
+before the field was carried onto keys. Such an item is credited at the **lowest** level its
+neighbours record, never higher (`mastery.fallback_level`): a mastery report that guesses upward
+claims a rung nobody has evidence for, and that is the one direction this must not err in. With
+nothing to go on at all, the bottom of the scale.
+
+## Backwards compatibility
+
+Every field the mastery work added to a persisted file is optional with a default, so a `.bok` or
+`.nxgb` written before it opens and reports with no migration step:
+
+| Added to | Field | Old file reads as |
+| --- | --- | --- |
+| `RubricRowModel` (.bok) | `difficulty` | `None` -- read by nothing except Rubric Levels |
+| `AnswerKeyItemModel` (.nxgb) | `difficulty`, `rubric_components` | `None` / empty |
+| `DetectedRowResultModel` (.nxgb) | `component_scores` | `None`; `manual_score` still the total |
+| `AdministeredTestSnapshotModel` (.nxgb) | `lineage_id` | `None`, resolved from the title |
+| gradebook package | `mastery.json` | absent -- the defaults are used and the file is written on next save |
+
+`test_backwards_compatibility.py` builds a current gradebook, strips every one of those keys back
+out of the saved `.nxgb`, reopens it, and puts it through scoring, reporting, and all three CSV
+exports. Old and new data coexist in one file: a re-print into an aged gradebook records the new
+fields while the existing snapshots stay exactly as they were.
+
+The one number that cannot survive the round trip is difficulty, because an old key never stored it.
+Percentages are unaffected; mastery falls to the bottom of the scale rather than inventing a rung,
+and `scale_max` of 1 is the tell.
+
+**What did change meaning:** the CSV's `mastery` column. It used to be a difficulty-weighted
+percentage (0-100) and is now a level (0-`scale_max`). The header states the scale and the filename
+names the calculation, but an existing import mapping that column as a percentage will need
+revisiting.
 
 ## Retake resolution
 
@@ -257,10 +392,12 @@ what a gradebook or SIS import expects and what a teacher can read without pivot
 | --- | --- |
 | `total` | Points and % per test, plus an overall % |
 | `by_standard` | One % column per standard |
-| `mastery` | One difficulty-weighted column per standard |
+| `mastery` | One column per standard, as a mastery *level* (see above), not a percentage |
 
 Every export runs through the chosen retake resolution, so a cell is the one score that test
-contributes for that student -- never a first attempt and a retake fighting over one column.
+contributes for that student -- never a first attempt and a retake fighting over one column. A
+mastery export names its calculation in the filename: the same students score differently under
+Level Ladder and Difficulty Weighted, and two such files are otherwise indistinguishable.
 Test columns are keyed by lineage, not title, and the title is disambiguated only when two
 unlinked tests would otherwise collide.
 

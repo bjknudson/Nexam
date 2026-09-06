@@ -53,6 +53,9 @@ def derive_answer_key(
                 standard_ids=standard_ids,
             )
         answer_key_item.difficulty = question.difficulty
+        # Frozen with its levels so a Rubric Levels report ladders the
+        # components as they were written when the paper went out.
+        answer_key_item.rubric_components = list(question.rubric)
         items.append(answer_key_item)
 
     return AnswerKeyModel(

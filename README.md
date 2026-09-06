@@ -1,6 +1,6 @@
-# Nexzam
+# Nexam
 
-Nexzam is a desktop app for building and maintaining a question bank
+Nexam is a desktop app for building and maintaining a question bank
 and turning it into printable tests — without a subscription, an
 account, or an internet connection.
 
@@ -24,7 +24,7 @@ mybank.bok
 
 - **Math formatting** — Write math right in a prompt or answer using
   `$v^2 = u^2 + 2as$`, `\( ... \)`, `\[ ... \]`, or plain notation like
-  `x^2`, and Nexzam renders it live with KaTeX. The stored JSON stays
+  `x^2`, and Nexam renders it live with KaTeX. The stored JSON stays
   exactly what you typed.
 - **Print-ready export** — Assemble a test in the Test Builder, open
   Print Preview, and use your system print dialog to save it as a
@@ -42,7 +42,7 @@ mybank.bok
 Browse and filter your question bank, then edit a question in form
 mode or switch to raw JSON for full control. Every question has a
 `type`, `topic`, `difficulty`, and `prompt`; everything else depends
-on the type. Nexzam supports four question types:
+on the type. Nexam supports four question types:
 
 **`multiple_choice`**
 
@@ -111,7 +111,7 @@ A question can also carry `subtopic`, `tags`, `standards`, `points`,
 
 ### Import Questions
 
-Paste JSON or CSV containing many questions at once. Nexzam stages
+Paste JSON or CSV containing many questions at once. Nexam stages
 each row, flags problems (invalid fields, unknown standards, etc.) so
 you can fix them before they land in your bank, and lets you promote
 the ones you want. This is the fastest way to bring in AI-generated or
@@ -132,11 +132,11 @@ plus optional `strand`, `subject`, `grade_band`, and `tags`. JSON can
 be a plain array of standard objects, `{ "items": [...] }`, or
 `{ "source_list": {...}, "standards": [...] }`.
 
-Nexzam reads the source out of the file first. Add a `source` (or
+Nexam reads the source out of the file first. Add a `source` (or
 `source_title`) column — optionally with `source_id` and `issuer` — and
 one file can bring in standards from several sources at once, each
 kept with its own. Only when the file cannot name a source for every
-standard does Nexzam ask you for one to cover the rest.
+standard does Nexam ask you for one to cover the rest.
 
 When you add a standard by hand you pick its source from the ones
 already in the library, or choose **Add new source...** and describe a
@@ -177,7 +177,7 @@ formatted, paginated result and export it to PDF.
 6. Build a test in **Test Builder**, then open Print Preview and
    **Print** to save it as a PDF.
 7. Click **Save Bank** to write your changes back into the `.bok`
-   file. (Nexzam autosaves form edits to a local working copy as you
+   file. (Nexam autosaves form edits to a local working copy as you
    go; raw JSON edits and the `.bok` archive itself are saved
    explicitly.)
 
@@ -197,13 +197,13 @@ into a question's Raw JSON tab and use **Save as New**.
 
 ## License
 
-Nexzam is free software, licensed under the [GNU General Public
+Nexam is free software, licensed under the [GNU General Public
 License v3.0 or later](LICENSE) — a share-alike license: if you
 distribute a modified version, you must pass the same source-access
 freedoms on to your users. See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)
-for the licenses of the open-source components Nexzam is built on.
+for the licenses of the open-source components Nexam is built on.
 
 ---
 
-Looking to build Nexzam from source or contribute? See
+Looking to build Nexam from source or contribute? See
 [contributor/DEVELOPMENT.md](contributor/DEVELOPMENT.md).

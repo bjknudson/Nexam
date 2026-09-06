@@ -133,7 +133,7 @@ class BankWorkspaceService:
         if not zipfile.is_zipfile(source_path):
             raise BankWorkspaceError("Selected file is not a valid .bok zip archive.", status_code=400)
 
-        workspace_root = Path(tempfile.gettempdir()) / "nexzam-workspaces"
+        workspace_root = Path(tempfile.gettempdir()) / "nexam-workspaces"
         workspace_root.mkdir(parents=True, exist_ok=True)
         workspace_path = workspace_root / f"{source_path.stem}-{uuid.uuid4().hex[:8]}"
         workspace_path.mkdir(parents=True, exist_ok=False)
@@ -162,7 +162,7 @@ class BankWorkspaceService:
         if target_path.suffix != ".bok":
             raise BankWorkspaceError("Destination path must end with .bok", status_code=400)
 
-        workspace_root = Path(tempfile.gettempdir()) / "nexzam-workspaces"
+        workspace_root = Path(tempfile.gettempdir()) / "nexam-workspaces"
         workspace_root.mkdir(parents=True, exist_ok=True)
         workspace_path = workspace_root / f"{target_path.stem}-{uuid.uuid4().hex[:8]}"
         workspace_path.mkdir(parents=True, exist_ok=False)
@@ -870,7 +870,7 @@ class BankWorkspaceService:
                 SourceStandardListModel(
                     id=placeholder_source_id,
                     title="Unresolved Question Standards",
-                    issuer="Nexzam",
+                    issuer="Nexam",
                     subject=None,
                     version=None,
                     description=(
@@ -1947,7 +1947,7 @@ class BankWorkspaceService:
                 SourceStandardListModel(
                     id=placeholder_source_id,
                     title="Unresolved Question Standards",
-                    issuer="Nexzam",
+                    issuer="Nexam",
                     subject=None,
                     version=None,
                     description=(

@@ -16,7 +16,7 @@ from app.backend.gradebook_service import GradebookService
 from app.backend.grading.aggregate import build_student_performance, standards_from_rows
 from app.backend.grading.lineage import lineage_id_for_title
 from app.backend.grading.scoring import score_sheet
-from app.backend.models import UpsertStudentRequest
+from app.backend.models import RubricRowModel, UpsertStudentRequest
 from app.backend.service import BankWorkspaceError, BankWorkspaceService
 from app.backend.tests.grading_test_utils import fill_cells, png_bytes, rasterize_layout_page
 
@@ -96,9 +96,10 @@ def test_answer_key_freezes_question_difficulty(open_gradebook) -> None:
     assert difficulty_by_question == {EASY_MC: 2, HARD_MC: 3}
 
 
-def test_mastery_falls_back_to_mid_scale_when_the_key_predates_difficulty(open_gradebook) -> None:
-    """A gradebook written before difficulty was frozen still exports mastery --
-    every item just weighs the same, which is what an unweighted average is."""
+def test_mastery_never_guesses_upward_when_the_key_predates_difficulty(open_gradebook) -> None:
+    """A gradebook written before difficulty was frozen still reports mastery.
+    Items with no recorded level sit at the bottom of the scale, never higher:
+    guessing upward would claim a rung nobody has evidence for."""
 
     bank_service, gradebook_service = open_gradebook
     snapshot = _hand_off(bank_service, gradebook_service, [EASY_MC, HARD_MC], "Unit 1")
@@ -114,7 +115,11 @@ def test_mastery_falls_back_to_mid_scale_when_the_key_predates_difficulty(open_g
         item.difficulty = None
     rows = score_sheet(updated.sheets[0], snapshot.answer_key).rows
     by_standard = {entry.standard_id: entry for entry in standards_from_rows(rows)}
-    assert by_standard["PHY-KIN-01"].mastery_estimate == pytest.approx(50.0)
+    mastery = by_standard["PHY-KIN-01"].mastery
+    # Both items fall back to level 1, one right and one wrong -> 50% of a
+    # single rung, which the ladder reports as progress into level 1.
+    assert [entry.level for entry in mastery.levels] == [1]
+    assert mastery.level_exact == pytest.approx(0.5)
 
 
 # -- Lineage linking ----------------------------------------------------------
@@ -309,7 +314,11 @@ def test_sheets_that_belong_to_nobody_are_counted_not_dropped(open_gradebook) ->
 # -- Difficulty-weighted mastery ----------------------------------------------
 
 
-def test_mastery_weights_the_hard_item_more_heavily(open_gradebook) -> None:
+def test_two_students_with_the_same_score_can_sit_at_different_levels(open_gradebook) -> None:
+    """The point of reporting a level as well as a percentage: getting the level
+    2 question right and the level 3 one wrong is a different piece of evidence
+    from the reverse, even though both are 50%."""
+
     bank_service, gradebook_service = open_gradebook
     easy_only = gradebook_service.upsert_student(
         None, UpsertStudentRequest(first_name="Ada", last_name="Lovelace")
@@ -330,12 +339,89 @@ def test_mastery_weights_the_hard_item_more_heavily(open_gradebook) -> None:
     easy = by_student[easy_only.id]["PHY-KIN-01"]
     hard = by_student[hard_only.id]["PHY-KIN-01"]
 
-    # Same raw score, different mastery: difficulty 2 and 3, so the easy item is
-    # worth 2/5 of the weight and the hard one 3/5.
     assert easy.percent_earned == hard.percent_earned == 50.0
-    assert easy.mastery_estimate == pytest.approx(40.0)
-    assert hard.mastery_estimate == pytest.approx(60.0)
+    # Ada cleared level 2 and showed nothing at level 3.
+    assert easy.mastery.level_exact == pytest.approx(2.0)
+    # Grace never cleared level 2, so the ladder stops there regardless of what
+    # she did above it -- and says the evidence was inconsistent.
+    assert hard.mastery.level_exact == pytest.approx(0.0)
+    assert hard.mastery.inconsistent_evidence is True
     assert easy.average_difficulty == pytest.approx(2.5)
+
+
+def test_difficulty_weighted_reads_the_same_evidence_differently(open_gradebook) -> None:
+    """Switching a test to Difficulty Weighted credits the hard answer instead
+    of stopping at the unmastered rung below it."""
+
+    bank_service, gradebook_service = open_gradebook
+    hard_only = gradebook_service.upsert_student(
+        None, UpsertStudentRequest(first_name="Grace", last_name="Hopper")
+    )
+    snapshot = _hand_off(bank_service, gradebook_service, [EASY_MC, HARD_MC], "Kinematics")
+    _scan(gradebook_service, snapshot, {HARD_MC}, hard_only.id)
+
+    gradebook_service.set_lineage_mastery_settings(
+        snapshot.lineage_id, calculation="difficulty_weighted", reporting="exact"
+    )
+
+    entry = next(
+        e
+        for item in gradebook_service.get_student_performance().items
+        if item.student.id == hard_only.id
+        for e in item.by_standard
+        if e.standard_id == "PHY-KIN-01"
+    )
+    # One point each: (2*0 + 3*1) / 2 = 1.5
+    assert entry.mastery.calculation == "difficulty_weighted"
+    assert entry.mastery.level_exact == pytest.approx(1.5)
+
+
+def test_a_test_override_leaves_other_tests_on_the_default(open_gradebook) -> None:
+    bank_service, gradebook_service = open_gradebook
+    ada = gradebook_service.upsert_student(
+        None, UpsertStudentRequest(first_name="Ada", last_name="Lovelace")
+    )
+    kinematics = _hand_off(bank_service, gradebook_service, [EASY_MC, HARD_MC], "Kinematics")
+    waves = _hand_off(bank_service, gradebook_service, ["q_mc_0002"], "Waves")
+    _scan(gradebook_service, kinematics, {EASY_MC}, ada.id)
+    _scan(gradebook_service, waves, {"q_mc_0002"}, ada.id)
+
+    gradebook_service.set_lineage_mastery_settings(
+        kinematics.lineage_id, calculation="difficulty_weighted", reporting=None
+    )
+
+    record = gradebook_service.get_one_student_performance(ada.id)
+    modes = {
+        lineage.test_title: {entry.mastery.calculation for entry in lineage.resolved.by_standard}
+        for lineage in record.lineages
+    }
+    assert modes["Kinematics"] == {"difficulty_weighted"}
+    assert modes["Waves"] == {"level_ladder"}
+
+    # Clearing the override puts it back on the default.
+    gradebook_service.set_lineage_mastery_settings(
+        kinematics.lineage_id, calculation=None, reporting=None
+    )
+    record = gradebook_service.get_one_student_performance(ada.id)
+    cleared = next(l for l in record.lineages if l.test_title == "Kinematics")
+    assert {entry.mastery.calculation for entry in cleared.resolved.by_standard} == {
+        "level_ladder"
+    }
+
+
+def test_changing_the_default_leaves_an_explicit_override_alone(open_gradebook) -> None:
+    bank_service, gradebook_service = open_gradebook
+    snapshot = _hand_off(bank_service, gradebook_service, [EASY_MC], "Kinematics")
+    gradebook_service.set_lineage_mastery_settings(
+        snapshot.lineage_id, calculation="rubric_levels", reporting=None
+    )
+    gradebook_service.set_default_mastery_settings(
+        calculation="difficulty_weighted", reporting="exact"
+    )
+
+    config = gradebook_service.get_mastery_config()
+    assert config.default.calculation == "difficulty_weighted"
+    assert config.by_lineage[snapshot.lineage_id].calculation == "rubric_levels"
 
 
 # -- CSV export ---------------------------------------------------------------
@@ -406,10 +492,11 @@ def test_by_standard_and_mastery_csvs_label_columns_with_standard_codes(open_gra
     )
 
     assert percent_headers[5:] == ["HS-PS2-1 %", "Standards assessed"]
-    assert mastery_headers[5:] == ["HS-PS2-1 mastery", "Standards assessed"]
-    # Same items either way: half the points, but the hard one was the one right.
+    assert mastery_headers[5:] == ["HS-PS2-1 mastery (of 3)", "Standards assessed"]
     assert percent_rows[0][5:] == ["50", "1"]
-    assert mastery_rows[0][5:] == ["60", "1"]
+    # The level 2 question was wrong, so the ladder never leaves the ground --
+    # a level, not the 50% beside it.
+    assert mastery_rows[0][5:] == ["0", "1"]
 
 
 def test_a_standard_with_no_code_keeps_its_id_as_the_column_header(open_gradebook) -> None:
@@ -523,8 +610,20 @@ def test_performance_and_export_endpoints(gradebook_client, demo_bok: Path, tmp_
     export = gradebook_client.get("/api/gradebook/export/scores.csv?method=mastery")
     assert export.status_code == 200
     assert export.headers["content-type"].startswith("text/csv")
-    assert "scores-mastery-most-recent.csv" in export.headers["content-disposition"]
+    # The filename names the calculation: the same students score differently
+    # under a different one, and two such files are otherwise identical.
+    assert "scores-mastery-most-recent-level-ladder.csv" in export.headers["content-disposition"]
     assert "Last name" in export.text
+
+    settings = gradebook_client.put(
+        "/api/gradebook/mastery-settings", json={"calculation": "difficulty_weighted"}
+    )
+    assert settings.status_code == 200
+    assert settings.json()["default"]["calculation"] == "difficulty_weighted"
+    assert settings.json()["default"]["reporting"] == "half_steps"  # untouched
+
+    export = gradebook_client.get("/api/gradebook/export/scores.csv?method=mastery")
+    assert "difficulty-weighted" in export.headers["content-disposition"]
 
     assert (
         gradebook_client.get("/api/gradebook/export/scores.csv?method=nonsense").status_code == 400
@@ -684,3 +783,121 @@ def test_ingest_rejects_a_fallback_that_names_no_printing(open_gradebook) -> Non
             [("a.png", png_bytes(_mc_sheet_image(snapshot, set())))],
             fallback_snapshot_id="not-a-real-snapshot",
         )
+
+
+# -- Rubric Levels, end to end ------------------------------------------------
+
+
+def _free_response_with_component_difficulties(bank_service, question_id: str) -> None:
+    """Give a written question the per-component difficulties the spec's example uses."""
+
+    question = bank_service.get_question(question_id)
+    question.rubric = [
+        RubricRowModel(criterion="Identify relevant information", points=3, difficulty=1),
+        RubricRowModel(criterion="Select and set up a relationship", points=4, difficulty=2),
+        RubricRowModel(criterion="Complete the procedure", points=4, difficulty=3),
+        RubricRowModel(criterion="Interpret and justify the result", points=4, difficulty=4),
+    ]
+    question.points = 15
+    bank_service.update_question(question_id, question)
+
+
+def test_rubric_levels_ladders_the_components_scored_in_review(open_gradebook) -> None:
+    bank_service, gradebook_service = open_gradebook
+    _free_response_with_component_difficulties(bank_service, "q_fr_0001")
+
+    ada = gradebook_service.upsert_student(
+        None, UpsertStudentRequest(first_name="Ada", last_name="Lovelace")
+    )
+    snapshot = _hand_off(bank_service, gradebook_service, ["q_fr_0001"], "Projectiles")
+
+    # The component difficulties ride along on the frozen key.
+    key_item = snapshot.answer_key.items[0]
+    assert [c.difficulty for c in key_item.rubric_components] == [1, 2, 3, 4]
+
+    batch = gradebook_service.create_scan_batch(snapshot.id, None)
+    updated = gradebook_service.ingest_scan_batch(
+        batch.id, [("sheet.png", png_bytes(rasterize_layout_page(snapshot.layout, 0, 300)))]
+    )
+    sheet_id = updated.sheets[0].id
+    gradebook_service.resolve_sheet_identity(batch.id, sheet_id, student_id=ada.id)
+
+    # Full marks on levels 1 and 2, half on level 3, nothing on level 4.
+    gradebook_service.override_row_result(
+        batch.id, sheet_id, "q_fr_0001", component_scores=[3.0, 4.0, 2.0, 0.0]
+    )
+    gradebook_service.set_lineage_mastery_settings(
+        snapshot.lineage_id, calculation="rubric_levels", reporting="exact"
+    )
+
+    record = gradebook_service.get_one_student_performance(ada.id)
+    entry = record.by_standard[0]
+    assert entry.mastery.calculation == "rubric_levels"
+    assert entry.mastery.level_exact == pytest.approx(2.50)
+    assert entry.mastery.components_unavailable is False
+    # The row total is kept in step with the parts, so every other report agrees.
+    assert entry.points_earned == pytest.approx(9.0)
+
+    # The per-level breakdown lives on the test's own entry. The cross-test view
+    # drops it on purpose: a ladder only means something inside the assessment
+    # that built it.
+    per_test = record.lineages[0].resolved.by_standard[0]
+    assert [level.level for level in per_test.mastery.levels] == [1, 2, 3, 4]
+    assert [level.mastered for level in per_test.mastery.levels] == [True, True, False, False]
+    assert record.by_standard[0].mastery.levels == []
+
+
+def test_rubric_levels_says_when_no_component_carried_a_difficulty(open_gradebook) -> None:
+    """Falling back to laddering whole questions is the right behaviour, but the
+    report has to admit it rather than quietly reporting a different mode."""
+
+    bank_service, gradebook_service = open_gradebook
+    ada = gradebook_service.upsert_student(
+        None, UpsertStudentRequest(first_name="Ada", last_name="Lovelace")
+    )
+    snapshot = _hand_off(bank_service, gradebook_service, [EASY_MC, HARD_MC], "Kinematics")
+    _scan(gradebook_service, snapshot, {EASY_MC}, ada.id)
+    gradebook_service.set_lineage_mastery_settings(
+        snapshot.lineage_id, calculation="rubric_levels", reporting="exact"
+    )
+
+    entry = next(
+        e
+        for e in gradebook_service.get_one_student_performance(ada.id).by_standard
+        if e.standard_id == "PHY-KIN-01"
+    )
+    assert entry.mastery.components_unavailable is True
+    assert entry.mastery.level_exact == pytest.approx(2.0)  # laddered as whole questions
+
+
+def test_a_partly_specified_rubric_is_not_laddered(open_gradebook) -> None:
+    """Half a ladder is worse than none: a rubric with difficulties on only some
+    parts cannot say which rung the work reached, so it is left to the
+    whole-question fallback rather than guessed at."""
+
+    bank_service, gradebook_service = open_gradebook
+    question = bank_service.get_question("q_fr_0001")
+    question.rubric = [
+        RubricRowModel(criterion="Set up", points=5, difficulty=1),
+        RubricRowModel(criterion="Finish", points=5, difficulty=None),
+    ]
+    bank_service.update_question("q_fr_0001", question)
+
+    ada = gradebook_service.upsert_student(
+        None, UpsertStudentRequest(first_name="Ada", last_name="Lovelace")
+    )
+    snapshot = _hand_off(bank_service, gradebook_service, ["q_fr_0001"], "Projectiles")
+    batch = gradebook_service.create_scan_batch(snapshot.id, None)
+    updated = gradebook_service.ingest_scan_batch(
+        batch.id, [("sheet.png", png_bytes(rasterize_layout_page(snapshot.layout, 0, 300)))]
+    )
+    gradebook_service.resolve_sheet_identity(batch.id, updated.sheets[0].id, student_id=ada.id)
+    gradebook_service.override_row_result(
+        batch.id, updated.sheets[0].id, "q_fr_0001", component_scores=[5.0, 0.0]
+    )
+    gradebook_service.set_lineage_mastery_settings(
+        snapshot.lineage_id, calculation="rubric_levels", reporting="exact"
+    )
+
+    entry = gradebook_service.get_one_student_performance(ada.id).by_standard[0]
+    assert entry.mastery.components_unavailable is True

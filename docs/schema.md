@@ -1,4 +1,4 @@
-# Nexzam Schema (Milestone 1 Draft)
+# Nexam Schema (Milestone 1 Draft)
 
 ## Package-level files
 
@@ -76,7 +76,7 @@ Source standard lists are preserved as complete imported reference sets:
     {
       "id": "physics-core-2026",
       "title": "Physics Core Standards",
-      "issuer": "Nexzam Sample Curriculum",
+      "issuer": "Nexam Sample Curriculum",
       "subject": "Physics",
       "version": "2026.1",
       "description": "Sample complete reference set for introductory physics topics.",

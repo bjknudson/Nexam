@@ -1,11 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { getCombinedLineageReport, getGradeReport, recordPerformanceRun } from "./api";
+import {
+  getCombinedLineageReport,
+  getGradeReport,
+  getMasterySettings,
+  recordPerformanceRun,
+  setLineageMasterySettings,
+} from "./api";
+import MasteryModePicker from "./MasteryModePicker";
 import type {
   AdministeredTestSnapshotSummaryModel,
   CombinedGradeReportModel,
+  GradebookMasteryConfigModel,
   GradeReportModel,
   GradingBatchModel,
+  MasteryCalculation,
+  MasteryReporting,
 } from "./types";
 
 interface GradeReportWorkspaceProps {
@@ -67,6 +77,7 @@ export default function GradeReportWorkspace({
   const [busy, setBusy] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
+  const [mastery, setMastery] = useState<GradebookMasteryConfigModel | null>(null);
 
   const versionBySnapshotId = useMemo(
     () => Object.fromEntries(printings.map((printing) => [printing.id, printing.version])),
@@ -121,6 +132,28 @@ export default function GradeReportWorkspace({
       cancelled = true;
     };
   }, [lineageId, batches]);
+
+  useEffect(() => {
+    getMasterySettings()
+      .then(setMastery)
+      .catch(() => setMastery(null));
+  }, []);
+
+  async function saveMastery(payload: {
+    calculation?: MasteryCalculation | null;
+    reporting?: MasteryReporting | null;
+  }) {
+    setBusy(true);
+    try {
+      setMastery(await setLineageMasterySettings(lineageId, payload));
+      setStatusMessage("Mastery mode saved for this test.");
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (!statusMessage) return;
@@ -333,6 +366,26 @@ export default function GradeReportWorkspace({
               ))}
             </tbody>
           </table>
+        </section>
+      ) : null}
+
+      {mastery ? (
+        <section className="standards-panel">
+          <h3>How mastery is calculated for this test</h3>
+          <p>
+            Mastery is a <strong>level</strong>, not a percentage -- how far up the ladder this
+            test's evidence reaches. Which calculation suits it depends on what it asks: a full
+            ladder of levels, a handful of hard questions, or a multipart task whose parts each
+            have their own difficulty.
+          </p>
+          <MasteryModePicker
+            settings={mastery.by_lineage[lineageId] ?? mastery.default}
+            inheritedFrom={mastery.default}
+            isOverridden={lineageId in mastery.by_lineage}
+            busy={busy}
+            onChange={(next) => void saveMastery(next)}
+            onClearOverride={() => void saveMastery({})}
+          />
         </section>
       ) : null}
 

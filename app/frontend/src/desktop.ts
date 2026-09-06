@@ -23,7 +23,7 @@ interface OpenPaneWindowOptions {
 }
 
 function getPaneWindowLabel(pane: PaneKind, mode?: string): string {
-  return mode ? `nexzam-${pane}-${mode}-pane` : `nexzam-${pane}-pane`;
+  return mode ? `nexam-${pane}-${mode}-pane` : `nexam-${pane}-pane`;
 }
 
 export function isDesktopShell(): boolean {
@@ -85,7 +85,7 @@ export async function resolveDefaultBankDirectory(): Promise<string | null> {
   try {
     const { documentDir, join } = await import("@tauri-apps/api/path");
     const documents = await documentDir();
-    return join(documents, "Nexzam");
+    return join(documents, "Nexam");
   } catch {
     // `documentDir` is a capability-gated core command. A window without that
     // permission must still be able to open its file dialog -- just without a
@@ -114,7 +114,7 @@ export async function printCurrentWindow(pageSize: string): Promise<void> {
   await invoke("print_current_window", { pageSize });
 }
 
-/** Show a generated PDF in a Nexzam window and open the print dialog on it,
+/** Show a generated PDF in a Nexam window and open the print dialog on it,
  *  rather than saving a file and asking the teacher to print it elsewhere. */
 export async function printPdfUrl(url: string, title?: string): Promise<void> {
   if (!isDesktopShell()) {
@@ -183,7 +183,7 @@ export async function openPaneWindow(
   });
 }
 
-const GRADEBOOK_WINDOW_LABEL = "nexzam-gradebook";
+const GRADEBOOK_WINDOW_LABEL = "nexam-gradebook";
 
 /** Open the gradebook as its own top-level window/tab -- a separate document
  *  from the currently open bank, not a pane of it, so it gets its own query
@@ -221,7 +221,7 @@ export async function openGradebookWindow(
     // "Open Gradebook" while one was already open look like it did nothing.
     if (intent) {
       try {
-        const channel = new BroadcastChannel("nexzam-pane-sync");
+        const channel = new BroadcastChannel("nexam-pane-sync");
         channel.postMessage({ type: "gradebook-open-intent", intent });
         channel.close();
       } catch {
@@ -235,7 +235,7 @@ export async function openGradebookWindow(
 
   const child = new WebviewWindow(GRADEBOOK_WINDOW_LABEL, {
     url: url.toString(),
-    title: "Nexzam Gradebook",
+    title: "Nexam Gradebook",
     width: 1200,
     height: 860,
     resizable: true,
@@ -294,51 +294,51 @@ async function onMenuEvent(eventName: string, callback: () => void): Promise<Unl
 }
 
 export function onOpenSettings(callback: () => void): Promise<UnlistenFn | null> {
-  return onMenuEvent("nexzam://open-settings", callback);
+  return onMenuEvent("nexam://open-settings", callback);
 }
 
 export function onNewBankMenu(callback: () => void): Promise<UnlistenFn | null> {
-  return onMenuEvent("nexzam://new-bank", callback);
+  return onMenuEvent("nexam://new-bank", callback);
 }
 
 export function onOpenBankMenu(callback: () => void): Promise<UnlistenFn | null> {
-  return onMenuEvent("nexzam://open-bank", callback);
+  return onMenuEvent("nexam://open-bank", callback);
 }
 
 export function onBankPropertiesMenu(callback: () => void): Promise<UnlistenFn | null> {
-  return onMenuEvent("nexzam://bank-properties", callback);
+  return onMenuEvent("nexam://bank-properties", callback);
 }
 
 export function onOpenDemoBankMenu(callback: () => void): Promise<UnlistenFn | null> {
-  return onMenuEvent("nexzam://open-demo-bank", callback);
+  return onMenuEvent("nexam://open-demo-bank", callback);
 }
 
 export function onSaveBankMenu(callback: () => void): Promise<UnlistenFn | null> {
-  return onMenuEvent("nexzam://save-bank", callback);
+  return onMenuEvent("nexam://save-bank", callback);
 }
 
 export function onSaveAsMenu(callback: () => void): Promise<UnlistenFn | null> {
-  return onMenuEvent("nexzam://save-as", callback);
+  return onMenuEvent("nexam://save-as", callback);
 }
 
 export function onCloseBankMenu(callback: () => void): Promise<UnlistenFn | null> {
-  return onMenuEvent("nexzam://close-bank", callback);
+  return onMenuEvent("nexam://close-bank", callback);
 }
 
 export function onNewGradebookMenu(callback: () => void): Promise<UnlistenFn | null> {
-  return onMenuEvent("nexzam://new-gradebook", callback);
+  return onMenuEvent("nexam://new-gradebook", callback);
 }
 
 export function onOpenGradebookMenu(callback: () => void): Promise<UnlistenFn | null> {
-  return onMenuEvent("nexzam://open-gradebook", callback);
+  return onMenuEvent("nexam://open-gradebook", callback);
 }
 
 export function onOpenDemoGradebookMenu(callback: () => void): Promise<UnlistenFn | null> {
-  return onMenuEvent("nexzam://open-demo-gradebook", callback);
+  return onMenuEvent("nexam://open-demo-gradebook", callback);
 }
 
 export function onCloseGradebookMenu(callback: () => void): Promise<UnlistenFn | null> {
-  return onMenuEvent("nexzam://close-gradebook", callback);
+  return onMenuEvent("nexam://close-gradebook", callback);
 }
 
 /** Tell the shell which "close" menu commands should be available. */

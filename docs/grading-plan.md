@@ -11,7 +11,7 @@ a score (total, by standard, and a couple of other useful breakdowns) — feedin
 existing `performance_runs` concept the app already has.
 
 **A `.bok` bank is a file teachers hand to each other** (`DISTRIBUTION.md`'s whole "send testers
-Nexzam.zip" culture). Student names and scores must never be capable of riding along inside it —
+Nexam.zip" culture). Student names and scores must never be capable of riding along inside it —
 not "the teacher should remember not to export that," but structurally impossible because the data
 never lives in the bank's package in the first place. That single requirement drives the biggest
 decision in this plan: grading data lives in a **second, separate local file** with its own

@@ -12,7 +12,7 @@ import ScanReviewWorkspace from "./ScanReviewWorkspace";
 import GradeReportWorkspace from "./GradeReportWorkspace";
 import type { AdministeredTestSnapshotSummaryModel, GradingBatchModel } from "./types";
 
-const PANE_SYNC_CHANNEL = "nexzam-pane-sync";
+const PANE_SYNC_CHANNEL = "nexam-pane-sync";
 
 type DrillTab = "printings" | "scans" | "report";
 
@@ -371,47 +371,48 @@ export default function AdministeredTestsWorkspace({
 
   if (selected) {
     const attention = attentionOf(selected);
+    // Reviewing needs the height, so the drill-down trades its roomier header
+    // for a single line and lets the pane below have the rest of the window.
+    const reviewOpen = drillTab === "scans";
     return (
-      <div className="administered-tests-workspace">
-        <header className="standards-panel-header test-drill-header">
-          <div>
-            <button
-              type="button"
-              className="administered-test-stack-toggle"
-              onClick={() => setSelectedLineageId(null)}
-            >
-              &larr; All tests
-            </button>
-            <h2>{selected.title}</h2>
-            <div className="standards-header-summary">
-              <span className="status-pill">
-                {selected.printings.length} printing
-                {selected.printings.length === 1 ? "" : "s"}
-              </span>
-              <span className="status-pill">
-                {selected.sheetCount} sheet{selected.sheetCount === 1 ? "" : "s"} scanned
-              </span>
-              {attention === "needs_review" ? (
-                <span className="status-pill error">
-                  {selected.needsReviewCount} need review
-                </span>
-              ) : null}
-              {attention === "awaiting_scans" ? (
-                <span className="status-pill dirty">Waiting for scans</span>
-              ) : null}
-            </div>
+      <div
+        className={`administered-tests-workspace ${reviewOpen ? "is-review-open" : ""}`}
+      >
+        <header className="standards-panel-header test-drill-header is-compact">
+          <button
+            type="button"
+            className="administered-test-stack-toggle"
+            onClick={() => setSelectedLineageId(null)}
+          >
+            &larr; All tests
+          </button>
+          <h2>{selected.title}</h2>
+          <div className="standards-header-summary">
+            <span className="status-pill">
+              {selected.printings.length} printing
+              {selected.printings.length === 1 ? "" : "s"}
+            </span>
+            <span className="status-pill">
+              {selected.sheetCount} scanned
+            </span>
+            {attention === "needs_review" ? (
+              <span className="status-pill error">{selected.needsReviewCount} to review</span>
+            ) : null}
+            {attention === "awaiting_scans" ? (
+              <span className="status-pill dirty">Waiting for scans</span>
+            ) : null}
           </div>
           <div className="standards-header-actions">
             {statusMessage ? <span className="status-pill saved">{statusMessage}</span> : null}
-            <button type="button" onClick={() => openHandOff(selected)}>
-              Create Response Sheets...
-            </button>
           </div>
         </header>
 
         {errorMessage ? <p className="gradebook-error">{errorMessage}</p> : null}
 
-        <nav className="gradebook-tabs test-drill-tabs" role="tablist">
+        <nav
+          className={`gradebook-tabs test-drill-tabs ${reviewOpen ? "is-compact" : ""}`}
+          role="tablist"
+        >
           {(Object.keys(DRILL_TAB_LABEL) as DrillTab[]).map((tab) => (
             <button
               key={tab}
@@ -431,6 +432,11 @@ export default function AdministeredTestsWorkspace({
 
         {drillTab === "printings" ? (
           <>
+            <div className="standards-import-actions">
+              <button type="button" onClick={() => openHandOff(selected)}>
+                Create Response Sheets...
+              </button>
+            </div>
             {stacks.length > 1 ? (
               <label
                 className="inline-select administered-test-lineage"

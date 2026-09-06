@@ -1,4 +1,4 @@
-# Nexzam Architecture (Milestone 1 Draft)
+# Nexam Architecture (Milestone 1 Draft)
 
 ## Design goals
 

@@ -6,7 +6,7 @@
 #   source .venv/bin/activate
 #   ./scripts/package_release.sh
 #
-# Output: src-tauri/target/release/bundle/macos/Nexzam.app and Nexzam.zip
+# Output: src-tauri/target/release/bundle/macos/Nexam.app and Nexam.zip
 
 set -euo pipefail
 
@@ -16,7 +16,7 @@ cd "$(dirname "$0")/.."
 
 (cd app/frontend && npm run tauri:build)
 
-APP="src-tauri/target/release/bundle/macos/Nexzam.app"
+APP="src-tauri/target/release/bundle/macos/Nexam.app"
 
 # Tauri's resource copier dereferences symlinks, which breaks the
 # versioned Python framework PyInstaller ships inside the backend (see
@@ -25,8 +25,8 @@ APP="src-tauri/target/release/bundle/macos/Nexzam.app"
 # notarized, but it keeps local and CI builds structurally identical --
 # and keeps the .app ~10MB smaller.
 echo "Restoring backend framework symlinks..."
-rm -rf "$APP/Contents/Resources/nexzam-backend"
-ditto dist/backend/nexzam-backend "$APP/Contents/Resources/nexzam-backend"
+rm -rf "$APP/Contents/Resources/nexam-backend"
+ditto dist/backend/nexam-backend "$APP/Contents/Resources/nexam-backend"
 
 # `tauri build`'s own ad-hoc signing does not produce a valid
 # resource-sealed signature once the frozen Python backend is bundled
@@ -46,7 +46,7 @@ echo "Signing $APP (ad-hoc) ..."
 ./scripts/sign_macos_app.sh - "$APP"
 
 ZIP_DIR="src-tauri/target/release/bundle/macos"
-rm -f "$ZIP_DIR/Nexzam.zip"
-(cd "$ZIP_DIR" && ditto -c -k --sequesterRsrc --keepParent Nexzam.app Nexzam.zip)
+rm -f "$ZIP_DIR/Nexam.zip"
+(cd "$ZIP_DIR" && ditto -c -k --sequesterRsrc --keepParent Nexam.app Nexam.zip)
 
-echo "Wrote $ZIP_DIR/Nexzam.zip"
+echo "Wrote $ZIP_DIR/Nexam.zip"

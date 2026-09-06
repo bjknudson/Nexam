@@ -1,4 +1,4 @@
-# Nexzam Roadmap
+# Nexam Roadmap
 
 ## Phase 0 — Foundation
 
@@ -47,7 +47,7 @@
   - Keep invalid rows visible and editable instead of dropping them.
   - Show schema errors, duplicate id conflicts, unsupported question types, malformed JSON fields, and unknown standard references.
 - Proposed id handling for staged rows.
-  - Default to type-based Nexzam ids on promotion.
+  - Default to type-based Nexam ids on promotion.
   - Allow keeping imported ids only when they are valid and unique.
   - Never silently rename persisted or imported ids.
 - Staging review table with filters for all, valid, invalid, selected, and promoted rows.
@@ -168,6 +168,14 @@ Full design in `docs/grading-plan.md`; format reference in `docs/grading.md`.
   rest with a one-click route into the tab that resolves them, and each card
   generates response sheets for its own test across every version in one run.
   The gradebook's pages are now Students / Tests / Export. See "Page layout" in
+  `docs/grading.md`.
+- Mastery reported as a *level* on the bank's difficulty scale rather than a
+  percentage, with three calculations -- Level Ladder (clear each level in
+  turn), Difficulty Weighted (partial credit on a hard question as partial
+  evidence of that level), and Rubric Levels (the ladder applied to a levelled
+  rubric's own components) -- plus exact/half-step rounding. Chosen per
+  gradebook and overridable per test. Rubric rows gained a `level`, and scan
+  review can score a levelled rubric part by part. See "Mastery levels" in
   `docs/grading.md`.
 - Remaining Phase 6 work: `ResponseSheetPrintPane.tsx`, `RosterWorkspace.tsx`,
   `ScanReviewWorkspace.tsx`, and `GradeReportWorkspace.tsx` on the frontend;

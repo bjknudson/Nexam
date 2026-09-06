@@ -1,4 +1,4 @@
-# Contributing to Nexzam
+# Contributing to Nexam
 
 _Coming soon._
 

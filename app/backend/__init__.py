@@ -1,1 +1,1 @@
-"""Nexzam backend package."""
+"""Nexam backend package."""

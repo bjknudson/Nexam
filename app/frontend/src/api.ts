@@ -10,6 +10,7 @@ import type {
   AssetUploadResponseModel,
   BankSummaryModel,
   CombinedGradeReportModel,
+  GradebookMasteryConfigModel,
   CourseDetailModel,
   CourseListResponseModel,
   CourseModel,
@@ -33,6 +34,8 @@ import type {
   StandardRecordModel,
   StandardReferenceModel,
   StandardSearchResponseModel,
+  MasteryCalculation,
+  MasteryReporting,
   RetakeResolution,
   ScoreExportMethod,
   StudentListResponseModel,
@@ -912,8 +915,31 @@ export async function overrideRowResult(
     manualScore?: number | null;
     manualScoreMax?: number | null;
     manualGraderNote?: string | null;
+    /** One score per frozen rubric component. When given, the row total is
+     *  derived from these rather than sent separately. */
+    componentScores?: number[] | null;
   },
 ): Promise<ScannedSheetModel> {
+  // Only the fields this caller named go in the body. Sending every key with a
+  // `?? null` fallback made each save wipe the fields it wasn't touching -- a
+  // score save cleared the grader's note and the points it was scored out of.
+  // An explicitly-passed null is still sent, because that is the caller
+  // deliberately clearing the field.
+  const body: Record<string, unknown> = {};
+  const wireName: Record<keyof typeof payload, string> = {
+    overrideChoiceIndices: "override_choice_indices",
+    overrideBlank: "override_blank",
+    overrideValue: "override_value",
+    overrideNote: "override_note",
+    manualScore: "manual_score",
+    manualScoreMax: "manual_score_max",
+    manualGraderNote: "manual_grader_note",
+    componentScores: "component_scores",
+  };
+  for (const [key, wire] of Object.entries(wireName)) {
+    if (key in payload) body[wire] = payload[key as keyof typeof payload];
+  }
+
   return handleResponse(
     await fetch(
       buildApiUrl(
@@ -922,15 +948,7 @@ export async function overrideRowResult(
       {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          override_choice_indices: payload.overrideChoiceIndices ?? null,
-          override_blank: payload.overrideBlank ?? null,
-          override_value: payload.overrideValue ?? null,
-          override_note: payload.overrideNote ?? null,
-          manual_score: payload.manualScore ?? null,
-          manual_score_max: payload.manualScoreMax ?? null,
-          manual_grader_note: payload.manualGraderNote ?? null,
-        }),
+        body: JSON.stringify(body),
       },
     ),
   );
@@ -1047,4 +1065,43 @@ export async function fetchScoresCsv(options: {
     csv: await response.text(),
     filename: match ? match[1] : `scores-${options.method}.csv`,
   };
+}
+
+export async function getMasterySettings(): Promise<GradebookMasteryConfigModel> {
+  return handleResponse(await fetch(buildApiUrl("/api/gradebook/mastery-settings")));
+}
+
+/** Change the gradebook default. Tests carrying their own override keep it. */
+export async function setDefaultMasterySettings(payload: {
+  calculation?: MasteryCalculation | null;
+  reporting?: MasteryReporting | null;
+}): Promise<GradebookMasteryConfigModel> {
+  return handleResponse(
+    await fetch(buildApiUrl("/api/gradebook/mastery-settings"), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        calculation: payload.calculation ?? null,
+        reporting: payload.reporting ?? null,
+      }),
+    }),
+  );
+}
+
+/** Override one test's mode. Passing neither field drops the override, putting
+ *  the test back on the gradebook default. */
+export async function setLineageMasterySettings(
+  lineageId: string,
+  payload: { calculation?: MasteryCalculation | null; reporting?: MasteryReporting | null } = {},
+): Promise<GradebookMasteryConfigModel> {
+  return handleResponse(
+    await fetch(buildApiUrl(`/api/gradebook/mastery-settings/${encodeURIComponent(lineageId)}`), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        calculation: payload.calculation ?? null,
+        reporting: payload.reporting ?? null,
+      }),
+    }),
+  );
 }

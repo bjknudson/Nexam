@@ -5,7 +5,7 @@
 #   source .venv/bin/activate
 #   ./scripts/build_backend_binary.sh
 #
-# Output: dist/backend/nexzam-backend/ (onedir bundle), which
+# Output: dist/backend/nexam-backend/ (onedir bundle), which
 # src-tauri/tauri.conf.json's bundle.resources maps into the packaged app.
 
 set -euo pipefail
@@ -21,7 +21,7 @@ BAKED_VERSION = "$VERSION"
 EOF
 echo "Baking backend version $VERSION"
 
-pyinstaller --name nexzam-backend --onedir --noconfirm \
+pyinstaller --name nexam-backend --onedir --noconfirm \
   --distpath dist/backend --workpath build/backend --specpath build \
   --paths . \
   --hidden-import uvicorn.logging \
@@ -32,4 +32,4 @@ pyinstaller --name nexzam-backend --onedir --noconfirm \
   app/backend/bundle_entrypoint.py
 
 rm -f app/backend/_baked_version.py
-echo "Wrote dist/backend/nexzam-backend/ (version $VERSION)"
+echo "Wrote dist/backend/nexam-backend/ (version $VERSION)"

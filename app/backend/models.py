@@ -568,6 +568,21 @@ class SeedCourseRequest(BaseModel):
 class RubricRowModel(BaseModel):
     criterion: str
     points: float
+    # This component's own difficulty, named and numbered exactly like
+    # QuestionModel.difficulty -- a multipart task's parts are rarely all as hard
+    # as each other. Optional, and left null by everything that does not use
+    # Rubric Levels: a rubric that was never given difficulties grades exactly as
+    # it always did. See grading/mastery.py.
+    difficulty: int | None = None
+
+    @field_validator("difficulty")
+    @classmethod
+    def validate_difficulty(cls, value: int | None) -> int | None:
+        # No upper bound: the scale is the bank's to choose, and the mastery
+        # calculations take their ceiling from the difficulties actually present.
+        if value is not None and value < 1:
+            raise ValueError("difficulty must be 1 or greater")
+        return value
 
 
 class ManifestModel(BaseModel):
@@ -869,6 +884,10 @@ class AnswerKeyItemModel(BaseModel):
     # no questions of its own to look it up from. None on keys frozen before
     # this field existed -- see grading/aggregate.py for the fallback.
     difficulty: int | None = None
+    # The question's rubric, frozen with its levels, so a Rubric Levels report
+    # ladders the components as they were written at hand-off. Empty for
+    # auto-graded rows and for questions with no rubric.
+    rubric_components: list[RubricRowModel] = Field(default_factory=list)
     choice_count: int | None = None
     correct_choice_indices: list[int] | None = None
     numeric_value: float | None = None
@@ -1113,6 +1132,11 @@ class DetectedRowResultModel(BaseModel):
     manual_score: float | None = None
     manual_score_max: float | None = None
     manual_grader_note: str | None = None
+    # One score per frozen rubric component, in the key's order. Set only when a
+    # grader scored the parts separately; `manual_score` stays the row's total
+    # either way, so every existing report keeps working whether or not the
+    # parts were broken out. Rubric Levels is the one report that needs them.
+    component_scores: list[float] | None = None
 
     override_choice_indices: list[int] | None = None
     override_value: float | None = None
@@ -1181,6 +1205,7 @@ class OverrideRowResultRequest(BaseModel):
     manual_score: float | None = None
     manual_score_max: float | None = None
     manual_grader_note: str | None = None
+    component_scores: list[float] | None = None
 
 
 class ChoiceDistributionEntryModel(BaseModel):
@@ -1283,6 +1308,102 @@ class RecordPerformanceRunRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Mastery levels
+#
+# Two words, one numbering, used consistently throughout:
+#
+#   difficulty  what an author assigns to a question or rubric component
+#   level       a rung on the mastery ladder, which a student reaches
+#
+# A question's difficulty is the level it gives evidence about, so the two share
+# a scale -- but they are not the same thing, and only one of them is a claim
+# about a student.
+#
+# Mastery is reported as a *level*, not a percentage. "2.50" means the student
+# has shown Level 2 and is halfway through Level 3 -- a different quantity from
+# "50% correct", and the one a standards-based gradebook actually reports.
+#
+# Three calculations, one rounding choice, chosen per gradebook and overridable
+# per test. See grading/mastery.py for the formulas and docs/grading.md.
+# ---------------------------------------------------------------------------
+
+
+MasteryCalculation = Literal["level_ladder", "difficulty_weighted", "rubric_levels"]
+
+MasteryReporting = Literal["exact", "half_steps"]
+
+
+class MasterySettingsModel(BaseModel):
+    """Level Ladder + Half Steps is the default: the ladder is what a
+    standards-based report means by mastery, and half steps stop a 1.33 from
+    reading as more precision than one test's worth of evidence supports."""
+
+    calculation: MasteryCalculation = "level_ladder"
+    reporting: MasteryReporting = "half_steps"
+
+
+class GradebookMasteryConfigModel(BaseModel):
+    """The gradebook's default, plus per-test overrides keyed by lineage id.
+
+    Per *lineage*, not per printing: every version of a test, and any retake
+    linked to it, is the same assessment and must be scored the same way.
+    """
+
+    default: MasterySettingsModel = Field(default_factory=MasterySettingsModel)
+    by_lineage: dict[str, MasterySettingsModel] = Field(default_factory=dict)
+
+    def for_lineage(self, lineage_id: str | None) -> MasterySettingsModel:
+        if lineage_id and lineage_id in self.by_lineage:
+            return self.by_lineage[lineage_id]
+        return self.default
+
+
+class UpdateMasterySettingsRequest(BaseModel):
+    """A null field means "leave that half alone"; a null body on the per-test
+    route means "drop the override and follow the gradebook default"."""
+
+    calculation: MasteryCalculation | None = None
+    reporting: MasteryReporting | None = None
+
+
+class MasteryLevelBreakdownModel(BaseModel):
+    """One level's worth of evidence, and whether it was mastered."""
+
+    level: int
+    points_earned: float
+    points_possible: float
+    accuracy: float
+    mastered: bool
+
+
+class MasteryResultModel(BaseModel):
+    """`level` is what to display -- already rounded by the reporting mode.
+    `level_exact` is the raw calculation, kept so an export can ask for full
+    precision without recomputing, and so rounding is visible rather than
+    baked in."""
+
+    calculation: MasteryCalculation
+    reporting: MasteryReporting
+    level: float
+    level_exact: float
+    # The highest level the evidence actually reaches, so "2.5" can be shown as
+    # "2.5 of 4" rather than leaving the reader to guess the ceiling.
+    scale_max: int
+    levels: list[MasteryLevelBreakdownModel] = Field(default_factory=list)
+    # A level above the first unmastered one was nonetheless mastered. Not
+    # discarded -- surfaced, because it usually means the level labels are
+    # wrong rather than that the student is.
+    inconsistent_evidence: bool = False
+    # The levels present skip a rung (or do not start at 1), so the ladder is
+    # standing on incomplete evidence. Difficulty Weighted is the better mode
+    # for such a test.
+    has_level_gaps: bool = False
+    # Rubric Levels was asked for but no component carried a level, so this fell
+    # back to laddering whole questions.
+    components_unavailable: bool = False
+
+
+# ---------------------------------------------------------------------------
 # Cross-test student performance and CSV export
 #
 # Everything below is *derived*: nothing here is persisted. A gradebook stores
@@ -1300,17 +1421,12 @@ ScoreExportMethod = Literal["total", "by_standard", "mastery"]
 class StudentStandardScoreModel(BaseModel):
     """One standard's worth of one student's work.
 
-    `percent_earned` is plain points earned over points possible. `mastery_estimate`
-    weights each item by its difficulty (1-5), so getting the hard items right
-    counts for more than getting the easy ones right:
-
-        mastery = 100 * sum(difficulty_i * credit_i) / sum(difficulty_i)
-
-    where credit_i is the fraction of the item's points the student earned. It
-    is a weighted average, not a psychometric ability estimate -- with one test's
-    worth of items it is a reading of this evidence, not a claim about the
-    student. Items whose frozen key predates the difficulty field fall back to
-    the middle of the scale, which makes them weigh the same as everything else.
+    Two different questions, answered separately. `percent_earned` is plain
+    points earned over points possible -- how much of the work was right.
+    `mastery` is a *level* -- how far up the mastery ladder the evidence
+    reaches. A student can score 50% and be at Level 1.5 or at Level 3.2
+    depending on which questions they got right, which is the whole reason both
+    are reported. See grading/mastery.py.
     """
 
     standard_id: str
@@ -1319,8 +1435,8 @@ class StudentStandardScoreModel(BaseModel):
     points_earned: float
     points_possible: float
     percent_earned: float
-    mastery_estimate: float
     average_difficulty: float
+    mastery: MasteryResultModel
 
 
 class StudentAttemptModel(BaseModel):
@@ -1398,6 +1514,9 @@ class StudentPerformanceModel(BaseModel):
 class StudentPerformanceListResponseModel(BaseModel):
     generated_at: datetime
     retake_resolution: RetakeResolution
+    # The gradebook default. Individual tests may override it, in which case
+    # each lineage's own entries carry the mode they were scored under.
+    mastery: MasterySettingsModel = Field(default_factory=MasterySettingsModel)
     items: list[StudentPerformanceModel] = Field(default_factory=list)
     # Scored sheets that could not be attached to anyone on the roster (a
     # hand-written name that was never resolved to a student). They are absent

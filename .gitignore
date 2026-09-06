@@ -206,7 +206,7 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# Nexzam packaged bank artifacts (generated locally)
+# Nexam packaged bank artifacts (generated locally)
 *.bok
 *.bokx
 !samples/demo-bank.bok

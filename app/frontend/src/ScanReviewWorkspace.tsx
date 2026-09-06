@@ -229,6 +229,8 @@ export default function ScanReviewWorkspace({
 
   const [freeTextName, setFreeTextName] = useState("");
   const [rowDrafts, setRowDrafts] = useState<Record<string, string>>({});
+  // Per-rubric-component scores, keyed by question then component index.
+  const [componentDrafts, setComponentDrafts] = useState<Record<string, string[]>>({});
 
   async function refreshBatches() {
     setLoading(true);
@@ -280,17 +282,39 @@ export default function ScanReviewWorkspace({
 
   // Stepping moves through the sheets the filter is showing, so "needs review"
   // walks only the ones still outstanding.
+  //
+  // Resolving a sheet drops it out of that list while it is still the one on
+  // screen, which used to leave the position reading "-" with both buttons
+  // dead -- finishing a sheet stranded you. Off-list, stepping goes to whatever
+  // is nearest in the direction asked for rather than refusing to move.
   const sheetPosition = visibleSheets.findIndex((sheet) => sheet.id === selectedSheetId);
+  const isOffList = sheetPosition < 0 && selectedSheetId !== null;
+  const offListNeighbour = (direction: -1 | 1): ScannedSheetModel | undefined => {
+    const all = selectedBatch?.sheets ?? [];
+    const previousIndex = all.findIndex((sheet) => sheet.id === selectedSheetId);
+    if (previousIndex < 0) return visibleSheets[0];
+    // The nearest still-visible sheet on the side we were asked to move to,
+    // falling back to the other side when there is nothing that way.
+    const forward = visibleSheets.find((sheet) => all.indexOf(sheet) > previousIndex);
+    const backward = [...visibleSheets]
+      .reverse()
+      .find((sheet) => all.indexOf(sheet) < previousIndex);
+    return direction === 1 ? (forward ?? backward) : (backward ?? forward);
+  };
   const stepSheet = (direction: -1 | 1) => {
     if (visibleSheets.length === 0) return;
-    const next = sheetPosition < 0 ? 0 : sheetPosition + direction;
-    const target = visibleSheets[Math.min(visibleSheets.length - 1, Math.max(0, next))];
+    const target = isOffList
+      ? offListNeighbour(direction)
+      : visibleSheets[
+          Math.min(visibleSheets.length - 1, Math.max(0, (sheetPosition < 0 ? 0 : sheetPosition) + direction))
+        ];
     if (target) setSelectedSheetId(target.id);
   };
 
   useEffect(() => {
     setFreeTextName(selectedSheet?.free_text_name ?? "");
     setRowDrafts({});
+    setComponentDrafts({});
     setExpandedRows({});
     setOpenRubrics({});
     setZoomPoint(null);
@@ -352,6 +376,33 @@ export default function ScanReviewWorkspace({
   const questionsById = Object.fromEntries(
     (snapshot?.questions ?? []).map((question) => [question.id, question]),
   );
+
+  /** The frozen key, not the bank's current question: a rubric edited since the
+   *  paper went out must not change what this sheet is being scored against. */
+  const keyItemsByQuestion = Object.fromEntries(
+    (snapshot?.answer_key.items ?? []).map((item) => [item.question_id, item]),
+  );
+
+  /** The components to score separately, or none. Both halves have to be there:
+   *  a rubric whose parts each carry a difficulty, and more than one of them --
+   *  splitting a single-part rubric buys nothing. */
+  function componentsWithDifficulty(questionId: string) {
+    const components = keyItemsByQuestion[questionId]?.rubric_components ?? [];
+    const withDifficulty = components.filter((component) => component.difficulty != null);
+    return withDifficulty.length === components.length && components.length > 1
+      ? components
+      : [];
+  }
+
+  /** What the part boxes currently add up to, so the row's total is visible
+   *  while it is being assembled rather than only after saving. */
+  function componentTotal(row: DetectedRowResultModel): number {
+    const drafts = componentDrafts[row.question_id] ?? [];
+    return componentsWithDifficulty(row.question_id).reduce(
+      (total, _, index) => total + (Number(drafts[index] ?? row.component_scores?.[index] ?? 0) || 0),
+      0,
+    );
+  }
 
   /** Each sheet's QR says which test it is, so the scans sort themselves rather
    *  than needing a batch chosen up front.
@@ -518,7 +569,10 @@ export default function ScanReviewWorkspace({
     try {
       await overrideRowResult(selectedBatchId, selectedSheet.id, row.question_id, {
         overrideBlank: true,
+        // Both are named explicitly: "no response" has to clear any answer
+        // already recorded, and saves no longer wipe what they don't mention.
         overrideChoiceIndices: row.kind === "multiple_choice" ? [] : null,
+        overrideValue: null,
       });
       await refreshSelectedBatch(selectedBatchId);
       setStatusMessage(`Question ${row.sheet_item_number} recorded as no response.`);
@@ -530,19 +584,39 @@ export default function ScanReviewWorkspace({
     }
   }
 
-  async function handleManualScore(row: DetectedRowResultModel) {
+  /** One save for a written-response row. Whether it is scored as a single
+   *  total or part by part is a property of the rubric, not a choice the
+   *  teacher makes at save time -- so there is one button, and it sends
+   *  whichever shape this row is being scored in. */
+  async function handleSaveManualRow(row: DetectedRowResultModel) {
     if (!selectedBatchId || !selectedSheet) return;
-    const draft = rowDrafts[row.question_id];
-    const score = Number(draft);
-    if (draft === undefined || Number.isNaN(score)) return;
+    const components = componentsWithDifficulty(row.question_id);
+
+    let payload: { manualScore: number } | { componentScores: number[]; manualScoreMax: number };
+    if (components.length > 0) {
+      const drafts = componentDrafts[row.question_id] ?? [];
+      const scores = components.map((_, index) =>
+        Number(drafts[index] ?? row.component_scores?.[index] ?? 0),
+      );
+      if (scores.some((score) => Number.isNaN(score))) return;
+      payload = {
+        componentScores: scores,
+        manualScoreMax: components.reduce((total, component) => total + component.points, 0),
+      };
+    } else {
+      const draft = rowDrafts[row.question_id];
+      const score = Number(draft);
+      if (draft === undefined || Number.isNaN(score)) return;
+      payload = { manualScore: score };
+    }
+
     setBusy(true);
     try {
-      await overrideRowResult(selectedBatchId, selectedSheet.id, row.question_id, {
-        manualScore: score,
-      });
+      await overrideRowResult(selectedBatchId, selectedSheet.id, row.question_id, payload);
       await refreshSelectedBatch(selectedBatchId);
-      setStatusMessage("Score recorded.");
+      setStatusMessage(`Question ${row.sheet_item_number} scored.`);
       onChanged?.();
+      setErrorMessage("");
     } catch (error) {
       setErrorMessage((error as Error).message);
     } finally {
@@ -555,21 +629,22 @@ export default function ScanReviewWorkspace({
       {statusMessage ? <span className="status-pill saved">{statusMessage}</span> : null}
       {errorMessage ? <p className="gradebook-error">{errorMessage}</p> : null}
 
-      <div className="standards-import-grid">
-        <label>
-          Upload scans
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            accept="image/*,application/pdf"
-            disabled={busy}
-            onChange={(event) => void handleUpload(event.target.files)}
-          />
-        </label>
+      <div className="scan-review-toolbar">
+        <button type="button" disabled={busy} onClick={() => fileInputRef.current?.click()}>
+          Upload Scans...
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          hidden
+          accept="image/*,application/pdf"
+          disabled={busy}
+          onChange={(event) => void handleUpload(event.target.files)}
+        />
         {batches.length > 1 ? (
           <label>
-            Scan batch
+            Batch
             <select
               value={selectedBatchId ?? ""}
               onChange={(event) => {
@@ -581,7 +656,7 @@ export default function ScanReviewWorkspace({
                 <option key={batch.id} value={batch.id}>
                   {batch.source_description ||
                     `Scanned ${new Date(batch.created_at).toLocaleDateString()}`}{" "}
-                  ({batch.sheets.length} sheet{batch.sheets.length === 1 ? "" : "s"})
+                  ({batch.sheets.length})
                 </option>
               ))}
             </select>
@@ -737,18 +812,23 @@ export default function ScanReviewWorkspace({
                     <button
                       type="button"
                       onClick={() => stepSheet(-1)}
-                      disabled={sheetPosition <= 0}
+                      disabled={visibleSheets.length === 0 || (!isOffList && sheetPosition <= 0)}
                     >
                       Previous
                     </button>
                     <span>
-                      {sheetPosition >= 0 ? sheetPosition + 1 : "-"} of {visibleSheets.length}
-                      {filter === "needs_review" ? " needing review" : " sheets"}
+                      {isOffList
+                        ? `Done - ${visibleSheets.length} left`
+                        : `${sheetPosition >= 0 ? sheetPosition + 1 : 0} of ${visibleSheets.length}`}
+                      {isOffList ? "" : filter === "needs_review" ? " needing review" : " sheets"}
                     </span>
                     <button
                       type="button"
                       onClick={() => stepSheet(1)}
-                      disabled={sheetPosition < 0 || sheetPosition >= visibleSheets.length - 1}
+                      disabled={
+                        visibleSheets.length === 0 ||
+                        (!isOffList && sheetPosition >= visibleSheets.length - 1)
+                      }
                     >
                       Next
                     </button>
@@ -804,9 +884,13 @@ export default function ScanReviewWorkspace({
                     </div>
                   ) : null}
 
-                  <div className="standards-panel scan-review-identity">
-                    <h3>Identity: {identityLabel(selectedSheet)}</h3>
-                    {selectedSheet.identity_status !== "pre_identified" ? (
+                  {selectedSheet.identity_status === "pre_identified" ? (
+                    <p className="scan-review-identity-line">
+                      Identity: <strong>{identityLabel(selectedSheet)}</strong>
+                    </p>
+                  ) : (
+                    <div className="standards-panel scan-review-identity">
+                      <h3>Identity: {identityLabel(selectedSheet)}</h3>
                       <div className="standards-import-grid">
                         <label>
                           Match to roster
@@ -843,8 +927,8 @@ export default function ScanReviewWorkspace({
                           </div>
                         </label>
                       </div>
-                    ) : null}
-                  </div>
+                    </div>
+                  )}
 
                   {groupRowsByKind(selectedSheet.row_results).map((section, sectionIndex) => (
                     <section className="scan-review-section" key={`${section.kind}-${sectionIndex}`}>
@@ -917,26 +1001,100 @@ export default function ScanReviewWorkspace({
 
                                   {row.kind === "manual_capture" ? (
                                     <>
-                                      <div className="gradebook-manual-open">
-                                        <input
-                                          type="number"
-                                          placeholder="Score"
-                                          value={rowDrafts[row.question_id] ?? row.manual_score ?? ""}
-                                          onChange={(event) =>
-                                            setRowDrafts((current) => ({
-                                              ...current,
-                                              [row.question_id]: event.target.value,
-                                            }))
-                                          }
-                                        />
-                                        <button
-                                          type="button"
-                                          disabled={busy}
-                                          onClick={() => void handleManualScore(row)}
-                                        >
-                                          Save Score
-                                        </button>
-                                      </div>
+                                      {componentsWithDifficulty(row.question_id).length > 0 ? (
+                                        <div className="scan-review-components">
+                                          <p className="scan-review-row-detail">
+                                            Each part of this rubric has its own difficulty, so
+                                            scoring them separately lets a Rubric Levels report say
+                                            which level the work reached. The total is added up for
+                                            you.
+                                          </p>
+                                          {componentsWithDifficulty(row.question_id).map(
+                                            (component, index) => (
+                                              <label
+                                                key={`${component.criterion}-${index}`}
+                                                className="scan-review-component"
+                                              >
+                                                <span
+                                                  className="scan-review-component-level"
+                                                  title={`Difficulty ${component.difficulty} -- the level this part gives evidence about`}
+                                                >
+                                                  L{component.difficulty}
+                                                </span>
+                                                <span className="scan-review-component-criterion">
+                                                  {component.criterion}
+                                                </span>
+                                                <input
+                                                  type="number"
+                                                  step="0.5"
+                                                  min={0}
+                                                  max={component.points}
+                                                  value={
+                                                    componentDrafts[row.question_id]?.[index] ??
+                                                    row.component_scores?.[index] ??
+                                                    ""
+                                                  }
+                                                  onChange={(event) =>
+                                                    setComponentDrafts((current) => {
+                                                      const next = [
+                                                        ...(current[row.question_id] ??
+                                                          componentsWithDifficulty(row.question_id).map(
+                                                            (_, position) =>
+                                                              String(
+                                                                row.component_scores?.[position] ??
+                                                                  "",
+                                                              ),
+                                                          )),
+                                                      ];
+                                                      next[index] = event.target.value;
+                                                      return { ...current, [row.question_id]: next };
+                                                    })
+                                                  }
+                                                />
+                                                <span className="scan-review-component-max">
+                                                  / {component.points}
+                                                </span>
+                                              </label>
+                                            ),
+                                          )}
+                                          <p className="scan-review-component-total">
+                                            Total <strong>{componentTotal(row)}</strong> /{" "}
+                                            {componentsWithDifficulty(row.question_id).reduce(
+                                              (total, component) => total + component.points,
+                                              0,
+                                            )}
+                                          </p>
+                                        </div>
+                                      ) : (
+                                        <label className="scan-review-total-score">
+                                          Score
+                                          <input
+                                            type="number"
+                                            step="0.5"
+                                            placeholder="Score"
+                                            value={
+                                              rowDrafts[row.question_id] ?? row.manual_score ?? ""
+                                            }
+                                            onChange={(event) =>
+                                              setRowDrafts((current) => ({
+                                                ...current,
+                                                [row.question_id]: event.target.value,
+                                              }))
+                                            }
+                                          />
+                                        </label>
+                                      )}
+                                      {/* One button either way: how the row is
+                                          scored follows from the rubric, not
+                                          from which button gets clicked. */}
+                                      <button
+                                        type="button"
+                                        className="scan-review-save-score"
+                                        disabled={busy}
+                                        onClick={() => void handleSaveManualRow(row)}
+                                      >
+                                        Save Score
+                                      </button>
                                       {question ? (
                                         <>
                                           <button
@@ -1071,26 +1229,6 @@ export default function ScanReviewWorkspace({
                     </section>
                   ))}
 
-                  <div className="scan-review-nav">
-                    <button
-                      type="button"
-                      onClick={() => stepSheet(-1)}
-                      disabled={sheetPosition <= 0}
-                    >
-                      Previous
-                    </button>
-                    <span>
-                      {sheetPosition >= 0 ? sheetPosition + 1 : "-"} of {visibleSheets.length}
-                      {filter === "needs_review" ? " needing review" : " sheets"}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => stepSheet(1)}
-                      disabled={sheetPosition < 0 || sheetPosition >= visibleSheets.length - 1}
-                    >
-                      Next
-                    </button>
-                  </div>
                 </div>
               </div>
             </>

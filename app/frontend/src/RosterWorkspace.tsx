@@ -9,6 +9,8 @@ import {
   updateStudent,
 } from "./api";
 import type {
+  MasteryCalculation,
+  MasteryResultModel,
   RetakeResolution,
   StudentLineagePerformanceModel,
   StudentModel,
@@ -133,6 +135,54 @@ function TestsTakenTable({ lineages }: { lineages: StudentLineagePerformanceMode
   );
 }
 
+const CALCULATION_LABEL: Record<MasteryCalculation, string> = {
+  level_ladder: "Level Ladder",
+  difficulty_weighted: "Difficulty Weighted",
+  rubric_levels: "Rubric Levels",
+};
+
+/** A mastery level, which is a different quantity from a percentage: "2.5 of 4"
+ *  means level 2 cleared and halfway through level 3. The bar is scaled to the
+ *  levels the evidence actually reaches, so it never implies a ceiling the test
+ *  never asked about. */
+function MasteryLevel({ mastery }: { mastery: MasteryResultModel }) {
+  const ceiling = mastery.scale_max || 1;
+  const caveats = [
+    mastery.inconsistent_evidence
+      ? "A level above the first unmastered one was mastered anyway, so the level labels may need revisiting."
+      : null,
+    mastery.has_level_gaps
+      ? "This test skips a level, so the ladder is standing on incomplete evidence -- Difficulty Weighted may suit it better."
+      : null,
+    mastery.components_unavailable
+      ? "Rubric Levels was asked for, but nothing on this test carried component levels, so whole questions were laddered instead."
+      : null,
+  ].filter(Boolean);
+
+  return (
+    <div
+      className="performance-bar"
+      title={
+        caveats.length > 0
+          ? caveats.join(" ")
+          : `${CALCULATION_LABEL[mastery.calculation]}, exact ${mastery.level_exact.toFixed(2)}`
+      }
+    >
+      <div className="performance-bar-track">
+        <div
+          className="performance-bar-fill mastery"
+          style={{ width: `${Math.min(100, Math.max(0, (mastery.level / ceiling) * 100))}%` }}
+        />
+      </div>
+      <span className="performance-bar-value">
+        {mastery.level.toFixed(mastery.reporting === "half_steps" ? 1 : 2)}
+        <span className="mastery-scale"> / {ceiling}</span>
+        {caveats.length > 0 ? <span className="mastery-caveat"> !</span> : null}
+      </span>
+    </div>
+  );
+}
+
 function StandardsTable({ performance }: { performance: StudentPerformanceModel }) {
   if (performance.by_standard.length === 0) return null;
 
@@ -143,7 +193,7 @@ function StandardsTable({ performance }: { performance: StudentPerformanceModel 
           <th>Standard</th>
           <th>Items</th>
           <th title="Points earned over points possible on this standard.">Score</th>
-          <th title="The same items weighted by question difficulty (1-5), so the hard ones count for more.">
+          <th title="How far up the mastery ladder the evidence reaches. A level, not a percentage: a question's difficulty is the level it gives evidence about.">
             Mastery
           </th>
         </tr>
@@ -159,10 +209,7 @@ function StandardsTable({ performance }: { performance: StudentPerformanceModel 
               <PercentBar value={entry.percent_earned} />
             </td>
             <td>
-              <PercentBar
-                value={entry.mastery_estimate}
-                label={`Average difficulty ${entry.average_difficulty.toFixed(1)} of 5`}
-              />
+              <MasteryLevel mastery={entry.mastery} />
             </td>
           </tr>
         ))}
@@ -581,9 +628,10 @@ export default function RosterWorkspace({ onChanged, onSaved }: RosterWorkspaceP
                   <h4>By standard</h4>
                   <p>
                     Across every test above, with retakes counted as{" "}
-                    {RESOLUTION_LABEL[resolution].toLowerCase()}. Mastery weights each question by
-                    its difficulty, so the same score reads higher when the hard questions were the
-                    ones answered correctly.
+                    {RESOLUTION_LABEL[resolution].toLowerCase()}. Score is how much of the work was
+                    right; mastery is how far up the mastery ladder the evidence reaches, so two
+                    students on the same score can sit at different levels. Hover a mastery bar for
+                    the exact figure and any caveats.
                   </p>
                   <StandardsTable performance={selectedPerformance} />
                 </section>

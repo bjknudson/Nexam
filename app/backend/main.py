@@ -41,6 +41,7 @@ from .models import (
     ReassignSheetRequest,
     RecordPerformanceRunRequest,
     RelinkSnapshotLineageRequest,
+    UpdateMasterySettingsRequest,
     ResolveSheetIdentityRequest,
     SaveBankRequest,
     SaveGradebookRequest,
@@ -58,7 +59,7 @@ from .service import BankWorkspaceError, BankWorkspaceService
 from .version import get_backend_version, is_frozen
 
 
-app = FastAPI(title="Nexzam Backend", version="0.1.0")
+app = FastAPI(title="Nexam Backend", version="0.1.0")
 service = BankWorkspaceService()
 gradebook_service = GradebookService()
 
@@ -108,7 +109,7 @@ def open_bank(request: OpenBankRequest):
 
 @app.post("/api/banks/open-demo")
 def open_demo_bank():
-    bundled_demo_bank = os.environ.get("NEXZAM_DEMO_BANK_PATH")
+    bundled_demo_bank = os.environ.get("NEXAM_DEMO_BANK_PATH")
     if bundled_demo_bank:
         return service.open_bank(bundled_demo_bank)
 
@@ -168,7 +169,7 @@ def open_demo_gradebook():
     release build, the repo's samples directory when running from source.
     """
 
-    bundled = os.environ.get("NEXZAM_DEMO_GRADEBOOK_PATH")
+    bundled = os.environ.get("NEXAM_DEMO_GRADEBOOK_PATH")
     if bundled:
         return gradebook_service.open_gradebook(bundled)
 
@@ -430,17 +431,10 @@ def reassign_sheet_to_printing(batch_id: str, sheet_id: str, request: ReassignSh
 def override_row_result(
     batch_id: str, sheet_id: str, question_id: str, request: OverrideRowResultRequest
 ):
+    # exclude_unset, so a request that says nothing about a field leaves it
+    # alone rather than nulling it. An explicit null in the body still clears.
     return gradebook_service.override_row_result(
-        batch_id,
-        sheet_id,
-        question_id,
-        override_choice_indices=request.override_choice_indices,
-        override_value=request.override_value,
-        override_blank=request.override_blank,
-        override_note=request.override_note,
-        manual_score=request.manual_score,
-        manual_score_max=request.manual_score_max,
-        manual_grader_note=request.manual_grader_note,
+        batch_id, sheet_id, question_id, **request.model_dump(exclude_unset=True)
     )
 
 
@@ -487,6 +481,30 @@ def relink_snapshot_lineage(snapshot_id: str, request: RelinkSnapshotLineageRequ
         snapshot_id,
         lineage_of_snapshot_id=request.lineage_of_snapshot_id,
         lineage_id=request.lineage_id,
+    )
+
+
+@app.get("/api/gradebook/mastery-settings")
+def get_mastery_settings():
+    """The gradebook default plus every per-test override, keyed by lineage."""
+
+    return gradebook_service.get_mastery_config()
+
+
+@app.put("/api/gradebook/mastery-settings")
+def set_default_mastery_settings(request: UpdateMasterySettingsRequest):
+    """Change the gradebook default. Tests carrying their own override keep it."""
+
+    return gradebook_service.set_default_mastery_settings(request.calculation, request.reporting)
+
+
+@app.put("/api/gradebook/mastery-settings/{lineage_id}")
+def set_lineage_mastery_settings(lineage_id: str, request: UpdateMasterySettingsRequest):
+    """Override one test's mode, or -- with both fields null -- drop the
+    override so the test follows the gradebook default again."""
+
+    return gradebook_service.set_lineage_mastery_settings(
+        lineage_id, request.calculation, request.reporting
     )
 
 

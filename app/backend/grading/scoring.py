@@ -54,6 +54,11 @@ class RowScore:
     is_full_credit: bool
     is_unscored_manual: bool
     is_flagged: bool
+    # (level, points earned, points possible) per rubric component -- the level
+    # being the component's own difficulty. Present only when the rubric carried
+    # difficulties *and* a grader scored the parts separately. Rubric Levels
+    # ladders these; every other report uses the row's total.
+    components: tuple[tuple[int, float, float], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -104,6 +109,7 @@ def score_sheet(sheet: ScannedSheetModel, key: AnswerKeyModel) -> SheetScore:
                 is_full_credit=is_full_credit,
                 is_unscored_manual=unscored,
                 is_flagged=not row_is_resolved(row),
+                components=_scored_components(row, key_item),
             )
         )
 
@@ -121,6 +127,29 @@ def score_sheet(sheet: ScannedSheetModel, key: AnswerKeyModel) -> SheetScore:
 
 def has_resolved_identity(sheet: ScannedSheetModel) -> bool:
     return sheet.identity_status in _RESOLVED_IDENTITY_STATUSES
+
+
+def _scored_components(
+    row: DetectedRowResultModel, key_item: AnswerKeyItemModel
+) -> tuple[tuple[int, float, float], ...]:
+    """Pair each frozen rubric component with the score a grader gave it.
+
+    Needs both halves: a rubric whose components carry difficulties, and a grader
+    who scored the parts rather than entering one total. Missing either, there is
+    nothing to ladder and the row is reported at the question's own difficulty.
+    """
+
+    scores = row.component_scores
+    components = key_item.rubric_components
+    if not scores or not components or len(scores) != len(components):
+        return ()
+    if any(component.difficulty is None for component in components):
+        return ()
+    return tuple(
+        (component.difficulty, score, component.points)
+        for component, score in zip(components, scores)
+        if component.difficulty is not None
+    )
 
 
 def _chosen_choice_indices(row: DetectedRowResultModel) -> list[int]:

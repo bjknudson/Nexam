@@ -1,4 +1,4 @@
-Nexzam desktop shell (src-tauri) — full resolved Rust/Cargo dependency list
+Nexam desktop shell (src-tauri) — full resolved Rust/Cargo dependency list
 Generated with: cargo metadata --format-version 1 --manifest-path src-tauri/Cargo.toml
 Total crates: 550
 

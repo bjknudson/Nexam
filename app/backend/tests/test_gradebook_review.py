@@ -464,3 +464,149 @@ def test_two_marks_score_against_a_multi_select_key(
     )
     by_item = {item.question_id: item for item in score_batch(batch, single, students).by_item}
     assert by_item[question_id].full_credit_count == 0
+
+
+# -- Saving one field must not wipe the others --------------------------------
+
+
+def _manual_row_sheet(bank_service, gradebook_service, tmp_path):
+    """A scanned sheet with one written-response row to score."""
+
+    from app.backend.tests.test_gradebook_performance_export import _hand_off
+    from app.backend.tests.grading_test_utils import rasterize_layout_page
+
+    snapshot = _hand_off(bank_service, gradebook_service, ["q_fr_0001"], "Projectiles")
+    batch = gradebook_service.create_scan_batch(snapshot.id, None)
+    updated = gradebook_service.ingest_scan_batch(
+        batch.id, [("sheet.png", png_bytes(rasterize_layout_page(snapshot.layout, 0, 300)))]
+    )
+    return snapshot, batch, updated.sheets[0]
+
+
+def test_scoring_a_row_leaves_the_grader_note_alone(
+    bank_service: BankWorkspaceService, demo_bok: Path, tmp_path: Path
+) -> None:
+    """The whole-row overwrite meant every save cleared whatever it did not
+    mention -- entering a score wiped the note written beside it."""
+
+    bank_service.open_bank(str(demo_bok))
+    service = GradebookService()
+    service.create_gradebook("Period 2", None, str(tmp_path / "gb.nxgb"))
+    _, batch, sheet = _manual_row_sheet(bank_service, service, tmp_path)
+
+    service.override_row_result(
+        batch.id, sheet.id, "q_fr_0001", manual_grader_note="Check the units in part b."
+    )
+    service.override_row_result(batch.id, sheet.id, "q_fr_0001", manual_score=6.0)
+
+    row = service.get_scan_batch(batch.id).sheets[0].row_results[0]
+    assert row.manual_score == 6.0
+    assert row.manual_grader_note == "Check the units in part b."
+
+
+def test_scoring_a_row_leaves_points_possible_alone(
+    bank_service: BankWorkspaceService, demo_bok: Path, tmp_path: Path
+) -> None:
+    bank_service.open_bank(str(demo_bok))
+    service = GradebookService()
+    service.create_gradebook("Period 2", None, str(tmp_path / "gb.nxgb"))
+    _, batch, sheet = _manual_row_sheet(bank_service, service, tmp_path)
+
+    service.override_row_result(batch.id, sheet.id, "q_fr_0001", manual_score_max=8.0)
+    service.override_row_result(batch.id, sheet.id, "q_fr_0001", manual_score=8.0)
+
+    row = service.get_scan_batch(batch.id).sheets[0].row_results[0]
+    assert row.manual_score_max == 8.0
+    # Full credit is judged against the max, so losing it changed the result.
+    assert row.manual_score == 8.0
+
+
+def test_an_explicit_null_still_clears_a_field(
+    bank_service: BankWorkspaceService, demo_bok: Path, tmp_path: Path
+) -> None:
+    """Not mentioning a field leaves it; naming it as null clears it. The two
+    have to stay distinguishable or a note could never be deleted."""
+
+    bank_service.open_bank(str(demo_bok))
+    service = GradebookService()
+    service.create_gradebook("Period 2", None, str(tmp_path / "gb.nxgb"))
+    _, batch, sheet = _manual_row_sheet(bank_service, service, tmp_path)
+
+    service.override_row_result(batch.id, sheet.id, "q_fr_0001", manual_grader_note="Draft")
+    service.override_row_result(batch.id, sheet.id, "q_fr_0001", manual_grader_note=None)
+
+    row = service.get_scan_batch(batch.id).sheets[0].row_results[0]
+    assert row.manual_grader_note is None
+
+
+def test_a_total_entered_directly_supersedes_a_stale_breakdown(
+    bank_service: BankWorkspaceService, demo_bok: Path, tmp_path: Path
+) -> None:
+    """The parts no longer add up to the total, so keeping them would leave
+    Rubric Levels laddering evidence that contradicts the score."""
+
+    bank_service.open_bank(str(demo_bok))
+    service = GradebookService()
+    service.create_gradebook("Period 2", None, str(tmp_path / "gb.nxgb"))
+    _, batch, sheet = _manual_row_sheet(bank_service, service, tmp_path)
+
+    service.override_row_result(batch.id, sheet.id, "q_fr_0001", component_scores=[1.0, 2.0])
+    assert service.get_scan_batch(batch.id).sheets[0].row_results[0].manual_score == 3.0
+
+    service.override_row_result(batch.id, sheet.id, "q_fr_0001", manual_score=9.0)
+    row = service.get_scan_batch(batch.id).sheets[0].row_results[0]
+    assert row.manual_score == 9.0
+    assert row.component_scores is None
+
+
+def test_correcting_an_answer_leaves_the_override_note_alone(
+    bank_service: BankWorkspaceService, demo_bok: Path, tmp_path: Path
+) -> None:
+    bank_service.open_bank(str(demo_bok))
+    service = GradebookService()
+    service.create_gradebook("Period 2", None, str(tmp_path / "gb.nxgb"))
+    snapshot = _hand_off(bank_service, service, tmp_path)
+    batch = service.create_scan_batch(snapshot.id, None)
+    updated = service.ingest_scan_batch(
+        batch.id, [("scan.png", _fill_correct_choice_png(snapshot))]
+    )
+    sheet_id = updated.sheets[0].id
+    question_id = snapshot.answer_key.items[0].question_id
+
+    service.override_row_result(
+        batch.id, sheet_id, question_id, override_note="Smudged, read as B."
+    )
+    service.override_row_result(batch.id, sheet_id, question_id, override_choice_indices=[1])
+
+    row = service.get_scan_batch(batch.id).sheets[0].row_results[0]
+    assert row.override_choice_indices == [1]
+    assert row.override_note == "Smudged, read as B."
+
+
+def test_the_http_route_only_applies_what_the_body_carried(
+    gradebook_client, demo_bok: Path, tmp_path: Path
+) -> None:
+    """The same guarantee over the wire: a body naming one field must not null
+    the rest, which is where the frontend's `?? null` payload went wrong."""
+
+    from app.backend import main
+
+    assert gradebook_client.post("/api/banks/open", json={"path": str(demo_bok)}).status_code == 200
+    assert (
+        gradebook_client.post(
+            "/api/gradebook/create",
+            json={"title": "P2", "destination_path": str(tmp_path / "gb.nxgb")},
+        ).status_code
+        == 200
+    )
+    _, batch, sheet = _manual_row_sheet(main.service, main.gradebook_service, tmp_path)
+    url = f"/api/gradebook/batches/{batch.id}/sheets/{sheet.id}/rows/q_fr_0001"
+
+    assert gradebook_client.put(url, json={"manual_grader_note": "Partial credit for setup"}).status_code == 200
+    assert gradebook_client.put(url, json={"manual_score": 5.0}).status_code == 200
+
+    row = gradebook_client.get(f"/api/gradebook/batches/{batch.id}").json()["sheets"][0][
+        "row_results"
+    ][0]
+    assert row["manual_score"] == 5.0
+    assert row["manual_grader_note"] == "Partial credit for setup"

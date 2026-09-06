@@ -1,6 +1,6 @@
 name: Release (macOS, signed + notarized)
 
-# Builds Nexzam.app for Apple Silicon, signs both the frozen Python
+# Builds Nexam.app for Apple Silicon, signs both the frozen Python
 # backend and the Tauri-built app with a real Developer ID Application
 # certificate, notarizes and staples the result, then publishes it as
 # a GitHub Release for the pushed tag (creating the release if one
@@ -236,17 +236,17 @@ jobs:
         # with standalone duplicates of the framework binary sitting
         # outside their bundle. Those copies cannot carry a valid
         # signature, and notarization rejects them by exact path:
-        #   Contents/Resources/nexzam-backend/_internal/Python
-        #   Contents/Resources/nexzam-backend/_internal/Python.framework/Python
+        #   Contents/Resources/nexam-backend/_internal/Python
+        #   Contents/Resources/nexam-backend/_internal/Python.framework/Python
         # ditto preserves symlinks, so replace the flattened copy wholesale.
         run: |
           set -euo pipefail
-          APP="src-tauri/target/release/bundle/macos/Nexzam.app"
-          DEST="$APP/Contents/Resources/nexzam-backend"
+          APP="src-tauri/target/release/bundle/macos/Nexam.app"
+          DEST="$APP/Contents/Resources/nexam-backend"
 
           echo "symlinks before: $(find "$DEST" -type l | wc -l | tr -d ' ')"
           rm -rf "$DEST"
-          ditto dist/backend/nexzam-backend "$DEST"
+          ditto dist/backend/nexam-backend "$DEST"
           echo "symlinks after:  $(find "$DEST" -type l | wc -l | tr -d ' ')"
 
           if [ "$(find "$DEST" -type l | wc -l | tr -d ' ')" -eq 0 ]; then
@@ -261,7 +261,7 @@ jobs:
         # space. Still valid bash, so `bash -n` does not catch it.
         run: |
           ./scripts/sign_macos_app.sh "$APPLE_SIGNING_IDENTITY" \
-            "src-tauri/target/release/bundle/macos/Nexzam.app"
+            "src-tauri/target/release/bundle/macos/Nexam.app"
 
       - name: Notarize and staple
         env:
@@ -270,7 +270,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          APP="src-tauri/target/release/bundle/macos/Nexzam.app"
+          APP="src-tauri/target/release/bundle/macos/Nexam.app"
           UPLOAD_ZIP="$RUNNER_TEMP/notarize.zip"
 
           ditto -c -k --sequesterRsrc --keepParent "$APP" "$UPLOAD_ZIP"
@@ -306,7 +306,7 @@ jobs:
       - name: Verify signature and notarization
         run: |
           set -euo pipefail
-          APP_PATH="src-tauri/target/release/bundle/macos/Nexzam.app"
+          APP_PATH="src-tauri/target/release/bundle/macos/Nexam.app"
 
           echo "--- codesign --verify ---"
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
@@ -322,7 +322,7 @@ jobs:
           set -euo pipefail
           cd src-tauri/target/release/bundle/macos
           ditto -c -k --sequesterRsrc --keepParent \
-            Nexzam.app "Nexzam-${{ github.ref_name }}.zip"
+            Nexam.app "Nexam-${{ github.ref_name }}.zip"
 
       - name: Remove temporary keychain
         if: always()
@@ -334,8 +334,8 @@ jobs:
       - name: Upload signed build
         uses: actions/upload-artifact@v7
         with:
-          name: Nexzam-${{ github.ref_name }}-macos
-          path: src-tauri/target/release/bundle/macos/Nexzam-${{ github.ref_name }}.zip
+          name: Nexam-${{ github.ref_name }}-macos
+          path: src-tauri/target/release/bundle/macos/Nexam-${{ github.ref_name }}.zip
           if-no-files-found: error
           retention-days: 90
 
@@ -347,7 +347,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-          ZIP_PATH: src-tauri/target/release/bundle/macos/Nexzam-${{ github.ref_name }}.zip
+          ZIP_PATH: src-tauri/target/release/bundle/macos/Nexam-${{ github.ref_name }}.zip
         run: |
           set -euo pipefail
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then

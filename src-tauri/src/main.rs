@@ -11,7 +11,7 @@ use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, Messag
 use tauri::menu::{MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, WindowEvent};
 
-const UPDATE_REPO: &str = "bjknudson/Nexzam";
+const UPDATE_REPO: &str = "bjknudson/Nexam";
 
 #[tauri::command]
 fn get_desktop_context(state: tauri::State<'_, Arc<AppRuntimeState>>) -> DesktopContext {
@@ -21,8 +21,8 @@ fn get_desktop_context(state: tauri::State<'_, Arc<AppRuntimeState>>) -> Desktop
 #[tauri::command]
 fn open_bank_dialog(initial_directory: Option<String>) -> Option<String> {
     let mut dialog = FileDialog::new()
-        .add_filter("Nexzam Banks", &["bok"])
-        .set_title("Open Nexzam Bank");
+        .add_filter("Nexam Banks", &["bok"])
+        .set_title("Open Nexam Bank");
 
     if let Some(dir) = initial_directory {
         dialog = dialog.set_directory(dir);
@@ -37,8 +37,8 @@ fn open_bank_dialog(initial_directory: Option<String>) -> Option<String> {
 #[tauri::command]
 fn open_gradebook_dialog(initial_directory: Option<String>) -> Option<String> {
     let mut dialog = FileDialog::new()
-        .add_filter("Nexzam Gradebooks", &["nxgb"])
-        .set_title("Open Nexzam Gradebook");
+        .add_filter("Nexam Gradebooks", &["nxgb"])
+        .set_title("Open Nexam Gradebook");
 
     if let Some(dir) = initial_directory {
         dialog = dialog.set_directory(dir);
@@ -54,8 +54,8 @@ fn save_gradebook_dialog(
     initial_directory: Option<String>,
 ) -> Option<String> {
     let mut dialog = FileDialog::new()
-        .add_filter("Nexzam Gradebooks", &["nxgb"])
-        .set_title("Save Nexzam Gradebook");
+        .add_filter("Nexam Gradebooks", &["nxgb"])
+        .set_title("Save Nexam Gradebook");
 
     if let Some(path) = current_path {
         let path = std::path::Path::new(&path);
@@ -84,8 +84,8 @@ fn save_bank_dialog(
     initial_directory: Option<String>,
 ) -> Option<String> {
     let mut dialog = FileDialog::new()
-        .add_filter("Nexzam Banks", &["bok"])
-        .set_title("Save Nexzam Bank");
+        .add_filter("Nexam Banks", &["bok"])
+        .set_title("Save Nexam Bank");
 
     if let Some(path) = current_path {
         let path = std::path::Path::new(&path);
@@ -181,7 +181,7 @@ fn apply_print_info(page_size: &str) {
 #[cfg(not(target_os = "macos"))]
 fn apply_print_info(_page_size: &str) {}
 
-/// Show a generated PDF in its own Nexzam window and open the print dialog on it.
+/// Show a generated PDF in its own Nexam window and open the print dialog on it.
 ///
 /// The alternative was handing the file to Preview and asking the teacher to
 /// print from there. A webview renders a PDF natively and prints through the
@@ -194,7 +194,7 @@ fn print_pdf_url(app_handle: AppHandle, url: String, title: Option<String>) -> R
         .parse()
         .map_err(|_| format!("Not a printable address: {url}"))?;
     let label = format!(
-        "nexzam-print-{}",
+        "nexam-print-{}",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|value| value.as_millis())
@@ -262,7 +262,7 @@ fn run_update_check(app_handle: &AppHandle) {
 
     let client = match reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(8))
-        .user_agent("Nexzam-Update-Check")
+        .user_agent("Nexam-Update-Check")
         .build()
     {
         Ok(client) => client,
@@ -333,7 +333,7 @@ fn run_update_check(app_handle: &AppHandle) {
             .set_level(MessageLevel::Info)
             .set_title("Update Available")
             .set_description(format!(
-                "Nexzam {latest_version} is available. You're running {current_version}. Open the release page in your browser?"
+                "Nexam {latest_version} is available. You're running {current_version}. Open the release page in your browser?"
             ))
             .set_buttons(MessageButtons::YesNo)
             .show();
@@ -344,7 +344,7 @@ fn run_update_check(app_handle: &AppHandle) {
     } else {
         show_update_message(
             MessageLevel::Info,
-            format!("You're up to date. Nexzam {current_version}."),
+            format!("You're up to date. Nexam {current_version}."),
         );
     }
 }
@@ -391,7 +391,7 @@ fn main() {
             let check_updates_item =
                 MenuItemBuilder::with_id("check-for-updates", "Check for Updates…").build(handle)?;
             let view_help_item =
-                MenuItemBuilder::with_id("view-help", "Nexzam Help").build(handle)?;
+                MenuItemBuilder::with_id("view-help", "Nexam Help").build(handle)?;
             let new_bank_item = MenuItemBuilder::with_id("new-bank", "New Bank…")
                 .accelerator("CmdOrCtrl+N")
                 .build(handle)?;
@@ -424,8 +424,8 @@ fn main() {
                 .accelerator("CmdOrCtrl+Shift+S")
                 .build(handle)?;
 
-            let app_menu = SubmenuBuilder::new(handle, "Nexzam")
-                .item(&PredefinedMenuItem::about(handle, Some("About Nexzam"), None)?)
+            let app_menu = SubmenuBuilder::new(handle, "Nexam")
+                .item(&PredefinedMenuItem::about(handle, Some("About Nexam"), None)?)
                 .separator()
                 .item(&settings_item)
                 .separator()
@@ -486,7 +486,7 @@ fn main() {
         })
         .on_menu_event(|app_handle, event| match event.id().as_ref() {
             "settings" => {
-                let _ = app_handle.emit("nexzam://open-settings", ());
+                let _ = app_handle.emit("nexam://open-settings", ());
             }
             "check-for-updates" => {
                 run_update_check(app_handle);
@@ -496,37 +496,37 @@ fn main() {
                 let _ = Command::new("open").arg(help_url).spawn();
             }
             "new-bank" => {
-                let _ = app_handle.emit("nexzam://new-bank", ());
+                let _ = app_handle.emit("nexam://new-bank", ());
             }
             "open-bank" => {
-                let _ = app_handle.emit("nexzam://open-bank", ());
+                let _ = app_handle.emit("nexam://open-bank", ());
             }
             "open-demo-bank" => {
-                let _ = app_handle.emit("nexzam://open-demo-bank", ());
+                let _ = app_handle.emit("nexam://open-demo-bank", ());
             }
             "bank-properties" => {
-                let _ = app_handle.emit("nexzam://bank-properties", ());
+                let _ = app_handle.emit("nexam://bank-properties", ());
             }
             "save-bank" => {
-                let _ = app_handle.emit("nexzam://save-bank", ());
+                let _ = app_handle.emit("nexam://save-bank", ());
             }
             "save-as" => {
-                let _ = app_handle.emit("nexzam://save-as", ());
+                let _ = app_handle.emit("nexam://save-as", ());
             }
             "close-bank" => {
-                let _ = app_handle.emit("nexzam://close-bank", ());
+                let _ = app_handle.emit("nexam://close-bank", ());
             }
             "new-gradebook" => {
-                let _ = app_handle.emit("nexzam://new-gradebook", ());
+                let _ = app_handle.emit("nexam://new-gradebook", ());
             }
             "open-gradebook" => {
-                let _ = app_handle.emit("nexzam://open-gradebook", ());
+                let _ = app_handle.emit("nexam://open-gradebook", ());
             }
             "open-demo-gradebook" => {
-                let _ = app_handle.emit("nexzam://open-demo-gradebook", ());
+                let _ = app_handle.emit("nexam://open-demo-gradebook", ());
             }
             "close-gradebook" => {
-                let _ = app_handle.emit("nexzam://close-gradebook", ());
+                let _ = app_handle.emit("nexam://close-gradebook", ());
             }
             _ => {}
         })
@@ -549,7 +549,7 @@ fn main() {
             print_pdf_url
         ])
         .build(tauri::generate_context!())
-        .expect("error while running Nexzam");
+        .expect("error while running Nexam");
 
     app.run(|app_handle, event| match event {
             RunEvent::WindowEvent { event: WindowEvent::Destroyed, .. } => {

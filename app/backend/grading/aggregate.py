@@ -15,12 +15,15 @@ can drift out of step with the sheets it came from.
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from ..models import (
     AdministeredTestSnapshotModel,
+    GradebookMasteryConfigModel,
     GradingBatchModel,
+    MasteryResultModel,
+    MasterySettingsModel,
     ResolvedLineageScoreModel,
     RetakeResolution,
     StudentAttemptModel,
@@ -31,12 +34,52 @@ from ..models import (
     StudentStandardScoreModel,
 )
 from .lineage import lineage_title, resolve_lineage_id
+from .mastery import Evidence, apply_reporting, compute_mastery, fallback_level
 from .scoring import RowScore, exclusion_reasons, has_resolved_identity, score_sheet
 
-# QuestionModel.difficulty runs 1 (easy) to 5 (hard). Keys frozen before the
-# field was carried onto them have no difficulty, and so weigh the same as
-# everything else rather than silently counting for nothing or for double.
-_DEFAULT_DIFFICULTY = 3.0
+
+def evidence_from_rows(
+    rows: tuple[RowScore, ...], calculation: str
+) -> tuple[list[Evidence], bool]:
+    """Scored rows as levelled evidence for the mastery calculation -- each
+    item placed at the level its difficulty gives evidence about.
+
+    Rubric Levels breaks a multipart row into its components; every other mode
+    reads a row as one piece of evidence at the question's own difficulty. A row
+    whose components carry no difficulties, or whose parts were scored as a
+    single total, has nothing to break apart and falls back to the whole-question
+    form
+    -- which is why the second return value says whether *any* row supplied
+    components, so a report can admit when Rubric Levels had none to work with.
+    """
+
+    evidence: list[Evidence] = []
+    any_components = False
+    # Worked out from this set rather than assumed, so the fallback tracks
+    # whatever scale the bank uses. See mastery.fallback_level.
+    assumed = fallback_level(
+        [row.difficulty for row in rows if row.difficulty is not None]
+        + [level for row in rows for level, _, _ in row.components]
+    )
+
+    for row in rows:
+        if calculation == "rubric_levels" and row.components:
+            any_components = True
+            evidence.extend(
+                Evidence(level=level, points_earned=earned, points_possible=possible)
+                for level, earned, possible in row.components
+            )
+            continue
+        evidence.append(
+            Evidence(
+                level=row.difficulty if row.difficulty is not None else assumed,
+                points_earned=row.points_earned,
+                points_possible=row.points_possible,
+            )
+        )
+
+    components_unavailable = calculation == "rubric_levels" and not any_components
+    return evidence, components_unavailable
 
 
 @dataclass
@@ -45,20 +88,25 @@ class _StandardAccumulator:
     items_full_credit: int = 0
     points_earned: float = 0.0
     points_possible: float = 0.0
-    weighted_credit: float = 0.0
-    weight_total: float = 0.0
+    difficulty_total: float = 0.0
+    rows: list[RowScore] = field(default_factory=list)
 
     def record(self, row: RowScore) -> None:
-        weight = float(row.difficulty) if row.difficulty is not None else _DEFAULT_DIFFICULTY
-        credit = row.points_earned / row.points_possible if row.points_possible else 0.0
         self.items_attempted += 1
         self.items_full_credit += 1 if row.is_full_credit else 0
         self.points_earned += row.points_earned
         self.points_possible += row.points_possible
-        self.weighted_credit += weight * credit
-        self.weight_total += weight
+        self.difficulty_total += float(
+            row.difficulty if row.difficulty is not None else fallback_level([])
+        )
+        self.rows.append(row)
 
-    def to_model(self, standard_id: str) -> StudentStandardScoreModel:
+    def to_model(
+        self, standard_id: str, settings: MasterySettingsModel
+    ) -> StudentStandardScoreModel:
+        evidence, components_unavailable = evidence_from_rows(
+            tuple(self.rows), settings.calculation
+        )
         return StudentStandardScoreModel(
             standard_id=standard_id,
             items_attempted=self.items_attempted,
@@ -68,36 +116,48 @@ class _StandardAccumulator:
             percent_earned=(
                 100.0 * self.points_earned / self.points_possible if self.points_possible else 0.0
             ),
-            mastery_estimate=(
-                100.0 * self.weighted_credit / self.weight_total if self.weight_total else 0.0
-            ),
             average_difficulty=(
-                self.weight_total / self.items_attempted if self.items_attempted else 0.0
+                self.difficulty_total / self.items_attempted if self.items_attempted else 0.0
+            ),
+            mastery=compute_mastery(
+                evidence,
+                calculation=settings.calculation,
+                reporting=settings.reporting,
+                components_unavailable=components_unavailable,
             ),
         )
 
 
-def standards_from_rows(rows: tuple[RowScore, ...]) -> list[StudentStandardScoreModel]:
+def standards_from_rows(
+    rows: tuple[RowScore, ...], settings: MasterySettingsModel | None = None
+) -> list[StudentStandardScoreModel]:
     """Roll scored rows up by standard.
 
     An item tagged with two standards counts in full toward both, matching how
     `scoring._aggregate_by_standard` already reports class-level standard
     numbers -- the item really is evidence about both standards, and splitting
     its points between them would understate each.
+
+    Mastery is computed per standard from that standard's own rows, not sliced
+    off a whole-test figure: a ladder built from three questions about one
+    standard says something; a ladder built from the whole paper does not.
     """
 
+    settings = settings or MasterySettingsModel()
     accumulators: dict[str, _StandardAccumulator] = defaultdict(_StandardAccumulator)
     for row in rows:
         for standard_id in row.standard_ids:
             accumulators[standard_id].record(row)
     return [
-        accumulators[standard_id].to_model(standard_id) for standard_id in sorted(accumulators)
+        accumulators[standard_id].to_model(standard_id, settings)
+        for standard_id in sorted(accumulators)
     ]
 
 
 def build_attempts(
     snapshots: list[AdministeredTestSnapshotModel],
     batches: list[GradingBatchModel],
+    config: GradebookMasteryConfigModel | None = None,
 ) -> tuple[dict[str, list[StudentAttemptModel]], int]:
     """Every scored sheet in the gradebook, grouped by student id.
 
@@ -107,6 +167,7 @@ def build_attempts(
     counted rather than dropped silently.
     """
 
+    config = config or GradebookMasteryConfigModel()
     snapshots_by_id = {snapshot.id: snapshot for snapshot in snapshots}
     by_student: dict[str, list[StudentAttemptModel]] = defaultdict(list)
     unlinked_sheet_count = 0
@@ -116,6 +177,9 @@ def build_attempts(
         if snapshot is None:
             continue
         lineage_id = resolve_lineage_id(snapshot)
+        # Every version of a test, and any retake linked to it, is scored the
+        # same way -- the mode is a property of the assessment, not the paper.
+        settings = config.for_lineage(lineage_id)
         keys_by_version = {snapshot.answer_key.version: snapshot.answer_key}
         for alternate in snapshot.alternate_answer_keys:
             keys_by_version[alternate.version] = alternate
@@ -146,7 +210,7 @@ def build_attempts(
                     percent_correct=sheet_score.percent_correct,
                     flagged_answer_count=sheet_score.flagged_count,
                     contains_unscored_manual_items=sheet_score.contains_unscored_manual_items,
-                    by_standard=standards_from_rows(sheet_score.rows),
+                    by_standard=standards_from_rows(sheet_score.rows, settings),
                 )
             )
 
@@ -189,15 +253,21 @@ def build_student_performance(
     snapshots: list[AdministeredTestSnapshotModel],
     batches: list[GradingBatchModel],
     resolution: RetakeResolution = "most_recent",
+    config: GradebookMasteryConfigModel | None = None,
 ) -> StudentPerformanceListResponseModel:
-    attempts_by_student, unlinked_sheet_count = build_attempts(snapshots, batches)
+    config = config or GradebookMasteryConfigModel()
+    attempts_by_student, unlinked_sheet_count = build_attempts(snapshots, batches, config)
     snapshots_by_lineage: dict[str, list[AdministeredTestSnapshotModel]] = defaultdict(list)
     for snapshot in snapshots:
         snapshots_by_lineage[resolve_lineage_id(snapshot)].append(snapshot)
 
     items = [
         _build_one_student(
-            student, attempts_by_student.get(student.id, []), snapshots_by_lineage, resolution
+            student,
+            attempts_by_student.get(student.id, []),
+            snapshots_by_lineage,
+            resolution,
+            config,
         )
         for student in sorted(students, key=lambda s: (s.last_name.casefold(), s.first_name.casefold()))
     ]
@@ -205,6 +275,7 @@ def build_student_performance(
     return StudentPerformanceListResponseModel(
         generated_at=datetime.now(UTC),
         retake_resolution=resolution,
+        mastery=config.default,
         items=items,
         unlinked_sheet_count=unlinked_sheet_count,
     )
@@ -215,6 +286,7 @@ def _build_one_student(
     attempts: list[StudentAttemptModel],
     snapshots_by_lineage: dict[str, list[AdministeredTestSnapshotModel]],
     resolution: RetakeResolution,
+    config: GradebookMasteryConfigModel,
 ) -> StudentPerformanceModel:
     by_lineage: dict[str, list[StudentAttemptModel]] = defaultdict(list)
     for attempt in attempts:
@@ -249,26 +321,72 @@ def _build_one_student(
         unscored_manual_attempt_count=sum(
             1 for attempt in attempts if attempt.contains_unscored_manual_items
         ),
-        by_standard=_pool_standards([lineage.resolved.by_standard for lineage in lineages]),
+        by_standard=_pool_standards(
+            [lineage.resolved.by_standard for lineage in lineages], config.default
+        ),
         lineages=lineages,
+    )
+
+
+def _combine_mastery(
+    entries: list[StudentStandardScoreModel], settings: MasterySettingsModel
+) -> MasteryResultModel:
+    """One mastery level out of several already-computed ones.
+
+    Levels are averaged, weighted by how many items each contributed -- they
+    cannot be summed, and re-deriving one ladder from evidence spread across
+    several tests would be a different (and less honest) claim than "this is
+    where their tests put them on average". The per-level breakdown is dropped
+    rather than merged: a ladder is only meaningful within the assessment that
+    built it. `calculation` reports the mode the reader should attribute the
+    number to, which is why pooling is done under the gradebook default.
+    """
+
+    weight = sum(entry.items_attempted for entry in entries)
+    exact = (
+        sum(entry.mastery.level_exact * entry.items_attempted for entry in entries) / weight
+        if weight
+        else 0.0
+    )
+
+    # The levels being averaged were each computed under their own test's mode,
+    # so the combined figure is only attributable to a single mode when they all
+    # agree. When they do, say so -- reporting a test's override as the
+    # gradebook default would misdescribe a number that did follow the override.
+    # When they disagree, the default is the honest label for a mixed average.
+    calculations = {entry.mastery.calculation for entry in entries}
+    reportings = {entry.mastery.reporting for entry in entries}
+    calculation = calculations.pop() if len(calculations) == 1 else settings.calculation
+    reporting = reportings.pop() if len(reportings) == 1 else settings.reporting
+
+    return MasteryResultModel(
+        calculation=calculation,
+        reporting=reporting,
+        level=apply_reporting(exact, reporting),
+        level_exact=round(exact, 4),
+        scale_max=max((entry.mastery.scale_max for entry in entries), default=0),
+        inconsistent_evidence=any(entry.mastery.inconsistent_evidence for entry in entries),
+        has_level_gaps=any(entry.mastery.has_level_gaps for entry in entries),
+        components_unavailable=any(entry.mastery.components_unavailable for entry in entries),
     )
 
 
 def _pool_standards(
     groups: list[list[StudentStandardScoreModel]],
+    settings: MasterySettingsModel,
 ) -> list[StudentStandardScoreModel]:
     """Combine per-test standard entries into one cross-test view.
 
-    Points and item counts are summed. Mastery cannot be summed -- it is already
-    an average -- so it is re-averaged across tests weighted by how many items
-    each test contributed to that standard, which is the same thing computing it
-    from all the rows at once would have produced.
+    Points and item counts are summed. Mastery is averaged -- see
+    `_combine_mastery` -- under the gradebook's *default* settings rather than
+    any one test's, because the tests being pooled may each have been scored a
+    different way and the pooled figure has to be attributable to something.
     """
 
     totals: dict[str, StudentStandardScoreModel] = {}
-    mastery_weight: dict[str, float] = defaultdict(float)
-    mastery_total: dict[str, float] = defaultdict(float)
+    contributing: dict[str, list[StudentStandardScoreModel]] = defaultdict(list)
     difficulty_total: dict[str, float] = defaultdict(float)
+    difficulty_weight: dict[str, float] = defaultdict(float)
 
     for group in groups:
         for entry in group:
@@ -280,19 +398,19 @@ def _pool_standards(
                 running.items_full_credit += entry.items_full_credit
                 running.points_earned += entry.points_earned
                 running.points_possible += entry.points_possible
-            mastery_total[entry.standard_id] += entry.mastery_estimate * entry.items_attempted
-            mastery_weight[entry.standard_id] += entry.items_attempted
+            contributing[entry.standard_id].append(entry)
             difficulty_total[entry.standard_id] += entry.average_difficulty * entry.items_attempted
+            difficulty_weight[entry.standard_id] += entry.items_attempted
 
     pooled: list[StudentStandardScoreModel] = []
     for standard_id in sorted(totals):
         entry = totals[standard_id]
-        weight = mastery_weight[standard_id]
+        weight = difficulty_weight[standard_id]
         entry.percent_earned = (
             100.0 * entry.points_earned / entry.points_possible if entry.points_possible else 0.0
         )
-        entry.mastery_estimate = mastery_total[standard_id] / weight if weight else 0.0
         entry.average_difficulty = difficulty_total[standard_id] / weight if weight else 0.0
+        entry.mastery = _combine_mastery(contributing[standard_id], settings)
         pooled.append(entry)
     return pooled
 
@@ -339,8 +457,16 @@ def _averaged(attempts: list[StudentAttemptModel]) -> ResolvedLineageScoreModel:
             points_earned=sum(entry.points_earned for entry in entries) / len(entries),
             points_possible=sum(entry.points_possible for entry in entries) / len(entries),
             percent_earned=sum(entry.percent_earned for entry in entries) / len(entries),
-            mastery_estimate=sum(entry.mastery_estimate for entry in entries) / len(entries),
             average_difficulty=sum(entry.average_difficulty for entry in entries) / len(entries),
+            # Every attempt at one test shares its settings, so averaging the
+            # attempts' levels keeps the mode the test was scored under.
+            mastery=_combine_mastery(
+                entries,
+                MasterySettingsModel(
+                    calculation=entries[0].mastery.calculation,
+                    reporting=entries[0].mastery.reporting,
+                ),
+            ),
         )
         for standard_id, entries in sorted(grouped.items())
     ]

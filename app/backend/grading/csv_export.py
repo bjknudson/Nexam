@@ -6,8 +6,9 @@ read without pivoting anything.
 
     total        one column pair (points, %) per test, plus an overall %
     by_standard  one % column per standard -- points earned over points possible
-    mastery      one column per standard, difficulty-weighted (see
-                 StudentStandardScoreModel's docstring for the formula)
+    mastery      one column per standard, as a mastery *level* rather than a
+                 percentage -- how far up the ladder the evidence reaches
+                 (see grading/mastery.py)
 
 Every export runs through the same retake resolution, so the number in the cell
 is the one score that test contributes for that student -- never a first attempt
@@ -44,8 +45,17 @@ def build_scores_csv(
     return _build_standard_csv(performance, method, standard_codes or {})
 
 
-def suggested_filename(method: ScoreExportMethod, resolution: str) -> str:
-    return f"scores-{method.replace('_', '-')}-{resolution.replace('_', '-')}.csv"
+def suggested_filename(
+    method: ScoreExportMethod, resolution: str, calculation: str | None = None
+) -> str:
+    """A mastery export names the calculation it used: the same students under
+    Level Ladder and Difficulty Weighted produce different numbers, and two such
+    files in a downloads folder are otherwise indistinguishable."""
+
+    parts = ["scores", method.replace("_", "-"), resolution.replace("_", "-")]
+    if method == "mastery" and calculation:
+        parts.append(calculation.replace("_", "-"))
+    return "-".join(parts) + ".csv"
 
 
 def _identity_cells(student_performance: StudentPerformanceModel) -> list[str]:
@@ -100,7 +110,18 @@ def _build_standard_csv(
     standard_ids = sorted(
         {entry.standard_id for item in performance.items for entry in item.by_standard}
     )
-    suffix = "%" if method == "by_standard" else "mastery"
+    # The mastery columns are levels, not percentages, and the two are easy to
+    # confuse at a glance in a spreadsheet -- so the header says what it is out of.
+    scale_max = max(
+        (entry.mastery.scale_max for item in performance.items for entry in item.by_standard),
+        default=0,
+    )
+    suffix = (
+        "%"
+        if method == "by_standard"
+        # No invented ceiling: with no evidence there is nothing to be out of.
+        else (f"mastery (of {scale_max})" if scale_max else "mastery")
+    )
 
     headers = list(_IDENTITY_HEADERS)
     headers.extend(
@@ -120,7 +141,7 @@ def _build_standard_csv(
             elif method == "by_standard":
                 row.append(_number(entry.percent_earned))
             else:
-                row.append(_number(entry.mastery_estimate))
+                row.append(_number(entry.mastery.level))
         row.append(str(len(by_standard)))
         rows.append(row)
 
