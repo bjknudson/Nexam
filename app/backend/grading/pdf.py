@@ -22,14 +22,82 @@ CHOICE_LABELS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 def render_sheet_layout_to_pdf(layout: SheetLayoutModel) -> bytes:
     buffer = BytesIO()
-    pdf = canvas.Canvas(buffer, pagesize=(layout.page_width_pt, layout.page_height_pt))
 
+    if layout.page_size == "half_letter":
+        _render_half_letter_pairs(buffer, layout)
+        return buffer.getvalue()
+
+    pdf = canvas.Canvas(buffer, pagesize=(layout.page_width_pt, layout.page_height_pt))
     for page in layout.pages:
         _draw_page(pdf, page, layout.header_label, layout.version_labels)
         pdf.showPage()
 
     pdf.save()
     return buffer.getvalue()
+
+
+def _render_half_letter_pairs(buffer: BytesIO, layout: SheetLayoutModel) -> None:
+    """Two half-letter sheets side by side exactly tile one letter sheet
+    turned sideways (2 x 5.5in = 11in, matching the 8.5in height), so this
+    puts both on one physical page at their true size -- no dependence on a
+    printer's own "pages per sheet" imposition, which is not reliable enough
+    to trust with geometry the detector is frozen to (see the misregistered
+    top-right corner traced in docs/grading-plan.md). Scan ingestion still
+    reads one sheet per image, so the two halves have to be separated before
+    scanning -- hence the cut guide between them."""
+
+    sheet_width_pt, sheet_height_pt = layout.page_width_pt, layout.page_height_pt
+    pdf = canvas.Canvas(buffer, pagesize=(sheet_width_pt, sheet_height_pt))
+
+    pages = layout.pages
+    index = 0
+    while index < len(pages):
+        left = pages[index]
+        right = pages[index + 1] if index + 1 < len(pages) else None
+
+        if right is None:
+            # Nothing to pair with -- print this one sheet alone, at its own
+            # size, rather than stranding it on an oversized page.
+            pdf.setPageSize((sheet_width_pt, sheet_height_pt))
+            _draw_page(pdf, left, layout.header_label, layout.version_labels)
+        else:
+            pdf.setPageSize((sheet_width_pt * 2, sheet_height_pt))
+            _draw_page(pdf, left, layout.header_label, layout.version_labels)
+            pdf.saveState()
+            pdf.translate(sheet_width_pt, 0)
+            _draw_page(pdf, right, layout.header_label, layout.version_labels)
+            pdf.restoreState()
+            _draw_cut_guide(pdf, sheet_width_pt, sheet_height_pt)
+
+        pdf.showPage()
+        index += 2
+
+    pdf.save()
+
+
+def _draw_cut_guide(pdf: canvas.Canvas, sheet_width_pt: float, sheet_height_pt: float) -> None:
+    """Mark the seam between two imposed half sheets. Detection registers one
+    sheet per scanned image, so an uncut pair reads as neither student's
+    sheet -- the dashed line and label are the only thing standing between a
+    teacher and a page that comes back unreadable.
+
+    The label runs along the seam at mid-height, rotated rather than sitting
+    flat at the top or bottom -- both corners there already carry a fiducial
+    square close to the edge, and flat text wide enough to read would run
+    right through them."""
+
+    pdf.saveState()
+    pdf.setDash(4, 3)
+    pdf.setLineWidth(0.75)
+    pdf.line(sheet_width_pt, 0, sheet_width_pt, sheet_height_pt)
+    pdf.restoreState()
+
+    pdf.saveState()
+    pdf.translate(sheet_width_pt, sheet_height_pt / 2)
+    pdf.rotate(90)
+    pdf.setFont("Helvetica-Bold", 8)
+    pdf.drawCentredString(0, 3, "CUT HERE BEFORE SCANNING")
+    pdf.restoreState()
 
 
 def _draw_page(

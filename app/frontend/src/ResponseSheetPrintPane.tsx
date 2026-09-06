@@ -427,6 +427,13 @@ export default function ResponseSheetPrintPane({ testId, onClose }: ResponseShee
             ) : null}
           </div>
 
+          <p className="gradebook-notice">
+            Print at 100% scale, one page per sheet. A printer's own scaling or
+            "pages per sheet" option moves the bubbles off the positions grading
+            expects. For two sheets on one piece of paper, use "Half sheet" above
+            instead of scaling a Letter sheet down.
+          </p>
+
           {mode === "blank" && isMultiVersion ? (
             <div className="response-sheet-version-assignment">
               <p>Copies per version -- fill-in-name sheets can be pre-versioned too.</p>

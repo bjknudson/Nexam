@@ -66,6 +66,18 @@ _QR_WHOLE_PAGE_ATTEMPTS = (
     (False, 0.5),
 )
 
+# A genuine scan's residual skew (after a phone scanning app's own perspective
+# correction, or a flatbed's mechanical tolerance) lands within a fraction of a
+# degree and a couple percent of aspect ratio -- see
+# test_perspective_skew_and_noise_still_recovers_answers. A corner that latched
+# onto the wrong feature (a shadow, a torn edge, a region the QR mask
+# over-covers) produces a quadrilateral many degrees off square, because the
+# other three corners still anchor the true page geometry. The tolerance here
+# is wide enough for real skew and narrow enough to catch that failure mode --
+# see the misregistered-corner case in docs/grading-plan.md.
+_MAX_CORNER_ANGLE_DEVIATION_DEG = 12.0
+_MAX_ASPECT_RATIO_DEVIATION = 0.2
+
 
 def _qr_search_regions(image: np.ndarray):
     """Where a sheet's QR is worth looking for, and how hard to try there."""
@@ -234,7 +246,51 @@ def locate_fiducials(
             return None
         found[marker.corner] = (x0 + moments["m10"] / moments["m00"], y0 + moments["m01"] / moments["m00"])
 
-    return found if len(found) == len(page.fiducials) else None
+    if len(found) != len(page.fiducials):
+        return None
+    return found if _registration_is_plausible(found, page_width_pt, page_height_pt) else None
+
+
+def _corner_angle_deg(
+    vertex: tuple[float, float], neighbor_a: tuple[float, float], neighbor_b: tuple[float, float]
+) -> float:
+    a = np.array(neighbor_a) - np.array(vertex)
+    b = np.array(neighbor_b) - np.array(vertex)
+    cos_angle = np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+    return float(np.degrees(np.arccos(np.clip(cos_angle, -1.0, 1.0))))
+
+
+def _registration_is_plausible(
+    fiducial_pixels: dict[str, tuple[float, float]], page_width_pt: float, page_height_pt: float
+) -> bool:
+    """Reject a found quadrilateral that isn't roughly the page's own
+    right-angled rectangle, before a homography gets fit to it and quietly
+    misreads every row -- see _MAX_CORNER_ANGLE_DEVIATION_DEG above."""
+
+    tl, tr = fiducial_pixels["top_left"], fiducial_pixels["top_right"]
+    bl, br = fiducial_pixels["bottom_left"], fiducial_pixels["bottom_right"]
+
+    top = np.array(tr) - np.array(tl)
+    bottom = np.array(br) - np.array(bl)
+    left = np.array(bl) - np.array(tl)
+    right = np.array(br) - np.array(tr)
+    width_avg = (np.linalg.norm(top) + np.linalg.norm(bottom)) / 2
+    height_avg = (np.linalg.norm(left) + np.linalg.norm(right)) / 2
+    if width_avg == 0 or height_avg == 0:
+        return False
+
+    expected_aspect = page_width_pt / page_height_pt
+    aspect_ratio_error = abs((width_avg / height_avg) / expected_aspect - 1.0)
+    if aspect_ratio_error > _MAX_ASPECT_RATIO_DEVIATION:
+        return False
+
+    angles = (
+        _corner_angle_deg(tl, tr, bl),
+        _corner_angle_deg(tr, tl, br),
+        _corner_angle_deg(bl, tl, br),
+        _corner_angle_deg(br, tr, bl),
+    )
+    return max(abs(angle - 90.0) for angle in angles) <= _MAX_CORNER_ANGLE_DEVIATION_DEG
 
 
 def read_sheet(

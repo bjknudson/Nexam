@@ -9,6 +9,7 @@ exactly what was filled. See docs/grading-plan.md's verification section.
 
 from __future__ import annotations
 
+import cv2
 import numpy as np
 import pytest
 
@@ -226,6 +227,66 @@ def test_the_qr_is_never_mistaken_for_a_corner_marker():
             actual_x, actual_y = found[marker.corner]
             drift = ((actual_x - expected_x) ** 2 + (actual_y - expected_y) ** 2) ** 0.5
             assert drift < 10, f"{marker.corner} drifted {drift:.0f}px -- the QR was picked up"
+
+
+def test_registration_rejects_a_quadrilateral_that_is_not_the_page_rectangle():
+    """Traced from a real scan: the QR mask erased the true top-right marker
+    along with the QR, so the search fell back to a scan-edge shadow well
+    inside its own search window. Three good corners plus one bad one still
+    produces *a* homography -- cv2.getPerspectiveTransform never refuses --
+    and that homography reads every row wrong while reporting full
+    confidence. Registration should refuse before that happens. See
+    docs/grading-plan.md."""
+
+    from app.backend.grading.detect import _registration_is_plausible
+
+    good = {
+        "top_left": (150.0, 150.0),
+        "top_right": (2400.0, 150.0),
+        "bottom_left": (150.0, 3150.0),
+        "bottom_right": (2400.0, 3150.0),
+    }
+    assert _registration_is_plausible(good, 612.0, 792.0) is True
+
+    bad = dict(good, top_right=(1800.0, 400.0))
+    assert _registration_is_plausible(bad, 612.0, 792.0) is False
+
+
+def test_a_corner_locked_onto_the_wrong_feature_is_rejected_not_silently_misread():
+    """Same failure as above, exercised through the real pixel pipeline: erase
+    one true marker (as an over-eager QR mask would) and leave a same-sized
+    decoy elsewhere within its own search window. Registration should refuse
+    rather than build a homography from it."""
+
+    layout, page = _layout_and_page()
+    image = rasterize_layout_page(layout, 0, 300)
+    scale = 300 / 72.0
+
+    bottom_left = next(m for m in page.fiducials if m.corner == "bottom_left")
+    cx = bottom_left.center_x_pt * scale
+    cy = (layout.page_height_pt - bottom_left.center_y_pt) * scale
+    half = bottom_left.size_pt * scale / 2
+
+    # Erase the true marker and draw a decoy elsewhere in the search window --
+    # same size, so it passes the area filter, but far enough off to break
+    # the rectangle.
+    pad = int(half * 3)
+    image[int(cy - pad) : int(cy + pad), int(cx - pad) : int(cx + pad)] = 255
+    decoy_x, decoy_y = 540.0, 2754.0
+    cv2.rectangle(
+        image,
+        (int(decoy_x - half), int(decoy_y - half)),
+        (int(decoy_x + half), int(decoy_y + half)),
+        0,
+        -1,
+    )
+
+    found = locate_fiducials(image, page, layout.page_width_pt, layout.page_height_pt)
+    assert found is None
+
+    results, fiducial_confidence, _ = read_sheet(image, page, layout.page_width_pt, layout.page_height_pt)
+    assert fiducial_confidence is None
+    assert results == []
 
 
 # Real sheet ids whose QR OpenCV's detector fails to localise on a single pass.
