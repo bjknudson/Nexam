@@ -13,6 +13,7 @@ import re
 
 from pydantic import ValidationError
 
+from .grading.answer_key import derive_answer_key
 from .models import (
     AssetInspectionBatchRequest,
     AssetInspectionBatchResponseModel,
@@ -56,6 +57,7 @@ from .models import (
     TestDraftListResponseModel,
     TestDraftModel,
     TestDraftSummaryModel,
+    TestPerformanceRunModel,
     TestQuestionItemModel,
     TestSectionItemModel,
     TestStandardBalanceModel,
@@ -116,6 +118,14 @@ class BankWorkspaceService:
             raise BankWorkspaceError("No bank is currently open.", status_code=400)
         return self._source_path, self._workspace_path
 
+    def close_bank(self) -> None:
+        """Forget the open bank. The working copy stays on disk untouched, so a
+        close is not a save and not a discard -- reopening the same `.bok`
+        picks it up again."""
+
+        self._source_path = None
+        self._workspace_path = None
+
     def open_bank(self, bok_path: str) -> BankSummaryModel:
         source_path = Path(bok_path).expanduser().resolve()
         if not source_path.exists():
@@ -123,7 +133,7 @@ class BankWorkspaceService:
         if not zipfile.is_zipfile(source_path):
             raise BankWorkspaceError("Selected file is not a valid .bok zip archive.", status_code=400)
 
-        workspace_root = Path(tempfile.gettempdir()) / "nexzam-workspaces"
+        workspace_root = Path(tempfile.gettempdir()) / "nexam-workspaces"
         workspace_root.mkdir(parents=True, exist_ok=True)
         workspace_path = workspace_root / f"{source_path.stem}-{uuid.uuid4().hex[:8]}"
         workspace_path.mkdir(parents=True, exist_ok=False)
@@ -152,7 +162,7 @@ class BankWorkspaceService:
         if target_path.suffix != ".bok":
             raise BankWorkspaceError("Destination path must end with .bok", status_code=400)
 
-        workspace_root = Path(tempfile.gettempdir()) / "nexzam-workspaces"
+        workspace_root = Path(tempfile.gettempdir()) / "nexam-workspaces"
         workspace_root.mkdir(parents=True, exist_ok=True)
         workspace_path = workspace_root / f"{target_path.stem}-{uuid.uuid4().hex[:8]}"
         workspace_path.mkdir(parents=True, exist_ok=False)
@@ -860,7 +870,7 @@ class BankWorkspaceService:
                 SourceStandardListModel(
                     id=placeholder_source_id,
                     title="Unresolved Question Standards",
-                    issuer="Nexzam",
+                    issuer="Nexam",
                     subject=None,
                     version=None,
                     description=(
@@ -1071,6 +1081,20 @@ class BankWorkspaceService:
         questions_by_id = {question.id: question for question in self._load_questions()}
         return self._build_test_detail(test, questions_by_id)
 
+    def add_performance_run(self, test_id: str, run: TestPerformanceRunModel) -> TestDraftDetailModel:
+        """The one place grading code (a separate .nxgb gradebook, never the
+        bank itself) can feed a completed grading result back into the bank
+        -- aggregate per-question stats only, never student identities, and
+        only when the user explicitly asks for it."""
+
+        tests = self._read_tests()
+        index = next((i for i, item in enumerate(tests.items) if item.id == test_id), None)
+        if index is None:
+            raise BankWorkspaceError(f"Test draft not found: {test_id}", status_code=404)
+        tests.items[index].performance_runs.append(run)
+        self._write_tests(tests)
+        return self.get_test_draft(test_id)
+
     def create_test_draft(
         self,
         title: str,
@@ -1100,12 +1124,55 @@ class BankWorkspaceService:
                 status_code=409,
             )
 
+        existing = tests.items[existing_index]
+        if existing.has_generated_sheets:
+            questions_by_id = {question.id: question for question in self._load_questions()}
+            if self._answer_key_shape(existing, questions_by_id) != self._answer_key_shape(
+                payload, questions_by_id
+            ):
+                raise BankWorkspaceError(
+                    "This test already has response sheets printed for it. "
+                    "Save this change as a new version instead of editing in place.",
+                    status_code=422,
+                )
+
         self._validate_test_question_references(payload)
         payload.course_ids = self._validate_course_ids(payload.course_ids)
+        # Server-controlled lock: only mark_test_administered may set this, so a
+        # client can't clear it by round-tripping a full payload back through PUT.
+        payload.has_generated_sheets = existing.has_generated_sheets
         tests.items[existing_index] = payload
         tests.items.sort(key=lambda item: item.id)
         self._write_tests(tests)
         return self.get_test_draft(payload.id)
+
+    def _answer_key_shape(
+        self, test: TestDraftModel, questions_by_id: dict[str, QuestionModel]
+    ) -> list[str]:
+        """The sequence of row kinds an answer key derived from `test` would have.
+
+        Two tests have interchangeable printed layouts only if this sequence
+        matches -- the same check `_compatible_alternate_keys` in
+        gradebook_service.py uses to decide which sibling versions can share a
+        sheet. Used here to tell whether an edit would move a bubble out from
+        under sheets that have already been printed.
+        """
+
+        return [item.row_kind for item in derive_answer_key(test, questions_by_id).items]
+
+    def mark_test_administered(self, test_id: str) -> None:
+        """Lock a test's item shape once response sheets have been printed for it.
+
+        Called after a hand-off to the gradebook actually succeeds, so a test
+        that's still only being drafted stays freely editable.
+        """
+
+        tests = self._read_tests()
+        index = next((i for i, item in enumerate(tests.items) if item.id == test_id), None)
+        if index is None:
+            raise BankWorkspaceError(f"Test draft not found: {test_id}", status_code=404)
+        tests.items[index].has_generated_sheets = True
+        self._write_tests(tests)
 
     def copy_test_draft(
         self,
@@ -1880,7 +1947,7 @@ class BankWorkspaceService:
                 SourceStandardListModel(
                     id=placeholder_source_id,
                     title="Unresolved Question Standards",
-                    issuer="Nexzam",
+                    issuer="Nexam",
                     subject=None,
                     version=None,
                     description=(

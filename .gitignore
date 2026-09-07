@@ -206,10 +206,15 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# Nexzam packaged bank artifacts (generated locally)
+# Nexam packaged bank artifacts (generated locally)
 *.bok
 *.bokx
 !samples/demo-bank.bok
+
+# Gradebooks hold student names, so they never belong in the repo -- except the
+# sample one, whose roster is invented.
+*.nxgb
+!samples/demo-gradebook.nxgb
 
 # Frontend and Tauri build outputs
 app/frontend/node_modules/

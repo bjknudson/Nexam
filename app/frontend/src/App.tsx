@@ -8,6 +8,9 @@ import {
   createQuestionFromJson,
   createQuestionsFromJson,
   getBackendHealth,
+  closeBank,
+  closeGradebook,
+  getCurrentGradebook,
   copyTestDraft as copyTestDraftApi,
   createTestDraft,
   deleteQuestion,
@@ -31,25 +34,34 @@ import {
   updateQuestion,
   updateTestDraft as updateTestDraftApi,
 } from "./api";
+import type { ApiError } from "./api";
 import {
   closeCurrentPaneWindow,
   getAppVersion,
   getDesktopContext,
   isDesktopShell,
   onBankPropertiesMenu,
+  onCloseBankMenu,
+  onCloseGradebookMenu,
   onNewBankMenu,
+  onNewGradebookMenu,
   onOpenBankMenu,
   onOpenDemoBankMenu,
+  onOpenDemoGradebookMenu,
+  onOpenGradebookMenu,
   onOpenSettings,
   onSaveAsMenu,
   onSaveBankMenu,
   openBankDialog,
+  openGradebookWindow,
+  setDocumentMenuState,
   openPaneWindow,
   resolveDefaultBankDirectory,
   saveBankDialog,
   setArchiveDirtyInShell,
   watchPaneWindowClose,
 } from "./desktop";
+import GradebookApp from "./GradebookApp";
 import {
   escapeLikelyLatexBackslashesInJson,
   hasMathMarkup,
@@ -67,6 +79,7 @@ import { SETTINGS_KEYS, usePersistedBoolean, usePersistedString } from "./appSet
 import StandardsWorkspace from "./StandardsWorkspace";
 import TestBuilderPane from "./TestBuilderPane";
 import TestPrintPreview from "./TestPrintPreview";
+import ResponseSheetPrintPane from "./ResponseSheetPrintPane";
 import type {
   AssetInspectionResponseModel,
   AssetListItemModel,
@@ -94,6 +107,7 @@ type PaneKind =
   | "standards"
   | "courses"
   | "test-preview"
+  | "response-sheet-print"
   | "editor"
   | "tests";
 type WorkspacePage = "questions" | "tests" | "standards" | "courses";
@@ -163,7 +177,7 @@ type PaneMessage =
   | { type: "pane-closed"; pane: PaneKind };
 
 const AUTOSAVE_DELAY_MS = 700;
-const PANE_SYNC_CHANNEL = "nexzam-pane-sync";
+const PANE_SYNC_CHANNEL = "nexam-pane-sync";
 
 const emptyQuestion = (): QuestionModel => ({
   id: "",
@@ -301,6 +315,7 @@ const PANE_KINDS: PaneKind[] = [
   "standards",
   "courses",
   "test-preview",
+  "response-sheet-print",
   "editor",
   "tests",
 ];
@@ -933,6 +948,9 @@ function AssetPane({
 
 function App() {
   const desktopMode = isDesktopShell();
+  // The gradebook is a wholly separate document/app, not a bank pane -- a
+  // distinct query param instead of overloading PaneKind. See docs/grading.md.
+  const isGradebookWindow = new URLSearchParams(window.location.search).get("app") === "gradebook";
   const paneMode = getPaneMode();
   const isPaneWindow = paneMode !== null;
   const isMainWindow = paneMode === null;
@@ -1042,6 +1060,12 @@ function App() {
   const [questionsShortenText, setQuestionsShortenText] = usePersistedBoolean(
     SETTINGS_KEYS.questionsShortenText,
     true,
+  );
+  // Off unless a teacher opts in: levelling a rubric is an authoring commitment,
+  // and every other way of reporting mastery works without it.
+  const [rubricMasteryLevels, setRubricMasteryLevels] = usePersistedBoolean(
+    SETTINGS_KEYS.rubricMasteryLevels,
+    false,
   );
   const [bankDirectory, setBankDirectory] = usePersistedString(SETTINGS_KEYS.bankDirectory, "");
   const [bankPropertiesOpen, setBankPropertiesOpen] = useState(false);
@@ -1165,10 +1189,10 @@ function App() {
       if (appVersion === backendVersion) return;
 
       setBackendVersionWarning(
-        `Nexzam ${appVersion} is running a ${backendVersion} backend. Some features may not work. Reinstalling Nexzam should fix it.`,
+        `Nexam ${appVersion} is running a ${backendVersion} backend. Some features may not work. Reinstalling Nexam should fix it.`,
       );
       console.warn(
-        `[nexzam] backend version mismatch: app ${appVersion}, backend ${backendVersion} (${health?.build ?? "unknown"} build). ` +
+        `[nexam] backend version mismatch: app ${appVersion}, backend ${backendVersion} (${health?.build ?? "unknown"} build). ` +
           "If you build from source, rerun scripts/build_backend_binary.sh to refresh dist/backend.",
       );
     })();
@@ -1205,6 +1229,11 @@ function App() {
     registerMenuListener(onBankPropertiesMenu, () => handleOpenBankPropertiesDialog());
     registerMenuListener(onSaveBankMenu, () => void handleSaveBank());
     registerMenuListener(onSaveAsMenu, () => handleSaveAs());
+    registerMenuListener(onCloseBankMenu, () => void handleCloseBank());
+    registerMenuListener(onNewGradebookMenu, () => void handleOpenGradebook("new"));
+    registerMenuListener(onOpenGradebookMenu, () => void handleOpenGradebook("open"));
+    registerMenuListener(onOpenDemoGradebookMenu, () => void handleOpenGradebook("demo"));
+    registerMenuListener(onCloseGradebookMenu, () => void handleCloseGradebook());
 
     return () => {
       cancelled = true;
@@ -1217,6 +1246,31 @@ function App() {
     if (!bank) return;
     void refreshQuestionList();
   }, [bank, search, topicFilter, typeFilter, hostsBankState]);
+
+  // Keep File's "Close" commands greyed out when there is nothing to close. The
+  // gradebook lives in another window, so its state is polled rather than known.
+  useEffect(() => {
+    if (!desktopMode || !isMainWindow) return;
+    let cancelled = false;
+
+    const sync = async () => {
+      let gradebookOpen = false;
+      try {
+        await getCurrentGradebook();
+        gradebookOpen = true;
+      } catch {
+        gradebookOpen = false;
+      }
+      if (!cancelled) void setDocumentMenuState(Boolean(bank), gradebookOpen);
+    };
+
+    void sync();
+    const intervalId = window.setInterval(sync, 4000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [desktopMode, isMainWindow, bank]);
 
   const selectedTestDetail = testDrafts.find((item) => item.test.id === selectedTestId) ?? null;
   const openTestsMissingSelectedQuestion = selectedId
@@ -1236,7 +1290,7 @@ function App() {
       (item) => (item.item_type ?? "question") === "question" && item.question_id === selectedId,
     );
 
-  const openTestsStorageKey = bank ? `nexzam:open-tests:${bank.manifest.bank_id}` : null;
+  const openTestsStorageKey = bank ? `nexam:open-tests:${bank.manifest.bank_id}` : null;
 
   useEffect(() => {
     if (!isMainWindow || !bank || !standardsLoaded) return;
@@ -1622,6 +1676,53 @@ function App() {
     const path = await openBankDialog(bankDirectory || undefined);
     if (!path) return;
     await openBankAtPath(path);
+  }
+
+  async function handleCloseBank() {
+    if (!bank) return;
+    if (!(await persistDraft("open-bank"))) return;
+    setLoading(true);
+    try {
+      await closeBank();
+      setBank(null);
+      setSelectedId(null);
+      setQuestionItems([]);
+      setTestDrafts([]);
+      setWorkspaceDirty(false);
+      setStatusMessage("Closed the bank. The working copy is left as it was.");
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage((error as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  /** The gradebook is its own window, so File's gradebook commands open that
+   *  window and tell it what to do rather than doing it here. */
+  async function handleOpenGradebook(intent: "new" | "open" | "demo") {
+    try {
+      await openGradebookWindow(intent);
+    } catch (error) {
+      setErrorMessage((error as Error).message);
+    }
+  }
+
+  async function handleCloseGradebook() {
+    try {
+      await closeGradebook();
+      setStatusMessage("Closed the gradebook.");
+      // The gradebook window shows its own state, so tell it to re-read.
+      try {
+        const channel = new BroadcastChannel("nexam-pane-sync");
+        channel.postMessage({ type: "gradebook-data-changed" });
+        channel.close();
+      } catch {
+        // Best effort only.
+      }
+    } catch (error) {
+      setErrorMessage((error as Error).message);
+    }
   }
 
   async function handleOpenDemo() {
@@ -2166,9 +2267,61 @@ function App() {
       setStatusMessage(`Saved ${detail.test.id} to the working copy.`);
       setErrorMessage("");
     } catch (error) {
+      if ((error as ApiError).status === 422) {
+        await handleForkKeyBreakingEdit(test);
+        return;
+      }
       setErrorMessage((error as Error).message);
     } finally {
       setLoading(false);
+    }
+  }
+
+  /** The edit would move a bubble out from under sheets already printed for
+   *  this test (service.update_test_draft's 422). Offer to save it as a new
+   *  version instead, seeded with the edit the teacher just tried to make. */
+  async function handleForkKeyBreakingEdit(attemptedEdit: TestDraftModel) {
+    const source = testDrafts.find((item) => item.test.id === attemptedEdit.id);
+    if (!source) {
+      setErrorMessage("This test already has response sheets printed for it.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "This test already has response sheets printed for it. Save this change as a new version instead of editing in place?",
+    );
+    if (!confirmed) {
+      setErrorMessage("Change discarded: this test already has response sheets printed for it.");
+      return;
+    }
+
+    const takenVersions = new Set(
+      testDrafts
+        .filter((item) => item.test.title === source.test.title)
+        .map((item) => item.test.version),
+    );
+    try {
+      const created = await createTestDraft({
+        title: source.test.title,
+        version: nextVersionLabel(source.test.version, takenVersions),
+      });
+      const detail = await updateTestDraftApi(created.test.id, {
+        ...attemptedEdit,
+        id: created.test.id,
+        version: created.test.version,
+        finished: false,
+        has_generated_sheets: false,
+        performance_runs: [],
+      });
+      replaceTestDraft(detail);
+      handleOpenTest(detail.test.id);
+      setWorkspaceDirty(true);
+      setStatusMessage(
+        `This edit needed a new version -- saved as ${detail.test.id} (version ${detail.test.version}).`,
+      );
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage((error as Error).message);
     }
   }
 
@@ -2594,14 +2747,14 @@ function App() {
 
   function updateRubricRow(index: number, field: keyof RubricRowModel, value: string) {
     if (!draftQuestionRef.current) return;
-    const rubric = draftQuestionRef.current.rubric.map((row, rowIndex) =>
-      rowIndex === index
-        ? {
-            ...row,
-            [field]: field === "points" ? Number(value) : value,
-          }
-        : row,
-    );
+    const rubric = draftQuestionRef.current.rubric.map((row, rowIndex) => {
+      if (rowIndex !== index) return row;
+      if (field === "points") return { ...row, points: Number(value) };
+      // Blank means "no difficulty set" -- a rubric only needs them when it was
+      // written around mastery levels, and 0 is not a level.
+      if (field === "difficulty") return { ...row, difficulty: value ? Number(value) : null };
+      return { ...row, [field]: value };
+    });
     updateDraft("rubric", rubric);
   }
 
@@ -2739,6 +2892,49 @@ function App() {
     } catch (error) {
       setErrorMessage((error as Error).message);
     }
+  }
+
+  async function handleOpenResponseSheetPrintPane() {
+    const selectedTest = testDrafts.find((item) => item.test.id === selectedTestId) ?? testDrafts[0];
+    if (!selectedTest) return;
+
+    try {
+      await openPaneWindow("response-sheet-print", "Response Sheet Preview", {
+        mode: selectedTest.test.id,
+        width: 900,
+        height: 820,
+      });
+    } catch (error) {
+      setErrorMessage((error as Error).message);
+    }
+  }
+
+  /** Only finished tests are eligible for response sheets, so this finishes
+   *  the open test first (if it isn't already) before handing off. */
+  async function handleFinishAndCreateResponseSheets() {
+    if (!selectedTestId) return;
+    const current = testDrafts.find((item) => item.test.id === selectedTestId);
+    if (!current) return;
+
+    if (!current.test.finished) {
+      setLoading(true);
+      try {
+        const detail = await updateTestDraftApi(selectedTestId, {
+          ...current.test,
+          finished: true,
+        });
+        replaceTestDraft(detail);
+        setWorkspaceDirty(true);
+        setErrorMessage("");
+      } catch (error) {
+        setErrorMessage((error as Error).message);
+        return;
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    await handleOpenResponseSheetPrintPane();
   }
 
   async function handleDockPane(pane: PaneKind) {
@@ -3022,16 +3218,18 @@ function App() {
   useEffect(() => {
     document.title =
       paneMode === "questions"
-        ? "Questions - Nexzam"
+        ? "Questions - Nexam"
         : paneMode === "assets"
-          ? "Assets - Nexzam"
+          ? "Assets - Nexam"
           : paneMode === "standards"
-            ? "Library - Nexzam"
+            ? "Library - Nexam"
             : paneMode === "courses"
-              ? "Courses - Nexzam"
+              ? "Courses - Nexam"
               : paneMode === "test-preview"
-                ? "Printable Test Preview - Nexzam"
-          : "Nexzam";
+                ? "Printable Test Preview - Nexam"
+                : paneMode === "response-sheet-print"
+                  ? "Response Sheet Preview - Nexam"
+          : "Nexam";
   }, [paneMode]);
 
   const workingCopyLabel =
@@ -3064,7 +3262,7 @@ function App() {
     return (
       <div className="startup-screen">
         <div className="startup-card">
-          <h1>Nexzam</h1>
+          <h1>Nexam</h1>
           <p>{desktopContext?.backendError ? "Backend startup failed." : "Starting local backend..."}</p>
           <p className="startup-detail">
             {desktopContext?.backendError ??
@@ -3073,6 +3271,10 @@ function App() {
         </div>
       </div>
     );
+  }
+
+  if (isGradebookWindow) {
+    return <GradebookApp />;
   }
 
   if (paneMode === "questions") {
@@ -3168,9 +3370,24 @@ function App() {
   }
 
   if (paneMode === "test-preview") {
-    const testId = new URLSearchParams(window.location.search).get("mode");
+    const paneSearchParams = new URLSearchParams(window.location.search);
+    const testId = paneSearchParams.get("mode");
+    const snapshotId = paneSearchParams.get("snapshot");
     return (
       <TestPrintPreview
+        testId={testId}
+        snapshotId={snapshotId}
+        onClose={() => {
+          void closeCurrentPaneWindow();
+        }}
+      />
+    );
+  }
+
+  if (paneMode === "response-sheet-print") {
+    const testId = new URLSearchParams(window.location.search).get("mode");
+    return (
+      <ResponseSheetPrintPane
         testId={testId}
         onClose={() => {
           void closeCurrentPaneWindow();
@@ -3198,6 +3415,8 @@ function App() {
         onQuestionsShowStatusFilterChange={setQuestionsShowStatusFilter}
         questionsShortenText={questionsShortenText}
         onQuestionsShortenTextChange={setQuestionsShortenText}
+        rubricMasteryLevels={rubricMasteryLevels}
+        onRubricMasteryLevelsChange={setRubricMasteryLevels}
         bankDirectory={bankDirectory}
         onBankDirectoryChange={setBankDirectory}
       />
@@ -3373,7 +3592,7 @@ function App() {
 
       <header className="topbar">
         <div className="topbar-title">
-          <h1>Nexzam</h1>
+          <h1>Nexam</h1>
           <p>{bank ? bank.manifest.title : "No bank open"}</p>
         </div>
 
@@ -3420,6 +3639,17 @@ function App() {
           {!desktopMode ? (
             <button onClick={() => void handleOpenDemo()} disabled={loading}>
               Open Demo Bank
+            </button>
+          ) : null}
+          {isMainWindow ? (
+            <button
+              type="button"
+              title="A gradebook is a separate file from this bank -- see docs/grading.md"
+              onClick={() => {
+                openGradebookWindow().catch((error) => setErrorMessage((error as Error).message));
+              }}
+            >
+              Open Gradebook
             </button>
           ) : null}
           {isMainWindow ? (
@@ -4253,6 +4483,29 @@ function App() {
                                 placeholder="Points"
                               />
                             </label>
+                            {rubricMasteryLevels ||
+                            draftQuestion.rubric.some((r) => r.difficulty != null) ? (
+                            <label
+                              className="rubric-points-field"
+                              title="How hard this part of the task is, numbered like the question's own difficulty. It is the level this part gives evidence about. Only needed for Rubric Levels reporting -- leave it blank otherwise."
+                            >
+                              Difficulty
+                              {/* A free number rather than a fixed list: the
+                                  scale is the bank's to choose, and blank means
+                                  no difficulty set. */}
+                              <input
+                                className="compact-number-input"
+                                type="number"
+                                min={1}
+                                step="1"
+                                placeholder="-"
+                                value={row.difficulty ?? ""}
+                                onChange={(event) =>
+                                  updateRubricRow(index, "difficulty", event.target.value)
+                                }
+                              />
+                            </label>
+                            ) : null}
                           </div>
                         ))}
                         <button
@@ -4312,6 +4565,8 @@ function App() {
                 onOpenTest={handleOpenTest}
                 onArchiveTest={handleArchiveTest}
                 onOpenPrintPreview={() => void handleOpenTestPrintPreview()}
+                onOpenResponseSheetPrint={() => void handleOpenResponseSheetPrintPane()}
+                onFinishAndCreateResponseSheets={() => void handleFinishAndCreateResponseSheets()}
                 onUpdateTest={(test) => void handleUpdateTestDraft(test)}
                 onCopyTest={(testId, payload) => void handleCopyTestDraft(testId, payload)}
                 onApplyTestJson={(testId, raw) => void handleApplyTestJson(testId, raw)}

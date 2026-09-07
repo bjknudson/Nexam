@@ -32,6 +32,10 @@ interface TestBuilderPaneProps {
   onOpenTest: (testId: string) => void;
   onArchiveTest: (testId: string) => void;
   onOpenPrintPreview: () => void;
+  onOpenResponseSheetPrint: () => void;
+  /** Finish the open test (if not already) and open the response sheet pane
+   *  scoped to its lineage. Only finished tests are eligible for sheets. */
+  onFinishAndCreateResponseSheets: () => void;
   onUpdateTest: (test: TestDraftModel) => void;
   /** Fork the open test into a new draft, optionally reverting the original. */
   onCopyTest: (
@@ -401,6 +405,8 @@ function TestBuilderPane({
   onOpenTest,
   onArchiveTest,
   onOpenPrintPreview,
+  onOpenResponseSheetPrint,
+  onFinishAndCreateResponseSheets,
   onUpdateTest,
   onCopyTest,
   onApplyTestJson,
@@ -419,6 +425,8 @@ function TestBuilderPane({
   const [copyDetachFromSource, setCopyDetachFromSource] = useState(true);
   const [copyRestoreOriginal, setCopyRestoreOriginal] = useState(true);
   const [sortRules, setSortRules] = useState<SortRule[]>([]);
+  const [archiveCandidate, setArchiveCandidate] = useState<TestDraftDetailModel | null>(null);
+  const [archiveBrowserOpen, setArchiveBrowserOpen] = useState(false);
   // How the open test looked when it was opened, so a shared test can be put
   // back the way the other courses had it after a fork.
   const snapshotRef = useRef<TestDraftModel | null>(null);
@@ -433,6 +441,9 @@ function TestBuilderPane({
   }
 
   const openTests = tests.filter((item) => openTestIds.includes(item.test.id));
+  // "Archived" is simply not on the desk -- the test is still in the bank, which
+  // is what the confirm below explains and the browser below makes reachable.
+  const archivedTests = tests.filter((item) => !openTestIds.includes(item.test.id));
   const selectedTest =
     openTests.find((item) => item.test.id === selectedTestId) ?? openTests[0] ?? null;
   const trimmedTestSearch = testSearch.trim().toLowerCase();
@@ -673,6 +684,14 @@ function TestBuilderPane({
                 placeholder="Search tests to open"
                 aria-label="Search tests to open"
               />
+              <button
+                type="button"
+                className="test-archive-browse-button"
+                onClick={() => setArchiveBrowserOpen(true)}
+                title="Tests not currently on the desk. Archiving never deletes anything."
+              >
+                Archive ({archivedTests.length})
+              </button>
               {trimmedTestSearch ? (
                 <div className="test-builder-search-results">
                   {searchMatches.length === 0 ? (
@@ -723,11 +742,11 @@ function TestBuilderPane({
                   <button
                     type="button"
                     className="test-builder-card-archive"
-                    onClick={() => onArchiveTest(detail.test.id)}
-                    title="Archive this test (it stays in the bank)"
+                    onClick={() => setArchiveCandidate(detail)}
+                    title="Take this test off the desk. It stays in the bank and can be reopened from the archive."
                     aria-label={`Archive ${detail.test.title} version ${detail.test.version}`}
                   >
-                    &times;
+                    Archive
                   </button>
                 </div>
               ))
@@ -768,6 +787,22 @@ function TestBuilderPane({
                   }
                 />
               </label>
+              <label
+                className="test-version-note-field"
+                title="Why this version exists. Shown wherever a version is chosen, so a note like 'shorter passages for EL' travels with it."
+              >
+                Version Note
+                <input
+                  placeholder="e.g. shorter passages for EL"
+                  value={selectedTest.test.version_description ?? ""}
+                  onChange={(event) =>
+                    onUpdateTest({
+                      ...selectedTest.test,
+                      version_description: event.target.value || null,
+                    })
+                  }
+                />
+              </label>
               <button type="button" onClick={addSectionItem} disabled={loading}>
                 Add Section
               </button>
@@ -778,6 +813,52 @@ function TestBuilderPane({
               >
                 Preview Print
               </button>
+              {selectedTest.test.finished ? (
+                <button
+                  type="button"
+                  onClick={onOpenResponseSheetPrint}
+                  disabled={questionItemCount === 0}
+                  title="Hand this test off to an open gradebook and print bubble/grid-in response sheets"
+                >
+                  Create Response Sheets...
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={onFinishAndCreateResponseSheets}
+                  disabled={questionItemCount === 0 || loading}
+                  title="Lock this test's item order and answer key, then hand it off to print response sheets. Further edits that would move a bubble will need a new version."
+                >
+                  Finish and Create Response Sheets...
+                </button>
+              )}
+              <label
+                className="test-builder-toggle test-interchangeable-toggle"
+                title={
+                  "One response sheet for every version of this test, with the student " +
+                  "marking which version they took.\n\n" +
+                  "Use it when versions exist for test security or retakes: you can print " +
+                  "one stack of sheets and hand them out without matching sheet to paper, " +
+                  "and a student who gets the wrong version can still be scored.\n\n" +
+                  "It requires every version to share the same sheet shape -- same number " +
+                  "of multiple choice, then numeric, then similarly sized written responses " +
+                  "-- so leave it off when versions differ on purpose, such as an EL or " +
+                  "lower-lexile version that needs different items or more space."
+                }
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedTest.test.interchangeable_sheets ?? false}
+                  onChange={(event) =>
+                    onUpdateTest({
+                      ...selectedTest.test,
+                      interchangeable_sheets: event.target.checked,
+                    })
+                  }
+                  disabled={loading}
+                />
+                Interchangeable sheets
+              </label>
             </section>
 
             {courses.length > 0 ? (
@@ -1677,6 +1758,99 @@ function TestBuilderPane({
           )}
         </div>
       )}
+
+      {archiveCandidate ? (
+        <div
+          className="test-copy-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Archive test"
+        >
+          <div className="test-copy-dialog">
+            <h3>Archive this test?</h3>
+            <p>
+              <strong>{archiveCandidate.test.title}</strong> - Version{" "}
+              {archiveCandidate.test.version}
+            </p>
+            <p>
+              Archiving takes it off the desk. Nothing is deleted: the test stays in the bank
+              with its questions and settings, and you can put it back any time from Archive
+              in the test list.
+            </p>
+            <div className="test-copy-actions">
+              <button type="button" onClick={() => setArchiveCandidate(null)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setArchiveBrowserOpen(true);
+                  setArchiveCandidate(null);
+                }}
+              >
+                Browse Archive
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onArchiveTest(archiveCandidate.test.id);
+                  setArchiveCandidate(null);
+                }}
+              >
+                Archive
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {archiveBrowserOpen ? (
+        <div
+          className="test-copy-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Test archive"
+        >
+          <div className="test-copy-dialog test-archive-dialog">
+            <h3>Archive</h3>
+            <p>
+              Tests in this bank that are not on the desk right now. Reopening one puts it back
+              exactly as it was.
+            </p>
+            {archivedTests.length === 0 ? (
+              <p className="test-builder-empty">Nothing archived - every test is on the desk.</p>
+            ) : (
+              <div className="test-archive-list">
+                {archivedTests.map((detail) => (
+                  <div className="test-archive-row" key={detail.test.id}>
+                    <div>
+                      <strong>{detail.test.title}</strong>
+                      <span>
+                        Version {detail.test.version} -{" "}
+                        {detail.test.items.filter(isQuestionItem).length} questions
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onOpenTest(detail.test.id);
+                        setArchiveBrowserOpen(false);
+                      }}
+                    >
+                      Reopen
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="test-copy-actions">
+              <button type="button" onClick={() => setArchiveBrowserOpen(false)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {copyDialogOpen && selectedTest ? (
         <div className="test-copy-backdrop" role="dialog" aria-modal="true" aria-label="Save test as copy">

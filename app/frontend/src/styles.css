@@ -2747,6 +2747,24 @@ textarea {
   grid-column: 1 / -1;
 }
 
+.roster-detail-readonly {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.roster-detail-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+
+.roster-detail-label {
+  min-width: 140px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #475569;
+}
+
 .courses-section-tabs {
   display: flex;
   gap: 0.3rem;
@@ -3795,4 +3813,1208 @@ textarea {
     height: auto;
     min-height: 100%;
   }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Gradebook (.nxgb) -- a separate document from a bank, see docs/grading.md */
+/* ---------------------------------------------------------------------- */
+
+/* An app shell, not a document: the window is the frame and the working panes
+   scroll inside it. Scan review is the case that forced this -- when the whole
+   page scrolled, reaching answer row 7 slid the scan being checked against it
+   off the top of the window. */
+.gradebook-app {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0.85rem 1.25rem 1rem;
+  background: #eef3f8;
+}
+
+/* The open/create screen really is a short document, so it keeps scrolling. */
+.gradebook-app.gradebook-launch {
+  display: grid;
+  align-content: start;
+  height: auto;
+  min-height: 100%;
+  overflow-y: auto;
+}
+
+.gradebook-launch {
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+.gradebook-launch-panel {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.gradebook-launch-panel label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: #334155;
+}
+
+.gradebook-manual-open {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.gradebook-manual-open input {
+  flex: 1;
+}
+
+.gradebook-error {
+  margin: 0;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid #fca5a5;
+  border-radius: 10px;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.gradebook-topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  background: linear-gradient(135deg, #ffffff, #ddeaf6);
+  border: 1px solid #d1dbe5;
+  border-radius: 12px;
+}
+
+.gradebook-title {
+  margin: 0;
+  font-weight: 600;
+  font-size: 1.1rem;
+}
+
+.gradebook-tabs {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.gradebook-tabs button {
+  border: 1px solid #d1dbe5;
+  background: #ffffff;
+  border-radius: 999px;
+  padding: 0.4rem 0.9rem;
+}
+
+.gradebook-tabs button.active {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #ffffff;
+}
+
+/* Takes the height the chrome above leaves. A page that is a plain document
+   (Students, Export) overflows and scrolls here; a page that fills the height
+   exactly (scan review) never does, and scrolls in its own panes instead. */
+.gradebook-page-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.button-like {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.4rem 0.9rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #1e293b;
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+
+.administered-test-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.response-sheet-print-pane {
+  padding: 1rem 1.25rem;
+  display: grid;
+  gap: 1rem;
+  background: #eef3f8;
+  overflow-y: auto;
+}
+
+.response-sheet-print-result {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px dashed #cbd5e1;
+}
+
+.scan-review-workspace,
+.grade-report-workspace,
+.roster-workspace {
+  display: grid;
+  align-content: start;
+  gap: 1rem;
+  min-height: 0;
+}
+
+.administered-tests-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-height: 0;
+}
+
+.scan-review-layout {
+  display: grid;
+  /* The sheet picker is a list of names -- it does not need a third of the
+     window. The room belongs to the scan and the answers being corrected. */
+  grid-template-columns: minmax(180px, 0.45fr) minmax(0, 2.6fr);
+  gap: 0.9rem;
+  min-height: 0;
+}
+
+.scan-review-detail {
+  display: grid;
+  gap: 0.75rem;
+  align-content: start;
+  min-width: 0;
+}
+
+/* The sheet and the answers being corrected have to be readable at the same
+   time. Fixed proportions rather than letting the image take the slack: given
+   free space the scan would grow to fill the pane and push the review cards
+   out of view. */
+.scan-review-split {
+  display: grid;
+  grid-template-columns: minmax(220px, 30%) minmax(280px, 1fr);
+  gap: 0.9rem;
+  align-items: start;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* The loupe is a child of this column, not of the clipped frame, so it can hang
+   over the sheet's edges -- which is where the question numbers live. */
+.scan-review-sheet-column {
+  position: sticky;
+  top: 0;
+  min-width: 0;
+}
+
+/* The frame is what holds the sheet's size. Zooming transforms the image inside
+   it and crops -- the frame never grows, so the review cards beside it stay put
+   and nothing has to scroll. */
+.scan-review-image-frame {
+  position: relative;
+  /* clip, not hidden: `hidden` still makes this a scroll container, so the
+     cropped sheet could be nudged around by a trackpad. Zooming should crop and
+     nothing else. */
+  overflow: clip;
+  border: 1px solid #d1dbe5;
+  border-radius: 10px;
+  background: #ffffff;
+  cursor: zoom-in;
+}
+
+.scan-review-image-frame.zoomed {
+  cursor: zoom-out;
+}
+
+.scan-review-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  user-select: none;
+}
+
+/* Follows the cursor and must never eat the click that toggles the zoom. */
+.scan-review-loupe {
+  position: absolute;
+  width: 220px;
+  height: 220px;
+  margin-left: -110px;
+  margin-top: -110px;
+  border: 2px solid #1d4ed8;
+  /* Square, not a circle: a round window cuts the corners off exactly where the
+     question number and the last choice sit. */
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.28);
+  background-color: #ffffff;
+  background-repeat: no-repeat;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.scan-review-image-hint {
+  margin: 0.35rem 0 0;
+  color: #94a3b8;
+  font-size: 0.72rem;
+  text-align: center;
+}
+
+/* The sheet stays put while the corrections scroll beside it -- on a long test
+   the answers run past the bottom, and scrolling the whole page would take the
+   scan out of view exactly when it is needed for comparison. */
+/* Height comes from the flex chain above, not from a guess at how much chrome
+   sits on top -- `calc(100vh - 16rem)` assumed 256px of it when the real figure
+   was nearer 800, which is what pushed this column past the bottom of the
+   window and made the whole page scroll. */
+.scan-review-review-column {
+  display: grid;
+  gap: 0.7rem;
+  align-content: start;
+  min-width: 0;
+  padding-right: 0.35rem;
+}
+
+.scan-review-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.3rem 0;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #eef3f8;
+}
+
+.scan-review-nav span {
+  color: #64748b;
+  font-size: 0.78rem;
+}
+
+/* Last one is a plain footer -- only the top bar needs to stay in view. */
+.scan-review-review-column > .scan-review-nav:last-child {
+  position: static;
+}
+
+.scan-review-confirm {
+  justify-self: start;
+  border-color: #16a34a;
+  color: #15803d;
+  font-weight: 600;
+}
+
+.scan-review-identity h3 {
+  margin-top: 0;
+}
+
+/* One heading per run of rows, so the kind is stated once instead of on every
+   row. */
+.scan-review-section h4 {
+  margin: 0 0 0.35rem;
+  color: #64748b;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.scan-review-row-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+/* A confident row is a chip: "1. A" and nothing else. A flagged row opens to
+   full width so its correction controls have room. */
+.scan-review-row {
+  border: 1px solid #dce5ef;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.scan-review-row.needs-review {
+  border-color: #f0b429;
+  background: #fffbeb;
+}
+
+.scan-review-row.expanded {
+  flex: 1 1 100%;
+  padding: 0.4rem 0.55rem 0.55rem;
+}
+
+.scan-review-row-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  padding: 0.25rem 0.5rem;
+  border: none;
+  background: transparent;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.scan-review-row.expanded .scan-review-row-summary {
+  padding: 0 0 0.3rem;
+}
+
+.scan-review-row-number {
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+}
+
+.scan-review-row-answer {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.scan-review-row-flag {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: #d97706;
+}
+
+.scan-review-row-body {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.scan-review-row-detail {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.76rem;
+}
+
+.scan-review-blank-button {
+  white-space: nowrap;
+}
+
+.scan-review-rubric-toggle {
+  justify-self: start;
+  padding: 0.15rem 0.5rem;
+  border: 1px dashed #b6c6da;
+  border-radius: 999px;
+  background: transparent;
+  color: #475569;
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+
+.scan-review-rubric {
+  padding: 0.5rem 0.6rem;
+  border: 1px solid #dce5ef;
+  border-radius: 8px;
+  background: #f7fafd;
+  font-size: 0.8rem;
+}
+
+.scan-review-rubric p {
+  margin: 0 0 0.35rem;
+}
+
+.scan-review-rubric ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.scan-review-rubric-prompt {
+  font-weight: 600;
+}
+
+.scan-review-rubric-empty,
+.scan-review-rubric-solution {
+  color: #64748b;
+}
+
+@media (max-width: 1000px) {
+  .scan-review-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .scan-review-sheet-column {
+    position: static;
+  }
+}
+
+.scan-review-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.scan-review-table th,
+.scan-review-table td {
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+/* Score histogram: one hue (magnitude, single series -- no legend needed),
+   thin bars, rounded data-ends, direct value labels, native title as a
+   lightweight hover layer. See the dataviz skill. */
+.score-histogram {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.score-histogram-row {
+  display: grid;
+  grid-template-columns: 3.5rem minmax(0, 1fr) 2rem;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.score-histogram-label,
+.score-histogram-value {
+  font-size: 0.82rem;
+  color: #475569;
+}
+
+.score-histogram-value {
+  text-align: right;
+}
+
+.score-histogram-track {
+  background: #eef2f7;
+  border-radius: 4px;
+  height: 0.75rem;
+  overflow: hidden;
+}
+
+.score-histogram-bar {
+  height: 100%;
+  background: #2563eb;
+  border-radius: 4px;
+}
+
+.response-sheet-select-all {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.3rem 0.1rem 0.5rem;
+  border-bottom: 1px solid #e2e8f0;
+  margin-bottom: 0.35rem;
+  color: #64748b;
+  font-size: 0.8rem;
+}
+
+/* Printings of one test stack together: the most recent reads as the card, the
+   reprints tuck underneath it. */
+.administered-test-stack {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.administered-test-stack-toggle {
+  justify-self: start;
+  margin-top: 0.35rem;
+  padding: 0.1rem 0.5rem;
+  border: 1px dashed #b6c6da;
+  border-radius: 999px;
+  background: transparent;
+  color: #475569;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.administered-test-earlier {
+  margin-left: 1.25rem;
+  background: #f7fafd;
+}
+
+.administered-test-handoff {
+  margin-bottom: 0.9rem;
+  border: 1px solid #d1dbe5;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.response-sheet-roster-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  padding-bottom: 0.5rem;
+}
+
+.response-sheet-student-tag {
+  margin-left: auto;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: #eef3f8;
+  color: #64748b;
+  font-size: 0.72rem;
+}
+
+.response-sheet-version-assignment {
+  display: grid;
+  gap: 0.5rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid #e2e8f0;
+  margin-bottom: 0.5rem;
+}
+
+.response-sheet-assign-by-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  color: #475569;
+  font-size: 0.85rem;
+}
+
+.response-sheet-assignment-grid {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.response-sheet-assignment-grid th,
+.response-sheet-assignment-grid td {
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid #e2e8f0;
+  text-align: center;
+}
+
+.response-sheet-assignment-grid th:first-child,
+.response-sheet-assignment-grid td:first-child {
+  text-align: left;
+}
+
+.response-sheet-partial-roster-warning {
+  margin: 0.4rem 0 0;
+  padding: 0.4rem 0.6rem;
+  border-radius: 8px;
+  background: #fff7ed;
+  color: #9a5b13;
+  font-size: 0.8rem;
+}
+
+.response-sheet-no-gradebook {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.response-sheet-no-gradebook-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.test-archive-browse-button {
+  white-space: nowrap;
+  font-size: 0.78rem;
+}
+
+.test-archive-dialog {
+  width: min(560px, 94vw);
+}
+
+.test-archive-list {
+  display: grid;
+  gap: 0.35rem;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.test-archive-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid #dce5ef;
+  border-radius: 8px;
+  background: #fbfdff;
+}
+
+.test-archive-row > div {
+  display: grid;
+}
+
+.test-archive-row span {
+  color: #64748b;
+  font-size: 0.78rem;
+}
+
+.test-builder-card-archive {
+  padding: 0.1rem 0.5rem;
+  border: 1px solid #d7e1eb;
+  border-radius: 999px;
+  background: transparent;
+  color: #475569;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.report-excluded {
+  border-color: #f0b429;
+  background: #fffbeb;
+}
+
+.report-excluded h3 {
+  margin-top: 0;
+  color: #92400e;
+}
+
+.report-excluded > p {
+  margin: 0 0 0.6rem;
+  color: #92400e;
+  font-size: 0.85rem;
+}
+
+.report-excluded-sheet {
+  padding: 0.5rem 0.65rem;
+  border: 1px solid #f3d9a4;
+  border-radius: 8px;
+  background: #ffffff;
+  margin-bottom: 0.4rem;
+}
+
+.report-excluded-sheet ul {
+  margin: 0.3rem 0 0;
+  padding-left: 1.1rem;
+  color: #475569;
+  font-size: 0.85rem;
+}
+
+.scan-review-problems {
+  border-color: #f0b429;
+  background: #fffbeb;
+}
+
+.scan-review-problems h3 {
+  margin: 0 0 0.4rem;
+  color: #92400e;
+  font-size: 0.92rem;
+}
+
+.scan-review-problems ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: #475569;
+  font-size: 0.84rem;
+}
+
+.scan-review-problems > p {
+  margin: 0.45rem 0 0;
+  color: #92400e;
+  font-size: 0.78rem;
+}
+
+.scan-review-fixes {
+  margin: 0.4rem 0 0;
+  padding-left: 1.2rem;
+  display: grid;
+  gap: 0.5rem;
+  color: #475569;
+  font-size: 0.82rem;
+}
+
+.scan-review-fixes strong {
+  color: #92400e;
+}
+
+.scan-review-fixes .gradebook-manual-open {
+  margin-top: 0.3rem;
+}
+
+/* ---------------------------------------------------------------------------
+   Student performance and CSV export
+
+   The roster page leads with a student's record across every test, so it needs
+   a compact way to read a column of percentages: a bar for the shape, the
+   number beside it for the value. Reuses the histogram's blue and track
+   treatment so the two reporting surfaces read as one thing.
+   --------------------------------------------------------------------------- */
+
+.inline-select {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #475569;
+}
+
+.inline-select select {
+  font-weight: 400;
+}
+
+.roster-section-filter {
+  margin-bottom: 0.6rem;
+}
+
+.gradebook-notice {
+  border: 1px solid #93c5fd;
+  background: #eff6ff;
+  border-radius: 8px;
+  padding: 0.55rem 0.75rem;
+  margin: 0.4rem 0;
+  font-size: 0.88rem;
+  color: #1e3a5f;
+}
+
+.roster-list-row {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.roster-list-score {
+  font-size: 0.8rem;
+  color: #64748b;
+}
+
+.roster-performance {
+  display: grid;
+  gap: 1.1rem;
+}
+
+.roster-performance-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.roster-performance-header h3 {
+  margin: 0;
+}
+
+.roster-performance-header p {
+  margin: 0.15rem 0 0;
+  font-size: 0.85rem;
+  color: #64748b;
+}
+
+.roster-performance-section {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.roster-performance-section h4 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.roster-performance-section p {
+  margin: 0;
+  font-size: 0.83rem;
+  color: #64748b;
+}
+
+.performance-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 2.6rem;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 8rem;
+}
+
+.performance-bar-track {
+  background: #eef2f7;
+  border-radius: 4px;
+  height: 0.65rem;
+  overflow: hidden;
+}
+
+.performance-bar-fill {
+  height: 100%;
+  background: #2563eb;
+  border-radius: 4px;
+}
+
+.performance-bar-value {
+  text-align: right;
+  font-size: 0.82rem;
+  color: #475569;
+  font-variant-numeric: tabular-nums;
+}
+
+.performance-lineage-row td:first-child {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.performance-lineage-row .status-pill {
+  font-size: 0.72rem;
+  padding: 0.12rem 0.5rem;
+}
+
+/* An individual sitting under its test. Indented and quieter than the test row
+   above it -- the test's resolved score is the number that counts, and the
+   attempts are the working behind it. */
+.performance-attempt-row td {
+  font-size: 0.82rem;
+  color: #64748b;
+}
+
+.performance-attempt-row td:first-child {
+  padding-left: 1.5rem;
+}
+
+.performance-attempt-row.superseded td {
+  color: #94a3b8;
+}
+
+.performance-superseded-note {
+  margin-left: 0.5rem;
+  font-size: 0.72rem;
+  font-style: italic;
+}
+
+.roster-details-expander {
+  border-top: 1px solid #e2e8f0;
+  padding-top: 0.6rem;
+}
+
+.roster-details-expander summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #475569;
+}
+
+.roster-details-expander .roster-detail-readonly {
+  padding-top: 0.7rem;
+}
+
+.score-export-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  margin: 0.6rem 0;
+}
+
+.score-export-controls > label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #475569;
+  min-width: 15rem;
+}
+
+.score-export-controls select {
+  font-weight: 400;
+}
+
+.score-export-help {
+  margin: 0.2rem 0;
+  font-size: 0.83rem;
+  color: #64748b;
+}
+
+.administered-test-lineage {
+  margin-top: 0.45rem;
+}
+
+/* ---------------------------------------------------------------------------
+   Tests page: attention grouping and per-test drill-down
+
+   Scanning and reporting are questions about one test, so they live inside a
+   test rather than as pages of their own. The list's job is therefore to say
+   which test is waiting on the teacher, and to get them into it in one click.
+   --------------------------------------------------------------------------- */
+
+.test-attention-group {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.test-attention-group h3 {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+/* A left edge rather than a filled background: it marks the card without
+   fighting the buttons inside it for attention. */
+.administered-test-card.needs-attention {
+  border-left: 3px solid #f59e0b;
+}
+
+.administered-test-status {
+  font-size: 0.83rem;
+  color: #475569;
+}
+
+.administered-test-card.needs-attention .administered-test-status {
+  color: #b45309;
+  font-weight: 600;
+}
+
+/* The first button in a card's action group is the one the test is waiting on,
+   so it reads as the primary. */
+.administered-test-card .standards-import-actions > button:first-child {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #ffffff;
+}
+
+.test-drill-header h2 {
+  margin: 0.3rem 0 0.4rem;
+}
+
+.test-drill-header .administered-test-stack-toggle {
+  margin-top: 0;
+  border-style: solid;
+}
+
+.test-drill-tabs {
+  margin-bottom: 0.9rem;
+  border-bottom: 1px solid #e2e8f0;
+  padding-bottom: 0.6rem;
+}
+
+.tab-badge {
+  display: inline-block;
+  margin-left: 0.4rem;
+  min-width: 1.15rem;
+  padding: 0 0.32rem;
+  border-radius: 999px;
+  background: #f59e0b;
+  color: #ffffff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.gradebook-tabs button.active .tab-badge {
+  background: #ffffff;
+  color: #2563eb;
+}
+
+/* ---------------------------------------------------------------------------
+   Scan review: a working surface, not a document
+
+   Reviewing a sheet means comparing a scan against the answers read off it, so
+   both have to stay on screen together. The review pane therefore takes the
+   height the chrome leaves and scrolls inside itself: the sheet list scrolls in
+   its own column, the answers scroll in theirs, and the scan stays put.
+   --------------------------------------------------------------------------- */
+
+.administered-tests-workspace.is-review-open {
+  flex: 1;
+  min-height: 0;
+}
+
+.administered-tests-workspace.is-review-open .scan-review-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  flex: 1;
+  min-height: 0;
+}
+
+.administered-tests-workspace.is-review-open .scan-review-layout {
+  flex: 1;
+  min-height: 0;
+}
+
+.administered-tests-workspace.is-review-open .question-import-table-panel,
+.administered-tests-workspace.is-review-open .scan-review-detail {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* One compact row instead of a three-column grid of labelled inputs. The file
+   input itself is hidden behind a button -- the native control is 300px of
+   chrome for something clicked once per batch. */
+.scan-review-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  font-size: 0.82rem;
+  color: #475569;
+}
+
+.scan-review-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: 600;
+}
+
+.scan-review-toolbar select {
+  font-weight: 400;
+}
+
+.scan-review-toolbar .scan-review-toolbar-spacer {
+  margin-left: auto;
+}
+
+/* Nothing to resolve, so it states the fact and gets out of the way -- it used
+   to be a full bordered panel wrapped around a single line of text, which is
+   the common case on a pre-identified sheet. */
+.scan-review-identity-line {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-size: 0.82rem;
+  color: #475569;
+}
+
+.scan-review-identity-line strong {
+  color: #1e293b;
+}
+
+/* Back link, title, and counts on one line: three stacked bands of header was
+   most of what stood between opening a test and reaching its first answer. */
+.test-drill-header.is-compact {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  row-gap: 0.4rem;
+}
+
+.test-drill-header.is-compact h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.test-drill-header.is-compact .standards-header-summary {
+  gap: 0.4rem;
+}
+
+.test-drill-header.is-compact .status-pill {
+  font-size: 0.75rem;
+  padding: 0.15rem 0.55rem;
+}
+
+.test-drill-header.is-compact .administered-test-stack-toggle {
+  margin-top: 0;
+  border-style: solid;
+}
+
+.test-drill-header.is-compact .standards-header-actions {
+  margin-left: auto;
+}
+
+.test-drill-tabs.is-compact {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+/* ---------------------------------------------------------------------------
+   Mastery levels
+
+   A level is not a percentage, and the two sit in adjacent columns, so the
+   mastery bar is deliberately a different colour from the score bar and always
+   carries its ceiling ("2.5 / 4") rather than reading as a bare number.
+   --------------------------------------------------------------------------- */
+
+.performance-bar-fill.mastery {
+  background: #7c3aed;
+}
+
+.mastery-scale {
+  color: #94a3b8;
+  font-size: 0.75rem;
+}
+
+/* The evidence had something odd about it -- inconsistent levels, a gap in the
+   ladder, or a Rubric Levels report with no components. The hover text says
+   which; the marker is only here to prompt the hover. */
+.mastery-caveat {
+  color: #b45309;
+  font-weight: 700;
+  cursor: help;
+}
+
+.mastery-picker {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.link-button {
+  border: none;
+  background: none;
+  padding: 0;
+  color: #2563eb;
+  font-size: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* Scoring a rubric part by part, so Rubric Levels has components to
+   ladder rather than one undifferentiated total. */
+.scan-review-components {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.5rem;
+  border: 1px solid #ddd6fe;
+  border-radius: 8px;
+  background: #faf8ff;
+}
+
+.scan-review-component {
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr) 4.5rem 2.5rem;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+}
+
+.scan-review-component-level {
+  font-weight: 700;
+  color: #7c3aed;
+  font-size: 0.75rem;
+}
+
+.scan-review-component-criterion {
+  color: #475569;
+  min-width: 0;
+}
+
+.scan-review-component-max {
+  color: #94a3b8;
+  font-size: 0.78rem;
+}
+
+/* The rubric editor gained a level column beside points. */
+.rubric-row .rubric-points-field select.compact-number-input {
+  width: 100%;
+}
+
+/* The running total while a rubric's parts are being scored, so the row's
+   figure is visible as it is assembled rather than only after saving. */
+.scan-review-component-total {
+  margin: 0.15rem 0 0;
+  font-size: 0.82rem;
+  color: #475569;
+  text-align: right;
+}
+
+.scan-review-total-score {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #475569;
+}
+
+.scan-review-total-score input {
+  width: 6rem;
+  font-weight: 400;
+}
+
+.scan-review-save-score {
+  justify-self: start;
+  margin-top: 0.35rem;
 }

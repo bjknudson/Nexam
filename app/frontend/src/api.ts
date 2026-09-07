@@ -1,26 +1,47 @@
 import type {
+  AdministeredTestSnapshotCollectionModel,
+  AdministeredTestSnapshotListResponseModel,
+  AdministeredTestSnapshotModel,
+  AdministeredTestSnapshotSummaryModel,
   AssetInspectionBatchResponseModel,
   AssetInspectionResponseModel,
   AssetListResponseModel,
   AssetModel,
   AssetUploadResponseModel,
   BankSummaryModel,
+  CombinedGradeReportModel,
+  GradebookMasteryConfigModel,
   CourseDetailModel,
   CourseListResponseModel,
   CourseModel,
   CreateQuestionsFromJsonResponse,
   CreateStandardsManuallyRequest,
   StandardImportInspectionModel,
+  GradebookSummaryModel,
+  GradeReportModel,
+  GradingBatchListResponseModel,
+  GradingBatchModel,
   QuestionImportListResponseModel,
   QuestionImportPromoteResponseModel,
   QuestionImportStageModel,
   QuestionListResponseModel,
   QuestionModel,
+  ResponseSheetVersionAssignment,
+  ScannedSheetModel,
+  SheetPageSize,
   StandardImportResponseModel,
   StandardListResponseModel,
   StandardRecordModel,
   StandardReferenceModel,
   StandardSearchResponseModel,
+  MasteryCalculation,
+  MasteryReporting,
+  RetakeResolution,
+  ScoreExportMethod,
+  StudentListResponseModel,
+  StudentModel,
+  StudentPerformanceListResponseModel,
+  StudentPerformanceModel,
   TestDraftDetailModel,
   TestDraftListResponseModel,
   TestDraftModel,
@@ -36,6 +57,10 @@ function buildApiUrl(path: string): string {
   return apiBaseUrl ? `${apiBaseUrl}${path}` : path;
 }
 
+export interface ApiError extends Error {
+  status?: number;
+}
+
 async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const payload = await response.json().catch(() => ({ detail: "Request failed." }));
@@ -43,7 +68,9 @@ async function handleResponse<T>(response: Response): Promise<T> {
       typeof payload.detail === "string"
         ? payload.detail
         : JSON.stringify(payload.detail ?? "Request failed.");
-    throw new Error(detail);
+    const error: ApiError = new Error(detail);
+    error.status = response.status;
+    throw error;
   }
   return response.json() as Promise<T>;
 }
@@ -284,6 +311,11 @@ export async function createStandardPlaceholders(standardIds: string[]): Promise
 
 export async function listAssets(): Promise<AssetListResponseModel> {
   return handleResponse(await fetch(buildApiUrl("/api/assets")));
+}
+
+export async function closeBank(): Promise<void> {
+  const response = await fetch(buildApiUrl("/api/banks/close"), { method: "POST" });
+  if (!response.ok) throw new Error("Could not close the bank.");
 }
 
 export async function listQuestions(params: {
@@ -561,4 +593,515 @@ export async function createQuestionsFromJson(
 
 export function getAssetFileUrl(path: string): string {
   return buildApiUrl(`/api/assets/file?path=${encodeURIComponent(path)}`);
+}
+
+// ---------------------------------------------------------------------------
+// Gradebook (.nxgb) -- a separate document from a bank. See docs/grading.md.
+// ---------------------------------------------------------------------------
+
+export async function openGradebook(path: string): Promise<GradebookSummaryModel> {
+  return handleResponse(
+    await fetch(buildApiUrl("/api/gradebook/open"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    }),
+  );
+}
+
+export async function getCurrentGradebook(): Promise<GradebookSummaryModel> {
+  return handleResponse(await fetch(buildApiUrl("/api/gradebook/current")));
+}
+
+export async function createGradebook(payload: {
+  title: string;
+  description: string | null;
+  destinationPath: string;
+}): Promise<GradebookSummaryModel> {
+  return handleResponse(
+    await fetch(buildApiUrl("/api/gradebook/create"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: payload.title,
+        description: payload.description,
+        destination_path: payload.destinationPath,
+      }),
+    }),
+  );
+}
+
+export async function updateGradebookDetails(payload: {
+  title: string;
+  description: string | null;
+}): Promise<GradebookSummaryModel> {
+  return handleResponse(
+    await fetch(buildApiUrl("/api/gradebook/current"), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: payload.title, description: payload.description }),
+    }),
+  );
+}
+
+export async function saveGradebook(destinationPath?: string): Promise<{ saved_to: string }> {
+  return handleResponse(
+    await fetch(buildApiUrl("/api/gradebook/save"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ destination_path: destinationPath || null }),
+    }),
+  );
+}
+
+export async function openDemoGradebook(): Promise<GradebookSummaryModel> {
+  return handleResponse(
+    await fetch(buildApiUrl("/api/gradebook/open-demo"), { method: "POST" }),
+  );
+}
+
+export async function closeGradebook(): Promise<{ closed: boolean }> {
+  return handleResponse(await fetch(buildApiUrl("/api/gradebook/close"), { method: "POST" }));
+}
+
+export async function listStudents(): Promise<StudentListResponseModel> {
+  return handleResponse(await fetch(buildApiUrl("/api/gradebook/students")));
+}
+
+export async function createStudent(payload: {
+  firstName: string;
+  lastName: string;
+  externalId: string | null;
+  section?: string | null;
+  grouping?: string | null;
+}): Promise<StudentModel> {
+  return handleResponse(
+    await fetch(buildApiUrl("/api/gradebook/students"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        first_name: payload.firstName,
+        last_name: payload.lastName,
+        external_id: payload.externalId,
+        section: payload.section ?? null,
+        grouping: payload.grouping ?? null,
+      }),
+    }),
+  );
+}
+
+export async function updateStudent(
+  studentId: string,
+  payload: {
+    firstName: string;
+    lastName: string;
+    externalId: string | null;
+    section?: string | null;
+    grouping?: string | null;
+  },
+): Promise<StudentModel> {
+  return handleResponse(
+    await fetch(buildApiUrl(`/api/gradebook/students/${encodeURIComponent(studentId)}`), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        first_name: payload.firstName,
+        last_name: payload.lastName,
+        external_id: payload.externalId,
+        section: payload.section ?? null,
+        grouping: payload.grouping ?? null,
+      }),
+    }),
+  );
+}
+
+export async function deleteStudent(studentId: string): Promise<void> {
+  const response = await fetch(buildApiUrl(`/api/gradebook/students/${encodeURIComponent(studentId)}`), {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({ detail: "Request failed." }));
+    const detail =
+      typeof payload.detail === "string"
+        ? payload.detail
+        : JSON.stringify(payload.detail ?? "Request failed.");
+    throw new Error(detail);
+  }
+}
+
+export async function createAdministeredTest(payload: {
+  testId: string;
+  mode: "blank" | "pre_id";
+  pageSize?: SheetPageSize;
+  blankCount?: number | null;
+  studentIds?: string[] | null;
+}): Promise<AdministeredTestSnapshotModel> {
+  return handleResponse(
+    await fetch(buildApiUrl("/api/gradebook/administered-tests"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        test_id: payload.testId,
+        mode: payload.mode,
+        page_size: payload.pageSize ?? "letter",
+        blank_count: payload.blankCount ?? null,
+        student_ids: payload.studentIds ?? null,
+      }),
+    }),
+  );
+}
+
+export async function createResponseSheetBatch(payload: {
+  testId: string;
+  mode: "blank" | "pre_id";
+  pageSize?: SheetPageSize;
+  assignments: ResponseSheetVersionAssignment[];
+}): Promise<AdministeredTestSnapshotCollectionModel> {
+  return handleResponse(
+    await fetch(buildApiUrl(`/api/tests/${encodeURIComponent(payload.testId)}/response-sheets/batch`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mode: payload.mode,
+        page_size: payload.pageSize ?? "letter",
+        assignments: payload.assignments,
+      }),
+    }),
+  );
+}
+
+export function getResponseSheetBatchPdfUrl(generationBatchId: string): string {
+  return buildApiUrl(
+    `/api/gradebook/response-sheets/batches/${encodeURIComponent(generationBatchId)}/pdf`,
+  );
+}
+
+export async function listAdministeredTests(): Promise<AdministeredTestSnapshotListResponseModel> {
+  return handleResponse(await fetch(buildApiUrl("/api/gradebook/administered-tests")));
+}
+
+export async function getAdministeredTest(
+  snapshotId: string,
+): Promise<AdministeredTestSnapshotModel> {
+  return handleResponse(
+    await fetch(
+      buildApiUrl(`/api/gradebook/administered-tests/${encodeURIComponent(snapshotId)}`),
+    ),
+  );
+}
+
+export function getSheetPdfUrl(layoutId: string): string {
+  return buildApiUrl(`/api/gradebook/sheets/${encodeURIComponent(layoutId)}/pdf`);
+}
+
+export async function createScanBatch(payload: {
+  snapshotId: string;
+  sourceDescription?: string | null;
+}): Promise<GradingBatchModel> {
+  return handleResponse(
+    await fetch(buildApiUrl("/api/gradebook/batches"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        snapshot_id: payload.snapshotId,
+        source_description: payload.sourceDescription ?? null,
+      }),
+    }),
+  );
+}
+
+export async function listScanBatches(): Promise<GradingBatchListResponseModel> {
+  return handleResponse(await fetch(buildApiUrl("/api/gradebook/batches")));
+}
+
+export async function getScanBatch(batchId: string): Promise<GradingBatchModel> {
+  return handleResponse(await fetch(buildApiUrl(`/api/gradebook/batches/${encodeURIComponent(batchId)}`)));
+}
+
+/** Upload scans without naming a batch: each sheet's QR decides where it goes.
+ *
+ *  `fallbackSnapshotId` is where pages with an unreadable QR land -- pass the
+ *  printing the teacher is scanning from, so a page the scanner could not read
+ *  files itself under the test they are looking at. */
+export async function ingestScans(
+  files: File[],
+  fallbackSnapshotId?: string | null,
+): Promise<{ items: GradingBatchModel[] }> {
+  const form = new FormData();
+  for (const file of files) form.append("files", file);
+  if (fallbackSnapshotId) form.append("fallback_snapshot_id", fallbackSnapshotId);
+  return handleResponse(
+    await fetch(buildApiUrl("/api/gradebook/scans/ingest"), { method: "POST", body: form }),
+  );
+}
+
+export async function ingestScanBatch(batchId: string, files: File[]): Promise<GradingBatchModel> {
+  const formData = new FormData();
+  for (const file of files) {
+    formData.append("files", file);
+  }
+  return handleResponse(
+    await fetch(buildApiUrl(`/api/gradebook/batches/${encodeURIComponent(batchId)}/ingest`), {
+      method: "POST",
+      body: formData,
+    }),
+  );
+}
+
+export async function getReviewQueue(batchId: string): Promise<{ items: ScannedSheetModel[] }> {
+  return handleResponse(
+    await fetch(buildApiUrl(`/api/gradebook/batches/${encodeURIComponent(batchId)}/review-queue`)),
+  );
+}
+
+export function getSheetImageUrl(batchId: string, sheetId: string): string {
+  return buildApiUrl(
+    `/api/gradebook/batches/${encodeURIComponent(batchId)}/sheets/${encodeURIComponent(sheetId)}/image`,
+  );
+}
+
+export async function resolveSheetIdentity(
+  batchId: string,
+  sheetId: string,
+  payload: { studentId?: string | null; freeTextName?: string | null },
+): Promise<ScannedSheetModel> {
+  return handleResponse(
+    await fetch(
+      buildApiUrl(
+        `/api/gradebook/batches/${encodeURIComponent(batchId)}/sheets/${encodeURIComponent(sheetId)}/identity`,
+      ),
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          student_id: payload.studentId ?? null,
+          free_text_name: payload.freeTextName ?? null,
+        }),
+      },
+    ),
+  );
+}
+
+/** Match a scan to a printing by hand when its QR could not be read. */
+export async function reassignSheetToPrinting(
+  batchId: string,
+  sheetId: string,
+  snapshotId: string,
+  pageIndex = 0,
+): Promise<ScannedSheetModel> {
+  return handleResponse(
+    await fetch(
+      buildApiUrl(
+        `/api/gradebook/batches/${encodeURIComponent(batchId)}/sheets/${encodeURIComponent(sheetId)}/printing`,
+      ),
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ snapshot_id: snapshotId, page_index: pageIndex }),
+      },
+    ),
+  );
+}
+
+export async function overrideRowResult(
+  batchId: string,
+  sheetId: string,
+  questionId: string,
+  payload: {
+    overrideChoiceIndices?: number[] | null;
+    overrideValue?: number | null;
+    overrideBlank?: boolean | null;
+    overrideNote?: string | null;
+    manualScore?: number | null;
+    manualScoreMax?: number | null;
+    manualGraderNote?: string | null;
+    /** One score per frozen rubric component. When given, the row total is
+     *  derived from these rather than sent separately. */
+    componentScores?: number[] | null;
+  },
+): Promise<ScannedSheetModel> {
+  // Only the fields this caller named go in the body. Sending every key with a
+  // `?? null` fallback made each save wipe the fields it wasn't touching -- a
+  // score save cleared the grader's note and the points it was scored out of.
+  // An explicitly-passed null is still sent, because that is the caller
+  // deliberately clearing the field.
+  const body: Record<string, unknown> = {};
+  const wireName: Record<keyof typeof payload, string> = {
+    overrideChoiceIndices: "override_choice_indices",
+    overrideBlank: "override_blank",
+    overrideValue: "override_value",
+    overrideNote: "override_note",
+    manualScore: "manual_score",
+    manualScoreMax: "manual_score_max",
+    manualGraderNote: "manual_grader_note",
+    componentScores: "component_scores",
+  };
+  for (const [key, wire] of Object.entries(wireName)) {
+    if (key in payload) body[wire] = payload[key as keyof typeof payload];
+  }
+
+  return handleResponse(
+    await fetch(
+      buildApiUrl(
+        `/api/gradebook/batches/${encodeURIComponent(batchId)}/sheets/${encodeURIComponent(sheetId)}/rows/${encodeURIComponent(questionId)}`,
+      ),
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    ),
+  );
+}
+
+export async function getGradeReport(batchId: string): Promise<GradeReportModel> {
+  return handleResponse(
+    await fetch(buildApiUrl(`/api/gradebook/batches/${encodeURIComponent(batchId)}/report`)),
+  );
+}
+
+/** Pass `lineageId` where you have one -- it follows the explicit retake link,
+ *  so a retake linked in under a different title is included. `testTitle` is
+ *  for callers that only know the title. */
+export async function getCombinedLineageReport(
+  target: { lineageId?: string | null; testTitle?: string | null },
+): Promise<CombinedGradeReportModel> {
+  const searchParams = new URLSearchParams();
+  if (target.lineageId) searchParams.set("lineage_id", target.lineageId);
+  else if (target.testTitle) searchParams.set("test_title", target.testTitle);
+  return handleResponse(
+    await fetch(buildApiUrl(`/api/gradebook/report/combined?${searchParams.toString()}`)),
+  );
+}
+
+export async function recordPerformanceRun(
+  batchId: string,
+  cohortLabel?: string | null,
+): Promise<TestDraftDetailModel> {
+  return handleResponse(
+    await fetch(
+      buildApiUrl(`/api/gradebook/batches/${encodeURIComponent(batchId)}/record-performance-run`),
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cohort_label: cohortLabel ?? null }),
+      },
+    ),
+  );
+}
+
+export async function getStudentPerformance(
+  resolution: RetakeResolution = "most_recent",
+): Promise<StudentPerformanceListResponseModel> {
+  const searchParams = new URLSearchParams({ resolution });
+  return handleResponse(
+    await fetch(buildApiUrl(`/api/gradebook/students/performance?${searchParams.toString()}`)),
+  );
+}
+
+export async function getOneStudentPerformance(
+  studentId: string,
+  resolution: RetakeResolution = "most_recent",
+): Promise<StudentPerformanceModel> {
+  const searchParams = new URLSearchParams({ resolution });
+  return handleResponse(
+    await fetch(
+      buildApiUrl(
+        `/api/gradebook/students/${encodeURIComponent(studentId)}/performance?${searchParams.toString()}`,
+      ),
+    ),
+  );
+}
+
+/** Link a printing to another as the same test, so a retake reads as a second
+ *  attempt rather than a separate test. Pass neither id to unlink it, which
+ *  puts it back under whatever its own title says. */
+export async function relinkSnapshotLineage(
+  snapshotId: string,
+  payload: { lineageOfSnapshotId?: string | null; lineageId?: string | null } = {},
+): Promise<AdministeredTestSnapshotSummaryModel> {
+  return handleResponse(
+    await fetch(
+      buildApiUrl(`/api/gradebook/administered-tests/${encodeURIComponent(snapshotId)}/lineage`),
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lineage_of_snapshot_id: payload.lineageOfSnapshotId ?? null,
+          lineage_id: payload.lineageId ?? null,
+        }),
+      },
+    ),
+  );
+}
+
+/** Fetches the CSV as text plus the filename the backend suggests, rather than
+ *  navigating to the URL: `<a download>` is inert inside the macOS webview, so
+ *  the caller hands the bytes to the shell's save dialog instead. */
+export async function fetchScoresCsv(options: {
+  method: ScoreExportMethod;
+  resolution: RetakeResolution;
+  section?: string | null;
+}): Promise<{ csv: string; filename: string }> {
+  const searchParams = new URLSearchParams({
+    method: options.method,
+    resolution: options.resolution,
+  });
+  if (options.section) searchParams.set("section", options.section);
+
+  const response = await fetch(
+    buildApiUrl(`/api/gradebook/export/scores.csv?${searchParams.toString()}`),
+  );
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({ detail: "Could not build the export." }));
+    throw new Error(
+      typeof payload.detail === "string" ? payload.detail : "Could not build the export.",
+    );
+  }
+
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const match = disposition.match(/filename="([^"]+)"/);
+  return {
+    csv: await response.text(),
+    filename: match ? match[1] : `scores-${options.method}.csv`,
+  };
+}
+
+export async function getMasterySettings(): Promise<GradebookMasteryConfigModel> {
+  return handleResponse(await fetch(buildApiUrl("/api/gradebook/mastery-settings")));
+}
+
+/** Change the gradebook default. Tests carrying their own override keep it. */
+export async function setDefaultMasterySettings(payload: {
+  calculation?: MasteryCalculation | null;
+  reporting?: MasteryReporting | null;
+}): Promise<GradebookMasteryConfigModel> {
+  return handleResponse(
+    await fetch(buildApiUrl("/api/gradebook/mastery-settings"), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        calculation: payload.calculation ?? null,
+        reporting: payload.reporting ?? null,
+      }),
+    }),
+  );
+}
+
+/** Override one test's mode. Passing neither field drops the override, putting
+ *  the test back on the gradebook default. */
+export async function setLineageMasterySettings(
+  lineageId: string,
+  payload: { calculation?: MasteryCalculation | null; reporting?: MasteryReporting | null } = {},
+): Promise<GradebookMasteryConfigModel> {
+  return handleResponse(
+    await fetch(buildApiUrl(`/api/gradebook/mastery-settings/${encodeURIComponent(lineageId)}`), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        calculation: payload.calculation ?? null,
+        reporting: payload.reporting ?? null,
+      }),
+    }),
+  );
 }

@@ -9,7 +9,7 @@ Some questions cannot stand alone. A reading comprehension set, a lab data table
 document-based history prompt, and a shared diagram all have the same shape: one piece
 of stimulus material, several questions about it.
 
-Nexzam has no way to express that today. The only options are both bad:
+Nexam has no way to express that today. The only options are both bad:
 
 - **Duplicate the stimulus into every question's prompt.** Six questions about one
   passage means six copies of the text. A typo fix is six edits, and a printed test

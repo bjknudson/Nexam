@@ -2,7 +2,7 @@
 
 ## Goal
 
-Add a teacher-friendly SVG editor that can build and edit simple instructional diagrams directly inside Nexzam without requiring an external vector tool.
+Add a teacher-friendly SVG editor that can build and edit simple instructional diagrams directly inside Nexam without requiring an external vector tool.
 
 ## Scope for the first editor slice
 
@@ -60,12 +60,12 @@ Variable text should carry:
 
 On SVG export, variable text renders as `{{variable_name}}`. The current question-level `svg_variables` map can continue to populate these placeholders with no schema break.
 
-For numeric geometry, Nexzam can also support simple SVG expressions such as `{{calc: 60 - arrow_length}}`. That lets one variable drive line length, arrowhead position, and label position together instead of forcing authors to hand-calculate every coordinate.
+For numeric geometry, Nexam can also support simple SVG expressions such as `{{calc: 60 - arrow_length}}`. That lets one variable drive line length, arrowhead position, and label position together instead of forcing authors to hand-calculate every coordinate.
 
 ## Editing workflow
 
 1. User creates a new SVG asset or opens an existing SVG asset.
-2. Nexzam parses supported SVG nodes into the internal scene model.
+2. Nexam parses supported SVG nodes into the internal scene model.
 3. The canvas supports select, move, resize, reorder, duplicate, and delete.
 4. The inspector shows geometry and style controls for the current selection.
 5. Text nodes can toggle between literal text and variable placeholders.

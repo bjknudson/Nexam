@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import uuid
 from pathlib import Path
 from typing import Any
 import zipfile
@@ -8,16 +9,21 @@ import zipfile
 from fastapi import FastAPI, File, Form, Query, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 
 from .models import (
+    AdministeredTestSnapshotCollectionModel,
     AssetInspectionBatchRequest,
     AssetInspectionRequest,
     AddQuestionToTestRequest,
     CopyTestDraftRequest,
+    CreateAdministeredTestRequest,
     CreateBankRequest,
+    CreateGradebookRequest,
+    CreateResponseSheetBatchRequest,
+    CreateScanBatchRequest,
     CreateStandardPlaceholdersRequest,
     CreateStandardsManuallyRequest,
     CreateQuestionRequest,
@@ -26,24 +32,36 @@ from .models import (
     CreateTestDraftRequest,
     NextQuestionIdResponse,
     OpenBankRequest,
+    OpenGradebookRequest,
+    OverrideRowResultRequest,
     QuestionImportPromoteRequest,
     QuestionImportRowUpdateRequest,
     QuestionModel,
     QuestionType,
+    ReassignSheetRequest,
+    RecordPerformanceRunRequest,
+    RelinkSnapshotLineageRequest,
+    UpdateMasterySettingsRequest,
+    ResolveSheetIdentityRequest,
     SaveBankRequest,
+    SaveGradebookRequest,
     SeedCourseRequest,
     SetTestCoursesRequest,
     StandardRecordModel,
     TestDraftModel,
     UpdateBankDetailsRequest,
+    UpdateGradebookDetailsRequest,
     UpsertCourseRequest,
+    UpsertStudentRequest,
 )
+from .gradebook_service import GradebookService
 from .service import BankWorkspaceError, BankWorkspaceService
 from .version import get_backend_version, is_frozen
 
 
-app = FastAPI(title="Nexzam Backend", version="0.1.0")
+app = FastAPI(title="Nexam Backend", version="0.1.0")
 service = BankWorkspaceService()
+gradebook_service = GradebookService()
 
 app.add_middleware(
     CORSMiddleware,
@@ -91,7 +109,7 @@ def open_bank(request: OpenBankRequest):
 
 @app.post("/api/banks/open-demo")
 def open_demo_bank():
-    bundled_demo_bank = os.environ.get("NEXZAM_DEMO_BANK_PATH")
+    bundled_demo_bank = os.environ.get("NEXAM_DEMO_BANK_PATH")
     if bundled_demo_bank:
         return service.open_bank(bundled_demo_bank)
 
@@ -124,6 +142,431 @@ def update_bank_details(request: UpdateBankDetailsRequest):
 @app.post("/api/banks/save")
 def save_bank(request: SaveBankRequest):
     return {"saved_to": service.save_bank(request.destination_path)}
+
+
+def _validated_resolution(resolution: str) -> str:
+    """How a student's retakes collapse into the one score that counts."""
+
+    if resolution not in ("most_recent", "highest", "average"):
+        raise BankWorkspaceError(
+            f"Unknown retake resolution: {resolution}. "
+            "Expected most_recent, highest, or average.",
+            status_code=400,
+        )
+    return resolution
+
+
+@app.post("/api/gradebook/open")
+def open_gradebook(request: OpenGradebookRequest):
+    return gradebook_service.open_gradebook(request.path)
+
+
+@app.post("/api/gradebook/open-demo")
+def open_demo_gradebook():
+    """Open the shipped sample roster.
+
+    Resolved the same way the demo bank is: a bundled resource path in a
+    release build, the repo's samples directory when running from source.
+    """
+
+    bundled = os.environ.get("NEXAM_DEMO_GRADEBOOK_PATH")
+    if bundled:
+        return gradebook_service.open_gradebook(bundled)
+
+    repo_root = Path(__file__).resolve().parents[2]
+    demo_gradebook = repo_root / "samples" / "demo-gradebook.nxgb"
+    if not demo_gradebook.exists():
+        raise BankWorkspaceError(
+            "The demo gradebook is missing. Run scripts/build_demo_gradebook.py.",
+            status_code=404,
+        )
+    return gradebook_service.open_gradebook(str(demo_gradebook))
+
+
+@app.get("/api/gradebook/current")
+def get_current_gradebook():
+    return gradebook_service.get_summary()
+
+
+@app.post("/api/gradebook/create")
+def create_gradebook(request: CreateGradebookRequest):
+    return gradebook_service.create_gradebook(
+        request.title, request.description, request.destination_path
+    )
+
+
+@app.put("/api/gradebook/current")
+def update_gradebook_details(request: UpdateGradebookDetailsRequest):
+    return gradebook_service.update_gradebook_details(request.title, request.description)
+
+
+@app.post("/api/gradebook/save")
+def save_gradebook(request: SaveGradebookRequest):
+    return {"saved_to": gradebook_service.save_gradebook(request.destination_path)}
+
+
+@app.post("/api/gradebook/close")
+def close_gradebook():
+    gradebook_service.close_gradebook()
+    return {"closed": True}
+
+
+@app.get("/api/gradebook/students")
+def list_students():
+    return gradebook_service.list_students()
+
+
+@app.put("/api/gradebook/students/{student_id}")
+def upsert_student(student_id: str, request: UpsertStudentRequest):
+    return gradebook_service.upsert_student(student_id, request)
+
+
+@app.post("/api/gradebook/students")
+def create_student(request: UpsertStudentRequest):
+    return gradebook_service.upsert_student(None, request)
+
+
+@app.delete("/api/gradebook/students/{student_id}", status_code=204)
+def delete_student(student_id: str):
+    gradebook_service.delete_student(student_id)
+    return None
+
+
+@app.post("/api/gradebook/administered-tests")
+def create_administered_test(request: CreateAdministeredTestRequest):
+    """The hand-off: reads the live test from the open bank, writes only into
+    the open gradebook. See docs/grading-plan.md."""
+    test_detail = service.get_test_draft(request.test_id)
+    if not test_detail.test.finished:
+        raise BankWorkspaceError(
+            "Finish this test before generating response sheets for it.",
+            status_code=400,
+        )
+    source_bank_title = service.get_summary().manifest.title
+
+    # An interchangeable sheet has to carry every version's key, so the lineage
+    # -- same title, the convention "New Version" already follows -- comes along.
+    # Only finished versions are eligible: an unfinished same-titled draft is
+    # often a leftover copy, not a real sibling version, and must not leak a
+    # phantom version bubble onto the printed sheet.
+    alternates = []
+    if test_detail.test.interchangeable_sheets:
+        lineage_key = test_detail.test.title.strip().casefold()
+        for other in service.list_test_drafts().items:
+            if other.test.id == test_detail.test.id:
+                continue
+            if not other.test.finished:
+                continue
+            if other.test.title.strip().casefold() == lineage_key:
+                alternates.append((other.test, other.questions))
+
+    snapshot = gradebook_service.create_snapshot_and_sheets(
+        test=test_detail.test,
+        questions=test_detail.questions,
+        source_bank_title=source_bank_title,
+        mode=request.mode,
+        page_size=request.page_size,
+        blank_count=request.blank_count,
+        student_ids=request.student_ids,
+        alternates=alternates,
+    )
+
+    # Sheets are now in the wild for every version actually printed on them;
+    # lock each one against edits that would move a bubble out from under them.
+    service.mark_test_administered(test_detail.test.id)
+    used_alternate_ids = {key.test_id for key in snapshot.alternate_answer_keys}
+    for other_test, _ in alternates:
+        if other_test.id in used_alternate_ids:
+            service.mark_test_administered(other_test.id)
+
+    return snapshot
+
+
+@app.post("/api/tests/{test_id}/response-sheets/batch")
+def create_response_sheet_batch(test_id: str, request: CreateResponseSheetBatchRequest):
+    """Generate sheets across several versions of one lineage in a single run.
+
+    `test_id` anchors the lineage (same title, the "New Version" convention);
+    each assignment names one of that lineage's finished versions by its
+    `version` label and the students taking it. Every assignment gets its own
+    dedicated sheet -- no "mark your version" bubble, since the teacher
+    already knows who's taking what.
+    """
+
+    anchor = service.get_test_draft(test_id)
+    if not anchor.test.finished:
+        raise BankWorkspaceError(
+            "Finish this test before generating response sheets for it.",
+            status_code=400,
+        )
+
+    lineage_key = anchor.test.title.strip().casefold()
+    lineage_by_version = {
+        detail.test.version: detail
+        for detail in service.list_test_drafts().items
+        if detail.test.finished and detail.test.title.strip().casefold() == lineage_key
+    }
+
+    source_bank_title = service.get_summary().manifest.title
+    batch_id = uuid.uuid4().hex
+    snapshots = []
+    for assignment in request.assignments:
+        if request.mode == "blank":
+            if not assignment.blank_count:
+                continue
+            student_ids, blank_count = None, assignment.blank_count
+        else:
+            if not assignment.student_ids:
+                continue
+            student_ids, blank_count = assignment.student_ids, None
+
+        version_detail = lineage_by_version.get(assignment.version)
+        if version_detail is None:
+            raise BankWorkspaceError(
+                f"No finished version '{assignment.version}' found for this test.",
+                status_code=400,
+            )
+        snapshot = gradebook_service.create_snapshot_and_sheets(
+            test=version_detail.test,
+            questions=version_detail.questions,
+            source_bank_title=source_bank_title,
+            mode=request.mode,
+            page_size=request.page_size,
+            blank_count=blank_count,
+            student_ids=student_ids,
+            generation_batch_id=batch_id,
+        )
+        service.mark_test_administered(version_detail.test.id)
+        snapshots.append(snapshot)
+
+    return AdministeredTestSnapshotCollectionModel(items=snapshots)
+
+
+@app.get("/api/gradebook/response-sheets/batches/{generation_batch_id}/pdf")
+def get_response_sheet_batch_pdf(generation_batch_id: str):
+    pdf_bytes = gradebook_service.get_batch_pdf_bytes(generation_batch_id)
+    return Response(content=pdf_bytes, media_type="application/pdf")
+
+
+@app.get("/api/gradebook/administered-tests")
+def list_administered_tests():
+    return gradebook_service.list_administered_tests()
+
+
+@app.get("/api/gradebook/administered-tests/{snapshot_id}")
+def get_administered_test(snapshot_id: str):
+    return gradebook_service.get_administered_test(snapshot_id)
+
+
+@app.get("/api/gradebook/sheets/{layout_id}/pdf")
+def get_sheet_pdf(layout_id: str):
+    pdf_bytes = gradebook_service.get_sheet_pdf_bytes(layout_id)
+    return Response(content=pdf_bytes, media_type="application/pdf")
+
+
+@app.post("/api/gradebook/batches")
+def create_scan_batch(request: CreateScanBatchRequest):
+    return gradebook_service.create_scan_batch(request.snapshot_id, request.source_description)
+
+
+@app.get("/api/gradebook/batches")
+def list_scan_batches():
+    return gradebook_service.list_scan_batches()
+
+
+@app.get("/api/gradebook/batches/{batch_id}")
+def get_scan_batch(batch_id: str):
+    return gradebook_service.get_scan_batch(batch_id)
+
+
+@app.post("/api/gradebook/scans/ingest")
+async def ingest_scans(
+    files: list[UploadFile] = File(...),
+    fallback_snapshot_id: str | None = Form(None),
+):
+    """Sort a pile of scans into batches by the test each sheet belongs to.
+
+    `fallback_snapshot_id` is where pages with an unreadable QR go -- the test
+    the teacher is scanning from, when the caller knows it."""
+
+    uploaded = [(file.filename or "scan", await file.read()) for file in files]
+    return {"items": gradebook_service.ingest_scans(uploaded, fallback_snapshot_id)}
+
+
+@app.post("/api/gradebook/batches/{batch_id}/ingest")
+async def ingest_scan_batch(batch_id: str, files: list[UploadFile] = File(...)):
+    uploaded = [(file.filename or "scan", await file.read()) for file in files]
+    return gradebook_service.ingest_scan_batch(batch_id, uploaded)
+
+
+@app.get("/api/gradebook/batches/{batch_id}/review-queue")
+def get_review_queue(batch_id: str):
+    return {"items": gradebook_service.get_review_queue(batch_id)}
+
+
+@app.get("/api/gradebook/batches/{batch_id}/sheets/{sheet_id}/image")
+def get_sheet_image(batch_id: str, sheet_id: str):
+    image_bytes = gradebook_service.get_sheet_image_bytes(batch_id, sheet_id)
+    return Response(content=image_bytes, media_type="image/png")
+
+
+@app.put("/api/gradebook/batches/{batch_id}/sheets/{sheet_id}/identity")
+def resolve_sheet_identity(batch_id: str, sheet_id: str, request: ResolveSheetIdentityRequest):
+    return gradebook_service.resolve_sheet_identity(
+        batch_id,
+        sheet_id,
+        student_id=request.student_id,
+        free_text_name=request.free_text_name,
+    )
+
+
+@app.put("/api/gradebook/batches/{batch_id}/sheets/{sheet_id}/printing")
+def reassign_sheet_to_printing(batch_id: str, sheet_id: str, request: ReassignSheetRequest):
+    return gradebook_service.reassign_sheet_to_printing(
+        batch_id, sheet_id, request.snapshot_id, request.page_index
+    )
+
+
+@app.put("/api/gradebook/batches/{batch_id}/sheets/{sheet_id}/rows/{question_id}")
+def override_row_result(
+    batch_id: str, sheet_id: str, question_id: str, request: OverrideRowResultRequest
+):
+    # exclude_unset, so a request that says nothing about a field leaves it
+    # alone rather than nulling it. An explicit null in the body still clears.
+    return gradebook_service.override_row_result(
+        batch_id, sheet_id, question_id, **request.model_dump(exclude_unset=True)
+    )
+
+
+@app.get("/api/gradebook/batches/{batch_id}/report")
+def get_grade_report(batch_id: str):
+    return gradebook_service.get_grade_report(batch_id)
+
+
+@app.get("/api/gradebook/report/combined")
+def get_combined_lineage_report(
+    test_title: str | None = Query(None), lineage_id: str | None = Query(None)
+):
+    """Pass `lineage_id` where you have one -- it follows the explicit retake
+    link. `test_title` remains for callers that only know the title."""
+
+    return gradebook_service.get_combined_lineage_report(test_title, lineage_id)
+
+
+@app.get("/api/gradebook/students/performance")
+def get_student_performance(resolution: str = Query("most_recent")):
+    """Every student's record across every test in this gradebook.
+
+    Returned for the whole roster in one call: the scoring pass reads every
+    batch either way, so a per-student endpoint would cost the same and make
+    the roster page issue one request per student.
+    """
+
+    return gradebook_service.get_student_performance(_validated_resolution(resolution))
+
+
+@app.get("/api/gradebook/students/{student_id}/performance")
+def get_one_student_performance(student_id: str, resolution: str = Query("most_recent")):
+    return gradebook_service.get_one_student_performance(
+        student_id, _validated_resolution(resolution)
+    )
+
+
+@app.put("/api/gradebook/administered-tests/{snapshot_id}/lineage")
+def relink_snapshot_lineage(snapshot_id: str, request: RelinkSnapshotLineageRequest):
+    """Link a printing to another as the same test, so a retake counts as a
+    second attempt rather than a separate test nobody ever passed."""
+
+    return gradebook_service.relink_snapshot_lineage(
+        snapshot_id,
+        lineage_of_snapshot_id=request.lineage_of_snapshot_id,
+        lineage_id=request.lineage_id,
+    )
+
+
+@app.get("/api/gradebook/mastery-settings")
+def get_mastery_settings():
+    """The gradebook default plus every per-test override, keyed by lineage."""
+
+    return gradebook_service.get_mastery_config()
+
+
+@app.put("/api/gradebook/mastery-settings")
+def set_default_mastery_settings(request: UpdateMasterySettingsRequest):
+    """Change the gradebook default. Tests carrying their own override keep it."""
+
+    return gradebook_service.set_default_mastery_settings(request.calculation, request.reporting)
+
+
+@app.put("/api/gradebook/mastery-settings/{lineage_id}")
+def set_lineage_mastery_settings(lineage_id: str, request: UpdateMasterySettingsRequest):
+    """Override one test's mode, or -- with both fields null -- drop the
+    override so the test follows the gradebook default again."""
+
+    return gradebook_service.set_lineage_mastery_settings(
+        lineage_id, request.calculation, request.reporting
+    )
+
+
+@app.get("/api/gradebook/export/scores.csv")
+def export_scores_csv(
+    method: str = Query("total"),
+    resolution: str = Query("most_recent"),
+    section: str | None = Query(None),
+):
+    """Student scores as CSV, in one of three shapes -- see grading/csv_export.py.
+
+    Standard *codes* only exist in a bank, so they are used when one happens to
+    be open and standard ids stand in when it is not. The export never requires
+    a bank: a gradebook has to stay exportable on its own.
+    """
+
+    if method not in ("total", "by_standard", "mastery"):
+        raise BankWorkspaceError(
+            f"Unknown export method: {method}. Expected total, by_standard, or mastery.",
+            status_code=400,
+        )
+
+    standard_codes: dict[str, str] = {}
+    try:
+        # A standard with no code of its own falls through to its id, which is
+        # always present -- a "None" column header would be worse than an id.
+        standard_codes = {
+            standard.id: standard.code
+            for standard in service.list_standards().items
+            if standard.code
+        }
+    except BankWorkspaceError:
+        pass
+
+    csv_text, filename = gradebook_service.export_scores_csv(
+        method=method,
+        resolution=_validated_resolution(resolution),
+        section=section,
+        standard_codes=standard_codes,
+    )
+    return Response(
+        content=csv_text,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/api/gradebook/batches/{batch_id}/record-performance-run")
+def record_batch_as_performance_run(batch_id: str, request: RecordPerformanceRunRequest):
+    """Requires a bank to be open -- this is the one place a completed
+    grading result can flow back into the bank, and it's an explicit,
+    user-initiated action, never automatic. See docs/grading-plan.md."""
+
+    batch = gradebook_service.get_scan_batch(batch_id)
+    snapshot = gradebook_service.get_snapshot(batch.snapshot_id)
+    run = gradebook_service.build_performance_run(batch_id, request.cohort_label)
+    return service.add_performance_run(snapshot.source_test_id, run)
+
+
+@app.post("/api/banks/close", status_code=204)
+def close_bank():
+    service.close_bank()
 
 
 @app.get("/api/questions")

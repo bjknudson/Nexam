@@ -19,6 +19,8 @@ interface SettingsProps {
   onQuestionsShowStatusFilterChange: (value: boolean) => void;
   questionsShortenText: boolean;
   onQuestionsShortenTextChange: (value: boolean) => void;
+  rubricMasteryLevels: boolean;
+  onRubricMasteryLevelsChange: (value: boolean) => void;
   bankDirectory: string;
   onBankDirectoryChange: (value: string) => void;
 }
@@ -40,6 +42,8 @@ function Settings({
   onQuestionsShowStatusFilterChange,
   questionsShortenText,
   onQuestionsShortenTextChange,
+  rubricMasteryLevels,
+  onRubricMasteryLevelsChange,
   bankDirectory,
   onBankDirectoryChange,
 }: SettingsProps) {
@@ -159,6 +163,25 @@ function Settings({
                 type="checkbox"
                 checked={questionsShortenText}
                 onChange={(event) => onQuestionsShortenTextChange(event.target.checked)}
+              />
+            </div>
+          </section>
+
+          <section className="settings-section">
+            <h3>Grading</h3>
+            <div className="settings-row">
+              <span>
+                Mastery levels on rubrics
+                <small>
+                  Adds a difficulty to each rubric row, and offers Rubric Levels as a way of
+                  calculating mastery. Only worth turning on if you write rubrics whose parts step
+                  up in difficulty. Anything you have already set is kept either way.
+                </small>
+              </span>
+              <input
+                type="checkbox"
+                checked={rubricMasteryLevels}
+                onChange={(event) => onRubricMasteryLevelsChange(event.target.checked)}
               />
             </div>
           </section>

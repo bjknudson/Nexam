@@ -4,7 +4,7 @@
 <dict>
 	<!--
 	Hardened runtime is required for notarization. The frozen Python
-	backend (dist/backend/nexzam-backend, built by PyInstaller) loads a
+	backend (dist/backend/nexam-backend, built by PyInstaller) loads a
 	large number of its own bundled .so/.dylib files at runtime; even
 	though the release workflow signs every one of them with this same
 	Developer ID identity, PyInstaller's own notarization guidance calls

@@ -472,7 +472,7 @@ export default function QuestionImportWorkspace({
     const next = { ...draftQuestion };
     delete next.id;
     setDraftQuestion(next);
-    await saveDraftQuestion(next, selectedPending.row.selected, "Using an automatic Nexzam id.");
+    await saveDraftQuestion(next, selectedPending.row.selected, "Using an automatic Nexam id.");
   }
 
   async function addMissingStandards(ids: string[]) {
@@ -586,7 +586,7 @@ export default function QuestionImportWorkspace({
               type="button"
               onClick={() =>
                 downloadTemplateFile(
-                  "nexzam-question-import-template.json",
+                  "nexam-question-import-template.json",
                   `${QUESTION_IMPORT_JSON_TEMPLATE}\n`,
                   "application/json",
                 )
@@ -598,7 +598,7 @@ export default function QuestionImportWorkspace({
               type="button"
               onClick={() =>
                 downloadTemplateFile(
-                  "nexzam-question-import-template.csv",
+                  "nexam-question-import-template.csv",
                   `${QUESTION_IMPORT_CSV_TEMPLATE}\n`,
                   "text/csv",
                 )
@@ -620,7 +620,7 @@ export default function QuestionImportWorkspace({
             value={idPolicy}
             onChange={(event) => setIdPolicy(event.target.value as "auto" | "keep_imported")}
           >
-            <option value="auto">Use automatic Nexzam IDs</option>
+            <option value="auto">Use automatic Nexam IDs</option>
             <option value="keep_imported">Keep imported IDs</option>
           </select>
         </label>

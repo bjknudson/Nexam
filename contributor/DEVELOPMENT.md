@@ -1,7 +1,7 @@
-# Nexzam — Developer Reference
+# Nexam — Developer Reference
 
-Quick reference for building and running Nexzam from source. For the
-product-level description of what Nexzam does, see the root
+Quick reference for building and running Nexam from source. For the
+product-level description of what Nexam does, see the root
 [README.md](../README.md). For the contribution process (issue/PR
 conventions, code style, etc.), see [CONTRIBUTOR.md](CONTRIBUTOR.md)
 (in progress).
@@ -16,7 +16,7 @@ conventions, code style, etc.), see [CONTRIBUTOR.md](CONTRIBUTOR.md)
 ## Repo layout
 
 ```text
-nexzam/
+nexam/
 ├── README.md                # user-facing help doc
 ├── AGENTS.md                # instructions for AI coding agents
 ├── DISTRIBUTION.md           # building/sharing a beta .app with testers
@@ -63,11 +63,13 @@ nexzam/
 ├── samples/
 │   ├── demo-bank/
 │   ├── demo-bank.bok
+│   ├── demo-gradebook.nxgb          # sample roster for trying the grading flow
 │   ├── sample-import.csv            # bulk question import example
 │   └── sample-standards-import.csv  # standards import with per-standard sources
 └── scripts/
     ├── build_backend_binary.sh
-    └── build_demo_bok.py
+    ├── build_demo_bok.py
+    └── build_demo_gradebook.py
 ```
 
 ## `.bok` package layout
@@ -257,7 +259,7 @@ GET    /api/assets/file
 
 ## Save model
 
-Nexzam distinguishes two save layers:
+Nexam distinguishes two save layers:
 
 - **Working copy**: unpacked files in a managed workspace directory.
   Form edits autosave here; raw JSON edits save here only when

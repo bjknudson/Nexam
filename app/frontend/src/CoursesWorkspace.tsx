@@ -22,7 +22,7 @@ import type {
   TestDraftDetailModel,
 } from "./types";
 
-const PANE_SYNC_CHANNEL = "nexzam-pane-sync";
+const PANE_SYNC_CHANNEL = "nexam-pane-sync";
 
 type CourseSection = "standards" | "tests" | "coverage";
 

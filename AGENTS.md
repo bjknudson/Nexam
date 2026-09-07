@@ -1,8 +1,8 @@
-# Nexzam agent guidance
+# Nexam agent guidance
 
 ## Product and architecture priorities
 
-- Nexzam is **desktop-first** and **local-first**.
+- Nexam is **desktop-first** and **local-first**.
 - Do **not** add user-account, authentication, or multi-user systems.
 - `.bok` is the source-of-truth package format.
 - Use an unpacked working directory for edits, then repack on save.

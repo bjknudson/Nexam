@@ -11,7 +11,7 @@ use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, Messag
 use tauri::menu::{MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, WindowEvent};
 
-const UPDATE_REPO: &str = "bjknudson/Nexzam";
+const UPDATE_REPO: &str = "bjknudson/Nexam";
 
 #[tauri::command]
 fn get_desktop_context(state: tauri::State<'_, Arc<AppRuntimeState>>) -> DesktopContext {
@@ -21,8 +21,24 @@ fn get_desktop_context(state: tauri::State<'_, Arc<AppRuntimeState>>) -> Desktop
 #[tauri::command]
 fn open_bank_dialog(initial_directory: Option<String>) -> Option<String> {
     let mut dialog = FileDialog::new()
-        .add_filter("Nexzam Banks", &["bok"])
-        .set_title("Open Nexzam Bank");
+        .add_filter("Nexam Banks", &["bok"])
+        .set_title("Open Nexam Bank");
+
+    if let Some(dir) = initial_directory {
+        dialog = dialog.set_directory(dir);
+    }
+
+    dialog.pick_file().map(|path| path.display().to_string())
+}
+
+/// A gradebook (.nxgb) is a separate document from a bank -- see
+/// docs/grading.md -- so it gets its own open/save dialogs rather than
+/// reusing the bank ones with a different filter bolted on.
+#[tauri::command]
+fn open_gradebook_dialog(initial_directory: Option<String>) -> Option<String> {
+    let mut dialog = FileDialog::new()
+        .add_filter("Nexam Gradebooks", &["nxgb"])
+        .set_title("Open Nexam Gradebook");
 
     if let Some(dir) = initial_directory {
         dialog = dialog.set_directory(dir);
@@ -32,14 +48,44 @@ fn open_bank_dialog(initial_directory: Option<String>) -> Option<String> {
 }
 
 #[tauri::command]
+fn save_gradebook_dialog(
+    current_path: Option<String>,
+    suggested_file_name: Option<String>,
+    initial_directory: Option<String>,
+) -> Option<String> {
+    let mut dialog = FileDialog::new()
+        .add_filter("Nexam Gradebooks", &["nxgb"])
+        .set_title("Save Nexam Gradebook");
+
+    if let Some(path) = current_path {
+        let path = std::path::Path::new(&path);
+        dialog = dialog.set_file_name(
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("gradebook.nxgb"),
+        );
+        if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+            dialog = dialog.set_directory(parent);
+        }
+    } else {
+        dialog = dialog.set_file_name(suggested_file_name.as_deref().unwrap_or("gradebook.nxgb"));
+        if let Some(dir) = initial_directory {
+            dialog = dialog.set_directory(dir);
+        }
+    }
+
+    dialog.save_file().map(|path| path.display().to_string())
+}
+
+#[tauri::command]
 fn save_bank_dialog(
     current_path: Option<String>,
     suggested_file_name: Option<String>,
     initial_directory: Option<String>,
 ) -> Option<String> {
     let mut dialog = FileDialog::new()
-        .add_filter("Nexzam Banks", &["bok"])
-        .set_title("Save Nexzam Bank");
+        .add_filter("Nexam Banks", &["bok"])
+        .set_title("Save Nexam Bank");
 
     if let Some(path) = current_path {
         let path = std::path::Path::new(&path);
@@ -59,6 +105,37 @@ fn save_bank_dialog(
     }
 
     dialog.save_file().map(|path| path.display().to_string())
+}
+
+/// Save arbitrary bytes (e.g. a generated response-sheet PDF) to a
+/// user-chosen path. Unlike `save_bank_dialog`, this isn't tied to one file
+/// type -- the filter is derived from the suggested file name's extension.
+#[tauri::command]
+fn save_bytes_dialog(
+    bytes: Vec<u8>,
+    suggested_file_name: Option<String>,
+    initial_directory: Option<String>,
+) -> Result<Option<String>, String> {
+    let file_name = suggested_file_name.unwrap_or_else(|| "download.pdf".to_string());
+    let extension = std::path::Path::new(&file_name)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("pdf")
+        .to_string();
+
+    let mut dialog = FileDialog::new()
+        .add_filter(&extension.to_uppercase(), &[extension.as_str()])
+        .set_file_name(&file_name)
+        .set_title("Save File");
+    if let Some(dir) = initial_directory {
+        dialog = dialog.set_directory(dir);
+    }
+
+    let Some(path) = dialog.save_file() else {
+        return Ok(None);
+    };
+    std::fs::write(&path, &bytes).map_err(|error| format!("Could not save file: {error}"))?;
+    Ok(Some(path.display().to_string()))
 }
 
 #[tauri::command]
@@ -104,6 +181,42 @@ fn apply_print_info(page_size: &str) {
 #[cfg(not(target_os = "macos"))]
 fn apply_print_info(_page_size: &str) {}
 
+/// Show a generated PDF in its own Nexam window and open the print dialog on it.
+///
+/// The alternative was handing the file to Preview and asking the teacher to
+/// print from there. A webview renders a PDF natively and prints through the
+/// same panel as any other page, so a short-lived window keeps printing inside
+/// the app. The window stays up afterwards: it doubles as the preview of what
+/// was sent, and closing it is the teacher's call.
+#[tauri::command]
+fn print_pdf_url(app_handle: AppHandle, url: String, title: Option<String>) -> Result<(), String> {
+    let parsed = url
+        .parse()
+        .map_err(|_| format!("Not a printable address: {url}"))?;
+    let label = format!(
+        "nexam-print-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|value| value.as_millis())
+            .unwrap_or(0)
+    );
+
+    tauri::WebviewWindowBuilder::new(&app_handle, label, tauri::WebviewUrl::External(parsed))
+        .title(title.unwrap_or_else(|| "Print Response Sheets".to_string()))
+        .inner_size(900.0, 1100.0)
+        .on_page_load(|window, payload| {
+            // Only once the PDF has actually rendered -- printing at request
+            // time would hand the printer a blank page.
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                let _ = window.print();
+            }
+        })
+        .build()
+        .map_err(|error| format!("Could not open the print window: {error}"))?;
+
+    Ok(())
+}
+
 /// Open the system print dialog for the window that asked for it.
 ///
 /// `window.print()` is a no-op inside the macOS webview, so the button has to
@@ -114,6 +227,24 @@ fn print_current_window(webview_window: tauri::WebviewWindow, page_size: Option<
     webview_window
         .print()
         .map_err(|error| format!("Could not open the print dialog: {error}"))
+}
+
+/// Grey out the "close" commands when there is nothing open to close.
+///
+/// The frontend owns the answer to "is a bank open" -- it is backend state, not
+/// shell state -- so it tells the menu rather than the menu guessing.
+#[tauri::command]
+fn set_document_menu_state(app_handle: AppHandle, bank_open: bool, gradebook_open: bool) {
+    let Some(menu) = app_handle.menu() else {
+        return;
+    };
+    for (id, enabled) in [("close-bank", bank_open), ("close-gradebook", gradebook_open)] {
+        if let Some(kind) = menu.get(id) {
+            if let Some(item) = kind.as_menuitem() {
+                let _ = item.set_enabled(enabled);
+            }
+        }
+    }
 }
 
 #[tauri::command]
@@ -131,7 +262,7 @@ fn run_update_check(app_handle: &AppHandle) {
 
     let client = match reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(8))
-        .user_agent("Nexzam-Update-Check")
+        .user_agent("Nexam-Update-Check")
         .build()
     {
         Ok(client) => client,
@@ -202,7 +333,7 @@ fn run_update_check(app_handle: &AppHandle) {
             .set_level(MessageLevel::Info)
             .set_title("Update Available")
             .set_description(format!(
-                "Nexzam {latest_version} is available. You're running {current_version}. Open the release page in your browser?"
+                "Nexam {latest_version} is available. You're running {current_version}. Open the release page in your browser?"
             ))
             .set_buttons(MessageButtons::YesNo)
             .show();
@@ -213,7 +344,7 @@ fn run_update_check(app_handle: &AppHandle) {
     } else {
         show_update_message(
             MessageLevel::Info,
-            format!("You're up to date. Nexzam {current_version}."),
+            format!("You're up to date. Nexam {current_version}."),
         );
     }
 }
@@ -260,7 +391,7 @@ fn main() {
             let check_updates_item =
                 MenuItemBuilder::with_id("check-for-updates", "Check for Updates…").build(handle)?;
             let view_help_item =
-                MenuItemBuilder::with_id("view-help", "Nexzam Help").build(handle)?;
+                MenuItemBuilder::with_id("view-help", "Nexam Help").build(handle)?;
             let new_bank_item = MenuItemBuilder::with_id("new-bank", "New Bank…")
                 .accelerator("CmdOrCtrl+N")
                 .build(handle)?;
@@ -275,12 +406,26 @@ fn main() {
             let save_bank_item = MenuItemBuilder::with_id("save-bank", "Save Bank")
                 .accelerator("CmdOrCtrl+S")
                 .build(handle)?;
+            let close_bank_item = MenuItemBuilder::with_id("close-bank", "Close Bank")
+                .enabled(false)
+                .build(handle)?;
+            let new_gradebook_item =
+                MenuItemBuilder::with_id("new-gradebook", "New Gradebook…").build(handle)?;
+            let open_gradebook_item =
+                MenuItemBuilder::with_id("open-gradebook", "Open Gradebook…").build(handle)?;
+            let open_demo_gradebook_item =
+                MenuItemBuilder::with_id("open-demo-gradebook", "Open Demo Gradebook")
+                    .build(handle)?;
+            let close_gradebook_item =
+                MenuItemBuilder::with_id("close-gradebook", "Close Gradebook")
+                    .enabled(false)
+                    .build(handle)?;
             let save_as_item = MenuItemBuilder::with_id("save-as", "Save As…")
                 .accelerator("CmdOrCtrl+Shift+S")
                 .build(handle)?;
 
-            let app_menu = SubmenuBuilder::new(handle, "Nexzam")
-                .item(&PredefinedMenuItem::about(handle, Some("About Nexzam"), None)?)
+            let app_menu = SubmenuBuilder::new(handle, "Nexam")
+                .item(&PredefinedMenuItem::about(handle, Some("About Nexam"), None)?)
                 .separator()
                 .item(&settings_item)
                 .separator()
@@ -302,6 +447,14 @@ fn main() {
                 .separator()
                 .item(&save_bank_item)
                 .item(&save_as_item)
+                .item(&close_bank_item)
+                .separator()
+                // A gradebook is its own document, so it gets its own section
+                // rather than being mixed in with the bank's commands.
+                .item(&new_gradebook_item)
+                .item(&open_gradebook_item)
+                .item(&open_demo_gradebook_item)
+                .item(&close_gradebook_item)
                 .separator()
                 .close_window()
                 .build()?;
@@ -333,7 +486,7 @@ fn main() {
         })
         .on_menu_event(|app_handle, event| match event.id().as_ref() {
             "settings" => {
-                let _ = app_handle.emit("nexzam://open-settings", ());
+                let _ = app_handle.emit("nexam://open-settings", ());
             }
             "check-for-updates" => {
                 run_update_check(app_handle);
@@ -343,22 +496,37 @@ fn main() {
                 let _ = Command::new("open").arg(help_url).spawn();
             }
             "new-bank" => {
-                let _ = app_handle.emit("nexzam://new-bank", ());
+                let _ = app_handle.emit("nexam://new-bank", ());
             }
             "open-bank" => {
-                let _ = app_handle.emit("nexzam://open-bank", ());
+                let _ = app_handle.emit("nexam://open-bank", ());
             }
             "open-demo-bank" => {
-                let _ = app_handle.emit("nexzam://open-demo-bank", ());
+                let _ = app_handle.emit("nexam://open-demo-bank", ());
             }
             "bank-properties" => {
-                let _ = app_handle.emit("nexzam://bank-properties", ());
+                let _ = app_handle.emit("nexam://bank-properties", ());
             }
             "save-bank" => {
-                let _ = app_handle.emit("nexzam://save-bank", ());
+                let _ = app_handle.emit("nexam://save-bank", ());
             }
             "save-as" => {
-                let _ = app_handle.emit("nexzam://save-as", ());
+                let _ = app_handle.emit("nexam://save-as", ());
+            }
+            "close-bank" => {
+                let _ = app_handle.emit("nexam://close-bank", ());
+            }
+            "new-gradebook" => {
+                let _ = app_handle.emit("nexam://new-gradebook", ());
+            }
+            "open-gradebook" => {
+                let _ = app_handle.emit("nexam://open-gradebook", ());
+            }
+            "open-demo-gradebook" => {
+                let _ = app_handle.emit("nexam://open-demo-gradebook", ());
+            }
+            "close-gradebook" => {
+                let _ = app_handle.emit("nexam://close-gradebook", ());
             }
             _ => {}
         })
@@ -370,13 +538,18 @@ fn main() {
             get_desktop_context,
             open_bank_dialog,
             save_bank_dialog,
+            open_gradebook_dialog,
+            save_gradebook_dialog,
+            save_bytes_dialog,
             pick_directory_dialog,
             set_archive_dirty,
+            set_document_menu_state,
             check_for_updates,
-            print_current_window
+            print_current_window,
+            print_pdf_url
         ])
         .build(tauri::generate_context!())
-        .expect("error while running Nexzam");
+        .expect("error while running Nexam");
 
     app.run(|app_handle, event| match event {
             RunEvent::WindowEvent { event: WindowEvent::Destroyed, .. } => {

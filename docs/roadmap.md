@@ -1,4 +1,4 @@
-# Nexzam Roadmap
+# Nexam Roadmap
 
 ## Phase 0 — Foundation
 
@@ -47,7 +47,7 @@
   - Keep invalid rows visible and editable instead of dropping them.
   - Show schema errors, duplicate id conflicts, unsupported question types, malformed JSON fields, and unknown standard references.
 - Proposed id handling for staged rows.
-  - Default to type-based Nexzam ids on promotion.
+  - Default to type-based Nexam ids on promotion.
   - Allow keeping imported ids only when they are valid and unique.
   - Never silently rename persisted or imported ids.
 - Staging review table with filters for all, valid, invalid, selected, and promoted rows.
@@ -109,3 +109,76 @@
 - Auto-builder with constraints.
 - Topic/type/difficulty balancing.
 - Swap and regenerate suggestions.
+
+## Phase 6 — Grading
+
+Full design in `docs/grading-plan.md`; format reference in `docs/grading.md`.
+
+- A second local package, `.nxgb` (a gradebook), holding roster, printed
+  response-sheet layouts, scan batches, and scores -- structurally separate
+  from a `.bok` bank so student data can never ride along in a bank shared
+  between teachers. One gradebook per class section/term.
+- Hand-off: printing response sheets for a test freezes an immutable
+  `AdministeredTestSnapshotModel` (the test's items, questions, derived
+  answer key, and sheet geometry) into the open gradebook. Editing or
+  deleting the bank's test afterward never affects a snapshot already
+  printed; re-printing creates a new snapshot rather than mutating the old
+  one.
+- Response sheets mix all three question shapes on one printed page:
+  `multiple_choice` (bubble row) and `numeric_response` (digit grid-in) are
+  both auto-graded from the same classical-CV fill-ratio detector;
+  `short_answer`/`free_response` get a lined capture box that is always
+  scored by hand.
+- Detection is classical CV, not ML: four corner fiducials (three squares, one
+  circle) give a perspective homography to register a scan against its
+  frozen geometry, then each bubble's fill state is read as a pixel-darkness
+  ratio that doubles as a confidence score. Ambiguous marks (multi-fill,
+  faint fill, blank), unreadable QR codes, and sheets scanned into the wrong
+  batch are flagged for review rather than guessed at.
+- Review queue: resolve a sheet's identity against the gradebook's roster (or
+  a free-text name), correct a flagged row (stored alongside the raw
+  detection, never overwriting it), or manually score a short/free-response
+  row.
+- Reporting: total score, score by standard, and by-item stats (including
+  choice distribution) computed straight from a batch and its snapshot's
+  answer key -- no bank needs to be open. A combined-lineage report sums
+  by-standard stats across every version of a test, unlike course coverage,
+  which takes the max to avoid double-counting curriculum reach.
+- `record_batch_as_performance_run` is the one explicit, opt-in path back
+  into the bank: aggregate per-question stats (attempts, correct count,
+  observed difficulty) into `TestDraftModel.performance_runs` -- the same
+  model Phase 4's still-open "performance-entry UI" item anticipated, now
+  populated automatically from real grading instead of manual entry.
+- Backend-complete as of this phase: models, services, and routes for the
+  full print -> scan -> detect -> review -> report pipeline, verified without
+  a physical printer or scanner via synthetic render/rasterize/fill/detect
+  round-trip tests (including perspective skew and noise tolerance).
+- Cross-test student performance and CSV export: snapshots carry a
+  `lineage_id` (derived from the title, overridable by hand) so a retake links
+  to the test it retakes; `grading/aggregate.py` rolls every scored sheet up
+  per student across every test, resolving retakes as most-recent / highest /
+  average at export time; and `grading/csv_export.py` writes three wide CSV
+  shapes -- total per test, percent by standard, and a difficulty-weighted
+  mastery estimate per standard that reuses `QuestionModel.difficulty`, frozen
+  onto the answer key at hand-off. The roster page is built around a student's
+  record rather than their contact fields. See `docs/grading.md`.
+- Administered Tests became the centre of the gradebook: scanning and reporting
+  are per-test drill-downs inside it rather than top-level tabs, the list groups
+  tests that need the teacher (pending review, printed-but-not-scanned) above the
+  rest with a one-click route into the tab that resolves them, and each card
+  generates response sheets for its own test across every version in one run.
+  The gradebook's pages are now Students / Tests / Export. See "Page layout" in
+  `docs/grading.md`.
+- Mastery reported as a *level* on the bank's difficulty scale rather than a
+  percentage, with three calculations -- Level Ladder (clear each level in
+  turn), Difficulty Weighted (partial credit on a hard question as partial
+  evidence of that level), and Rubric Levels (the ladder applied to a levelled
+  rubric's own components) -- plus exact/half-step rounding. Chosen per
+  gradebook and overridable per test. Rubric rows gained a `level`, and scan
+  review can score a levelled rubric part by part. See "Mastery levels" in
+  `docs/grading.md`.
+- Remaining Phase 6 work: `ResponseSheetPrintPane.tsx`, `RosterWorkspace.tsx`,
+  `ScanReviewWorkspace.tsx`, and `GradeReportWorkspace.tsx` on the frontend;
+  the `save_bytes_dialog` Tauri command for exporting a generated PDF; and a
+  PyInstaller packaging spike to confirm `opencv-python-headless`/`PyMuPDF`
+  bundle correctly in the frozen desktop build.

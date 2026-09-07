@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactElement } from "react";
 
-import { getAssetFileUrl, inspectAssets, listTestDrafts } from "./api";
+import { getAdministeredTest, getAssetFileUrl, inspectAssets, listTestDrafts } from "./api";
 import { printCurrentWindow } from "./desktop";
 import { MathTextPreview } from "./MathPreview";
 import type {
@@ -19,7 +19,23 @@ import type {
 
 interface TestPrintPreviewProps {
   testId: string | null;
+  /** When set, renders the frozen test paper from an administered snapshot
+   *  (gradebook side) instead of the live bank draft named by `testId`. */
+  snapshotId?: string | null;
   onClose: () => void;
+}
+
+/** The minimal shape print rendering needs -- satisfied by both a live
+ *  TestDraftDetailModel (bank) and a frozen AdministeredTestSnapshotModel
+ *  (gradebook), so the same pagination/rendering code serves both. */
+interface PrintableTestDetail {
+  test: {
+    title: string;
+    version: string;
+    items: TestItemModel[];
+    print_settings: TestPrintSettingsModel;
+  };
+  questions: QuestionModel[];
 }
 
 const CHOICE_LABELS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
@@ -70,7 +86,7 @@ function QuestionAssetFigures({
   );
 }
 
-function questionById(test: TestDraftDetailModel) {
+function questionById(test: PrintableTestDetail) {
   return Object.fromEntries(test.questions.map((question) => [question.id, question]));
 }
 
@@ -205,7 +221,7 @@ function getSectionInstruction(section: TestInstructionSectionModel, question: Q
 }
 
 function getSectionRun(
-  test: TestDraftDetailModel,
+  test: PrintableTestDetail,
   startIndex: number,
   questionsById: Record<string, QuestionModel>,
 ) {
@@ -228,7 +244,7 @@ function getSectionRun(
 }
 
 function getManualSectionRun(
-  test: TestDraftDetailModel,
+  test: PrintableTestDetail,
   startIndex: number,
   questionsById: Record<string, QuestionModel>,
 ) {
@@ -471,7 +487,7 @@ function buildPrintBlocks({
   instructionOptions,
   assetRenders,
 }: {
-  selectedTest: TestDraftDetailModel;
+  selectedTest: PrintableTestDetail;
   settings: TestPrintSettingsModel;
   questionsById: Record<string, QuestionModel>;
   instructionOptions: TestInstructionSectionOptionsModel;
@@ -623,8 +639,9 @@ function buildPrintBlocks({
   });
 }
 
-function TestPrintPreview({ testId, onClose }: TestPrintPreviewProps) {
+function TestPrintPreview({ testId, snapshotId, onClose }: TestPrintPreviewProps) {
   const [tests, setTests] = useState<TestDraftDetailModel[]>([]);
+  const [snapshotTest, setSnapshotTest] = useState<PrintableTestDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
   const [assetRenders, setAssetRenders] = useState<Record<string, AssetInspectionResponseModel>>({});
@@ -647,9 +664,23 @@ function TestPrintPreview({ testId, onClose }: TestPrintPreviewProps) {
     void (async () => {
       setLoading(true);
       try {
-        const response = await listTestDrafts();
-        if (cancelled) return;
-        setTests(response.items);
+        if (snapshotId) {
+          const snapshot = await getAdministeredTest(snapshotId);
+          if (cancelled) return;
+          setSnapshotTest({
+            test: {
+              title: snapshot.title,
+              version: snapshot.version,
+              items: snapshot.items,
+              print_settings: snapshot.print_settings,
+            },
+            questions: snapshot.questions,
+          });
+        } else {
+          const response = await listTestDrafts();
+          if (cancelled) return;
+          setTests(response.items);
+        }
         setErrorMessage("");
       } catch (error) {
         if (cancelled) return;
@@ -664,9 +695,11 @@ function TestPrintPreview({ testId, onClose }: TestPrintPreviewProps) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [snapshotId]);
 
-  const selectedTest = tests.find((item) => item.test.id === testId) ?? tests[0] ?? null;
+  const selectedTest: PrintableTestDetail | null = snapshotId
+    ? snapshotTest
+    : tests.find((item) => item.test.id === testId) ?? tests[0] ?? null;
   const questionsById = useMemo(
     () => (selectedTest ? questionById(selectedTest) : {}),
     [selectedTest],
@@ -835,7 +868,9 @@ function TestPrintPreview({ testId, onClose }: TestPrintPreviewProps) {
     }
 
     try {
-      await printCurrentWindow(selectedTest.test.print_settings.page_size);
+      // Narrowing above (the early `if (!selectedTest) return`) doesn't carry
+      // into this nested function declaration, but the guard makes this safe.
+      await printCurrentWindow(selectedTest!.test.print_settings.page_size);
       setPrintError("");
     } catch (error) {
       setPrintError((error as Error).message || String(error));

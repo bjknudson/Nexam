@@ -15,7 +15,7 @@ import type {
   StandardRecordModel,
 } from "./types";
 
-const PANE_SYNC_CHANNEL = "nexzam-pane-sync";
+const PANE_SYNC_CHANNEL = "nexam-pane-sync";
 const NEW_SOURCE_OPTION = "__new__";
 
 type StandardsWorkspaceMode = "workspace" | "picker";
