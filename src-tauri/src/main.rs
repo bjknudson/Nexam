@@ -706,6 +706,47 @@ fn main() {
         .expect("error while running Nexam");
 
     app.run(|app_handle, event| match event {
+            // Closing the last window *is* quitting on Windows, and the window
+            // is already destroyed by the time ExitRequested arrives -- so
+            // preventing the exit there leaves a live process with nothing on
+            // screen, which reads as "it quit anyway and threw away my work".
+            // Ask here instead, while the window still exists and declining
+            // can genuinely call the close off.
+            //
+            // macOS keeps its existing path untouched: closing the last window
+            // does not quit there, so the question belongs on Cmd+Q, where
+            // ExitRequested already handles it correctly.
+            #[cfg(not(target_os = "macos"))]
+            RunEvent::WindowEvent { event: WindowEvent::CloseRequested { api, .. }, .. } => {
+                let state = app_handle.state::<Arc<AppRuntimeState>>();
+                if state.allow_exit() {
+                    return;
+                }
+                // Shutting a pop-out pane or the gradebook is not quitting;
+                // only the last window standing carries the question.
+                if app_handle.webview_windows().len() > 1 {
+                    return;
+                }
+                if !state.desktop_context().archive_dirty {
+                    return;
+                }
+
+                api.prevent_close();
+                let confirm = MessageDialog::new()
+                    .set_level(MessageLevel::Warning)
+                    .set_title("Unsaved Archive Changes")
+                    .set_description(
+                        "The working copy has changes that have not been written back to the .bok archive. Quit anyway?",
+                    )
+                    .set_buttons(MessageButtons::YesNo)
+                    .show();
+
+                if confirm == MessageDialogResult::Yes {
+                    state.set_allow_exit(true);
+                    state.stop_backend();
+                    app_handle.exit(0);
+                }
+            }
             RunEvent::WindowEvent { event: WindowEvent::Destroyed, .. } => {
                 let state = app_handle.state::<Arc<AppRuntimeState>>();
                 if app_handle.webview_windows().is_empty() {
