@@ -11,7 +11,17 @@ use serde::Serialize;
 use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
-const BACKEND_START_TIMEOUT: Duration = Duration::from_secs(20);
+// Generous on purpose. The first launch after an install is slow for reasons
+// that have nothing to do with the backend: Windows antivirus scans a freshly
+// written executable the first time it runs, and the frozen backend is ~70MB
+// of Python and DLLs. At a fixed 20s that first launch reported "never became
+// healthy" for a backend that was only being scanned, while the next launch --
+// verdict cached -- started fine.
+//
+// Waiting this long is safe because the wait now ends the moment the child
+// exits (see `backend_is_running`), so a backend that genuinely cannot start
+// still fails in seconds instead of sitting here.
+const BACKEND_START_TIMEOUT: Duration = Duration::from_secs(120);
 const BACKEND_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 #[derive(Clone, Debug, Serialize)]
@@ -64,6 +74,19 @@ impl AppRuntimeState {
     pub fn set_allow_exit(&self, allow_exit: bool) {
         let mut state = self.inner.lock().expect("runtime state mutex poisoned");
         state.allow_exit = allow_exit;
+    }
+
+    /// Whether the backend child is still alive, reaping it if it has exited.
+    ///
+    /// Treated as running unless we positively saw it exit: if `try_wait`
+    /// cannot tell us, the start timeout still bounds the wait, and declaring
+    /// a healthy backend dead is the worse mistake.
+    fn backend_is_running(&self) -> bool {
+        let mut state = self.inner.lock().expect("runtime state mutex poisoned");
+        match state.backend_child.as_mut() {
+            Some(child) => !matches!(child.try_wait(), Ok(Some(_))),
+            None => false,
+        }
     }
 
     pub fn stop_backend(&self) {
@@ -148,7 +171,11 @@ fn start_backend_process<R: Runtime>(
 
     state.set_backend_started(child, base_url.clone());
 
-    if let Err(error) = wait_for_healthcheck(&format!("{base_url}/health"), BACKEND_START_TIMEOUT) {
+    if let Err(error) = wait_for_healthcheck_while(
+        &format!("{base_url}/health"),
+        BACKEND_START_TIMEOUT,
+        || state.backend_is_running(),
+    ) {
         state.stop_backend();
         return Err(error).context("Backend process started but never became healthy.");
     }
@@ -239,6 +266,20 @@ fn find_free_local_port() -> Result<u16> {
 }
 
 pub fn wait_for_healthcheck(url: &str, timeout: Duration) -> Result<()> {
+    wait_for_healthcheck_while(url, timeout, || true)
+}
+
+/// Poll `/health` until it answers, the deadline passes, or the process we are
+/// waiting on goes away.
+///
+/// The liveness check is what lets the deadline be generous: a slow start and
+/// a dead backend look identical from the outside, and only one of them is
+/// worth waiting two minutes for.
+fn wait_for_healthcheck_while(
+    url: &str,
+    timeout: Duration,
+    still_running: impl Fn() -> bool,
+) -> Result<()> {
     let client = Client::builder()
         .timeout(Duration::from_secs(2))
         .build()
@@ -256,6 +297,12 @@ pub fn wait_for_healthcheck(url: &str, timeout: Duration) -> Result<()> {
             Err(error) => {
                 last_error = error.to_string();
             }
+        }
+
+        if !still_running() {
+            return Err(anyhow!(
+                "the backend process exited before it answered ({last_error})"
+            ));
         }
 
         thread::sleep(BACKEND_POLL_INTERVAL);
@@ -334,6 +381,32 @@ mod tests {
             Duration::from_secs(2),
         )
         .expect("health check should succeed");
+    }
+
+    /// The generous start timeout is only safe because a dead backend ends the
+    /// wait immediately -- otherwise a backend that cannot start would hang the
+    /// splash for two minutes instead of failing in seconds.
+    #[test]
+    fn waiting_stops_as_soon_as_the_process_is_gone_rather_than_running_out_the_clock() {
+        use std::time::Instant;
+
+        let started = Instant::now();
+        let error = super::wait_for_healthcheck_while(
+            "http://127.0.0.1:9/health",
+            Duration::from_secs(120),
+            || false,
+        )
+        .expect_err("a departed process should end the wait");
+
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "gave up after {:?}, so it waited out the deadline instead of noticing the exit",
+            started.elapsed()
+        );
+        assert!(
+            error.to_string().contains("exited"),
+            "the reason should say the process exited, got: {error}"
+        );
     }
 
     #[test]
