@@ -1,0 +1,152 @@
+name: Release (Windows, unsigned)
+
+# Builds the Windows NSIS installer for Nexam and publishes it to the
+# GitHub Release for the pushed tag (creating the release if one doesn't
+# already exist, or uploading to it if it does -- so drafting release
+# notes ahead of the tag push still works, and so this can coexist with
+# the macOS workflow firing on the same tag). The installer is also kept
+# as a workflow artifact for convenience.
+#
+# This build is deliberately UNSIGNED for now. SmartScreen will show
+# "Windows protected your PC / Unknown publisher" and testers click
+# More info -> Run anyway; see DISTRIBUTION.md. The seam for Azure
+# Trusted Signing is a single added step between "Build the app" and the
+# upload below, using azure/trusted-signing-action against the built
+# .exe plus the AZURE_* repo secrets. Nothing else here has to change.
+#
+# No secrets are required today: `permissions: contents: write` plus the
+# automatic github.token covers publishing.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    # windows-latest already ships MSVC Build Tools and the WebView2
+    # runtime, so there is no toolchain setup beyond the three actions
+    # below. x64 only, matching the macOS job's single-arch stance.
+    runs-on: windows-latest
+
+    # Windows runners bill at 2x (not macOS's 10x), and a green run is
+    # roughly 10-20 min, most of it the release Rust build. 30 bounds a
+    # hung step well short of GitHub's 6-hour default.
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: |
+            app/backend/requirements.txt
+            app/backend/requirements-dev.txt
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: app/frontend/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r app/backend/requirements.txt -r app/backend/requirements-dev.txt
+
+      - name: Install frontend dependencies
+        working-directory: app/frontend
+        run: npm ci
+
+      - name: Backend test suite (release gate)
+        run: python -m pytest
+
+      - name: Build backend binary (PyInstaller)
+        # Must run before the Tauri build: tauri-build validates that
+        # everything in bundle.resources exists on disk, so a missing
+        # dist/backend/nexam-backend fails the Rust build outright
+        # rather than just producing a bundle without a backend.
+        run: .\scripts\build_backend_binary.ps1
+
+      - name: Build the app (Tauri, unsigned)
+        working-directory: app/frontend
+        run: npm run tauri:build
+
+      - name: Rename the installer to carry the tag
+        # Tauri names the file from tauri.conf.json's version
+        # (Nexam_0.14.0_x64-setup.exe). Publish it under the tag instead
+        # so a release's assets match the tag that produced them, and
+        # glob rather than hardcode, since the two can legitimately
+        # differ on a workflow_dispatch run from a non-tag ref.
+        run: |
+          $bundle = "src-tauri\target\release\bundle\nsis"
+          $built = Get-ChildItem -Path $bundle -Filter "*-setup.exe" | Select-Object -First 1
+          if (-not $built) {
+            Write-Output "::error::No NSIS installer was produced in $bundle."
+            exit 1
+          }
+          $named = Join-Path $bundle "Nexam-${{ github.ref_name }}-x64-setup.exe"
+          Move-Item -LiteralPath $built.FullName -Destination $named -Force
+          "INSTALLER_PATH=$named" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Output "Renamed $($built.Name) -> $(Split-Path $named -Leaf)"
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: Nexam-${{ github.ref_name }}-windows
+          path: ${{ env.INSTALLER_PATH }}
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish release
+        # Only on an actual tag push, not on a manual workflow_dispatch
+        # test run (which may not even be building from a tag ref). A
+        # dispatch run therefore builds and uploads the artifact above
+        # without touching any release -- that is the intended dry run.
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # This workflow and release-macos.yml fire on the same tag and
+          # race to create the release; whichever loses gets an error
+          # from `gh release create`. Retry rather than fail: by the next
+          # attempt the other job's release exists and this becomes a
+          # plain upload.
+          $ErrorActionPreference = "Continue"
+          for ($attempt = 1; $attempt -le 5; $attempt++) {
+            gh release view $env:TAG --repo $env:GITHUB_REPOSITORY 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+              Write-Output "Release $env:TAG exists -- uploading the installer to it."
+              gh release upload $env:TAG "$env:INSTALLER_PATH" --repo $env:GITHUB_REPOSITORY --clobber
+              if ($LASTEXITCODE -eq 0) { exit 0 }
+            } else {
+              Write-Output "Creating release $env:TAG (attempt $attempt)."
+              gh release create $env:TAG "$env:INSTALLER_PATH" `
+                --repo $env:GITHUB_REPOSITORY `
+                --title $env:TAG `
+                --generate-notes `
+                --prerelease
+              if ($LASTEXITCODE -eq 0) { exit 0 }
+            }
+            Write-Output "Attempt $attempt did not stick; retrying in 10s."
+            Start-Sleep -Seconds 10
+          }
+          Write-Output "::error::Could not publish the installer to release $env:TAG after 5 attempts."
+          exit 1

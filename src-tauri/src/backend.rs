@@ -130,9 +130,19 @@ fn start_backend_process<R: Runtime>(
         build_bundled_command(app_handle, port)?
     };
 
+    command.stdout(Stdio::null()).stderr(Stdio::null());
+
+    // The backend is a console-subsystem binary spawned from a GUI process.
+    // Without this flag Windows gives it its own console window, which
+    // flashes (dev) or persists (bundled, since the app has none to inherit).
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
     let child = command
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
         .spawn()
         .context("Failed to launch the Nexam backend process.")?;
 
@@ -166,10 +176,18 @@ fn build_dev_command(port: u16) -> Result<Command> {
     Ok(command)
 }
 
+fn bundled_backend_resource_path() -> &'static str {
+    if cfg!(windows) {
+        "nexam-backend/nexam-backend.exe"
+    } else {
+        "nexam-backend/nexam-backend"
+    }
+}
+
 fn build_bundled_command<R: Runtime>(app_handle: &AppHandle<R>, port: u16) -> Result<Command> {
     let backend_binary = app_handle
         .path()
-        .resolve("nexam-backend/nexam-backend", BaseDirectory::Resource)
+        .resolve(bundled_backend_resource_path(), BaseDirectory::Resource)
         .context("Failed to resolve the bundled backend binary path.")?;
     let demo_bank = app_handle
         .path()
@@ -196,9 +214,15 @@ fn resolve_repo_root() -> Result<PathBuf> {
 }
 
 fn resolve_python_path(repo_root: &Path) -> PathBuf {
-    let venv_python = repo_root.join(".venv/bin/python3");
+    let venv_python = if cfg!(windows) {
+        repo_root.join(".venv/Scripts/python.exe")
+    } else {
+        repo_root.join(".venv/bin/python3")
+    };
     if venv_python.exists() {
         venv_python
+    } else if cfg!(windows) {
+        PathBuf::from("python")
     } else {
         PathBuf::from("python3")
     }
@@ -242,11 +266,53 @@ pub fn wait_for_healthcheck(url: &str, timeout: Duration) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::wait_for_healthcheck;
+    use super::{bundled_backend_resource_path, resolve_python_path, wait_for_healthcheck};
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::path::PathBuf;
     use std::thread;
     use std::time::Duration;
+
+    #[test]
+    fn bundled_backend_resource_path_matches_what_pyinstaller_emits_per_platform() {
+        let expected = if cfg!(windows) {
+            "nexam-backend/nexam-backend.exe"
+        } else {
+            "nexam-backend/nexam-backend"
+        };
+        assert_eq!(bundled_backend_resource_path(), expected);
+    }
+
+    #[test]
+    fn resolve_python_path_prefers_the_venv_interpreter_when_present() {
+        let repo_root =
+            std::env::temp_dir().join(format!("nexam-venv-present-{}", std::process::id()));
+        let venv_python = if cfg!(windows) {
+            repo_root.join(".venv/Scripts/python.exe")
+        } else {
+            repo_root.join(".venv/bin/python3")
+        };
+        std::fs::create_dir_all(venv_python.parent().expect("venv dir has a parent"))
+            .expect("create fake venv directory");
+        std::fs::write(&venv_python, b"").expect("create fake interpreter file");
+
+        let resolved = resolve_python_path(&repo_root);
+
+        std::fs::remove_dir_all(&repo_root).ok();
+
+        assert_eq!(resolved, venv_python);
+    }
+
+    #[test]
+    fn resolve_python_path_falls_back_to_the_platform_command_when_no_venv_exists() {
+        let repo_root =
+            std::env::temp_dir().join(format!("nexam-venv-absent-{}", std::process::id()));
+
+        let resolved = resolve_python_path(&repo_root);
+
+        let expected = if cfg!(windows) { "python" } else { "python3" };
+        assert_eq!(resolved, PathBuf::from(expected));
+    }
 
     #[test]
     fn wait_for_healthcheck_accepts_success_response() {

@@ -182,3 +182,35 @@ Full design in `docs/grading-plan.md`; format reference in `docs/grading.md`.
   the `save_bytes_dialog` Tauri command for exporting a generated PDF; and a
   PyInstaller packaging spike to confirm `opencv-python-headless`/`PyMuPDF`
   bundle correctly in the frozen desktop build.
+
+## Phase 7 — Windows
+
+Nexam started macOS-only: the bundle target, all three build scripts, and the
+only release workflow assumed it. Phase 7 makes Windows a first-class target
+so a teacher can install from a downloaded `.exe`.
+
+- The Rust shell is platform-aware rather than forked: the frozen backend
+  resolves as `nexam-backend.exe`, the dev interpreter as
+  `.venv\Scripts\python.exe`, and the backend child spawns with
+  `CREATE_NO_WINDOW` so no console appears behind the app. Opening a URL and
+  building the menu are `cfg`-gated, with Settings/Exit moving into File and
+  About into Help, since Windows has no macOS-style app submenu. Every macOS
+  path is left byte-identical.
+- Printing diverges by platform on purpose. macOS shows the generated PDF in
+  its own window and prints it through the same panel as any other page.
+  WebView2 renders that window blank and wedges the UI thread when asked to
+  open its print UI, so Windows hands the PDF to the machine's default viewer
+  instead -- which is also where a Windows user expects to end up.
+- Distribution is an NSIS installer (`installMode: "both"`, so a locked-down
+  school machine can install per-user without an admin prompt), built by its
+  own `release-windows.yml` so the macOS signing/notarization pipeline is
+  untouched. Shipping unsigned first: SmartScreen shows an unknown-publisher
+  warning until Azure Trusted Signing is set up, which needs a verifiable
+  legal identity and weeks of lead time.
+- Verified on Windows: the full backend suite, the frozen backend running
+  standalone, the dev shell end to end, and the real grading loop --
+  generate response sheets, print, fill in by hand, scan, upload, score.
+- Known gaps: the page size a test was laid out for isn't preselected in the
+  Windows print dialog (`apply_print_info` sets `NSPrintInfo`, which has no
+  WebView2 equivalent), and a force-killed shell leaves its backend child
+  running, which a Job Object would fix.

@@ -43,7 +43,19 @@ codesign --verify --deep --strict --verbose=2 src-tauri/target/release/bundle/ma
 The second command should print `valid on disk` — if it doesn't, don't ship
 that zip.
 
-## Instructions for testers
+## Building a Windows copy to share
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+.\scripts\build_backend_binary.ps1
+cd app\frontend; npm run tauri:build
+```
+
+Writes `src-tauri\target\release\bundle\nsis\Nexam_<version>_x64-setup.exe`.
+Send testers that `.exe`. There's no re-signing step on Windows — the macOS
+one exists only because of how PyInstaller ships Python there.
+
+## Instructions for testers (macOS)
 
 1. Unzip `Nexam.zip` and drag `Nexam.app` to Applications (or run it from
    wherever you unzipped it).
@@ -52,6 +64,21 @@ that zip.
    again in the dialog that appears. This is only needed once.
 3. Click **Open Demo Bank** to try it with sample data, or **Open Bank** to
    open a `.bok` file.
+
+## Instructions for testers (Windows)
+
+1. Run `Nexam_<version>_x64-setup.exe`.
+2. Windows SmartScreen will show **"Windows protected your PC"** with an
+   unknown-publisher warning, because this build isn't code-signed yet. Click
+   **More info**, then **Run anyway**. This is only needed once per build.
+3. The installer offers a per-user install (no admin prompt) or a per-machine
+   install (needs admin). Either works — pick per-user on a locked-down
+   school machine.
+4. Click **Open Demo Bank** to try it with sample data, or **Open Bank** to
+   open a `.bok` file.
+
+Nothing extra is needed for printing: response sheets open in whatever PDF
+viewer the machine already uses, and you print from there.
 
 This build has no auto-update mechanism yet — a new build has to be sent
 manually for now.
