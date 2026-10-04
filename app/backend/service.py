@@ -2015,7 +2015,7 @@ class BankWorkspaceService:
             status="draft",
             teacher_notes="",
             answer={
-                "choices": ["", ""],
+                "choices": ["Choice 1", "Choice 2"],
                 "correct_choice_index": 0,
             },
             explanation="",

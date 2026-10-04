@@ -689,13 +689,45 @@ class QuestionModel(BaseModel):
                     answer["correct_choice_index"] = unique_indices[0]
                 else:
                     answer["correct_choice_indices"] = unique_indices
-                self.answer = answer
             elif type(correct_index) is not int:
                 raise ValueError(
                     "multiple_choice questions need a correct_choice_index or correct_choice_indices"
                 )
             elif correct_index < 0 or correct_index >= len(choices):
                 raise ValueError("multiple_choice correct_choice_index must reference a choice")
+
+            choice_assets = answer.get("choice_assets")
+            normalized_choice_assets: dict[str, dict[str, Any]] = {}
+            if choice_assets is not None:
+                if not isinstance(choice_assets, dict):
+                    raise ValueError(
+                        "multiple_choice choice_assets must be a mapping of choice index to asset"
+                    )
+                for key, value in choice_assets.items():
+                    if not isinstance(key, str) or not key.isdigit():
+                        raise ValueError(
+                            "multiple_choice choice_assets keys must be numeric choice indices"
+                        )
+                    index = int(key)
+                    if index < 0 or index >= len(choices):
+                        raise ValueError("multiple_choice choice_assets must reference a choice")
+                    normalized_choice_assets[key] = AssetModel.model_validate(value).model_dump()
+
+            # A choice needs something to show a student: either its own text or
+            # an attached image. Neither is required on top of the other, since
+            # forcing a text label on an image-only choice (e.g. one of several
+            # diagram options) is pure authoring overhead with nothing to show for it.
+            for index, choice in enumerate(choices):
+                has_text = isinstance(choice, str) and choice.strip() != ""
+                has_image = str(index) in normalized_choice_assets
+                if not has_text and not has_image:
+                    raise ValueError(f"choice {index + 1} needs text or an image")
+
+            if normalized_choice_assets:
+                answer["choice_assets"] = normalized_choice_assets
+            else:
+                answer.pop("choice_assets", None)
+            self.answer = answer
         elif self.type == "numeric_response":
             answer = self.answer or {}
             if "value" not in answer:

@@ -2333,10 +2333,27 @@ textarea {
   grid-template-columns: 0.24in minmax(0, 1fr);
   gap: 0.08in;
   align-items: baseline;
+  break-inside: avoid;
+  page-break-inside: avoid;
 }
 
 .print-choice-list li > span {
   font-weight: 700;
+}
+
+.print-choice-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.05in;
+}
+
+.print-choice-image {
+  display: block;
+  max-width: 1.4in;
+  max-height: 1in;
+  width: auto;
+  height: auto;
+  object-fit: contain;
 }
 
 .print-response-space {
@@ -3541,6 +3558,47 @@ textarea {
 .choice-correct-toggle input {
   width: auto;
   min-width: 0;
+}
+
+.choice-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.choice-image-toggle {
+  min-height: 2.45rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.choice-image-toggle.has-image {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.choice-image-panel {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.choice-image-thumb {
+  max-height: 3rem;
+  max-width: 5rem;
+  object-fit: contain;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  background: #ffffff;
 }
 
 .rubric-row {

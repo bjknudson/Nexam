@@ -193,7 +193,7 @@ const emptyQuestion = (): QuestionModel => ({
   status: "draft",
   teacher_notes: "",
   answer: {
-    choices: ["", ""],
+    choices: ["Choice 1", "Choice 2"],
     correct_choice_index: 0,
   },
   explanation: "",
@@ -214,6 +214,7 @@ type MultipleChoiceAnswer = {
   choices?: string[];
   correct_choice_index?: number;
   correct_choice_indices?: number[];
+  choice_assets?: Record<string, AssetModel>;
 } & Record<string, unknown>;
 
 function isQuestionType(value: unknown): value is QuestionType {
@@ -238,6 +239,7 @@ function buildMultipleChoiceAnswer(
   answer: MultipleChoiceAnswer,
   choices: string[],
   correctChoiceIndices: number[],
+  choiceAssets?: Record<string, AssetModel> | null,
 ) {
   const nextAnswer: MultipleChoiceAnswer = {
     ...answer,
@@ -260,7 +262,28 @@ function buildMultipleChoiceAnswer(
     nextAnswer.correct_choice_indices = normalizedIndices;
   }
 
+  if (choiceAssets !== undefined) {
+    if (choiceAssets && Object.keys(choiceAssets).length > 0) {
+      nextAnswer.choice_assets = choiceAssets;
+    } else {
+      delete nextAnswer.choice_assets;
+    }
+  }
+
   return nextAnswer;
+}
+
+function reindexChoiceAssets(
+  assets: Record<string, AssetModel> | undefined,
+  removedIndex: number,
+): Record<string, AssetModel> {
+  const next: Record<string, AssetModel> = {};
+  for (const [key, asset] of Object.entries(assets ?? {})) {
+    const choiceIndex = Number(key);
+    if (choiceIndex === removedIndex) continue;
+    next[String(choiceIndex > removedIndex ? choiceIndex - 1 : choiceIndex)] = asset;
+  }
+  return next;
 }
 
 function normalizeQuestionForView(payload: Record<string, unknown>): QuestionModel {
@@ -1006,6 +1029,8 @@ function App() {
   const [standardRecords, setStandardRecords] = useState<StandardRecordModel[]>([]);
   const [courses, setCourses] = useState<CourseModel[]>([]);
   const [assetBusy, setAssetBusy] = useState(false);
+  const [expandedChoiceImageRows, setExpandedChoiceImageRows] = useState<Set<number>>(new Set());
+  const [choiceAssetBusy, setChoiceAssetBusy] = useState<Record<number, boolean>>({});
   const [questionDrawerOpen, setQuestionDrawerOpen] = useState(true);
   const [assetDrawerOpen, setAssetDrawerOpen] = useState(false);
   const [questionPanePoppedOut, setQuestionPanePoppedOut] = useState(false);
@@ -1093,6 +1118,7 @@ function App() {
 
   const saveTimerRef = useRef<number | null>(null);
   const assetInputRef = useRef<HTMLInputElement | null>(null);
+  const choiceAssetInputRefs = useRef<Record<number, HTMLInputElement | null>>({});
   const selectedIdRef = useRef<string | null>(null);
   const draftQuestionRef = useRef<QuestionModel | null>(null);
   const rawJsonRef = useRef("");
@@ -1107,6 +1133,8 @@ function App() {
 
   useEffect(() => {
     selectedIdRef.current = selectedId;
+    setExpandedChoiceImageRows(new Set());
+    setChoiceAssetBusy({});
   }, [selectedId]);
 
   useEffect(() => {
@@ -2608,7 +2636,7 @@ function App() {
       type: nextType,
       answer:
         nextType === "multiple_choice"
-          ? { choices: ["", ""], correct_choice_index: 0 }
+          ? { choices: ["Choice 1", "Choice 2"], correct_choice_index: 0 }
           : nextType === "numeric_response"
             ? { value: 0, unit: "", tolerance: 0 }
             : null,
@@ -2721,8 +2749,53 @@ function App() {
     if (nextCorrectIndices.length === 0 && choices.length > 0) {
       nextCorrectIndices = [Math.max(0, Math.min(index, choices.length - 1))];
     }
+    const nextChoiceAssets = reindexChoiceAssets(answer.choice_assets, index);
 
-    updateDraft("answer", buildMultipleChoiceAnswer(answer, choices, nextCorrectIndices));
+    updateDraft(
+      "answer",
+      buildMultipleChoiceAnswer(answer, choices, nextCorrectIndices, nextChoiceAssets),
+    );
+    setExpandedChoiceImageRows(new Set());
+    setChoiceAssetBusy({});
+  }
+
+  function updateChoiceAsset(index: number, asset: AssetModel | null) {
+    const answer =
+      (draftQuestionRef.current?.answer as MultipleChoiceAnswer | null) ??
+      { choices: ["", ""], correct_choice_index: 0 };
+    const choices = answer.choices ?? ["", ""];
+    const nextAssets = { ...(answer.choice_assets ?? {}) };
+    if (asset) {
+      nextAssets[String(index)] = asset;
+    } else {
+      delete nextAssets[String(index)];
+    }
+    updateDraft(
+      "answer",
+      buildMultipleChoiceAnswer(
+        answer,
+        choices,
+        getCorrectChoiceIndices(answer, choices.length),
+        nextAssets,
+      ),
+    );
+  }
+
+  async function handleChoiceAssetUpload(index: number, fileList: FileList | null) {
+    const file = fileList?.[0];
+    if (!file) return;
+    setChoiceAssetBusy((current) => ({ ...current, [index]: true }));
+    try {
+      const uploaded = await uploadAsset(file);
+      updateChoiceAsset(index, { path: uploaded.path, kind: uploaded.kind, svg_variables: {} });
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage((error as Error).message);
+    } finally {
+      setChoiceAssetBusy((current) => ({ ...current, [index]: false }));
+      const input = choiceAssetInputRefs.current[index];
+      if (input) input.value = "";
+    }
   }
 
   function updateMultipleChoiceCorrectChoice(index: number, checked: boolean) {
@@ -4294,6 +4367,7 @@ function App() {
                           { choices: ["", ""], correct_choice_index: 0 };
                         const choices = answer.choices ?? ["", ""];
                         const correctChoiceIndices = getCorrectChoiceIndices(answer, choices.length);
+                        const choiceAssets = answer.choice_assets ?? {};
 
                         return (
                           <>
@@ -4308,41 +4382,117 @@ function App() {
                                 Add Choice
                               </button>
                             </div>
-                            {choices.map((choice, index) => (
-                              <div key={index} className="choice-row">
-                                <label className="choice-correct-toggle">
-                                  <input
-                                    type="checkbox"
-                                    checked={correctChoiceIndices.includes(index)}
-                                    onChange={(event) =>
-                                      updateMultipleChoiceCorrectChoice(index, event.target.checked)
-                                    }
-                                  />
-                                  <span>Correct</span>
-                                </label>
-                                <MathPreviewField
-                                  label={`Choice ${index + 1}`}
-                                  value={choice}
-                                  editing={editingFieldsEnabled}
-                                  preferWholeExpression
-                                  className="choice-math-field"
-                                >
-                                  <input
+                            {choices.map((choice, index) => {
+                              const choiceAsset = choiceAssets[String(index)] ?? null;
+                              const isExpanded = expandedChoiceImageRows.has(index) || !!choiceAsset;
+                              return (
+                                <div key={index} className="choice-row">
+                                  <label className="choice-correct-toggle">
+                                    <input
+                                      type="checkbox"
+                                      checked={correctChoiceIndices.includes(index)}
+                                      onChange={(event) =>
+                                        updateMultipleChoiceCorrectChoice(index, event.target.checked)
+                                      }
+                                    />
+                                    <span>Correct</span>
+                                  </label>
+                                  <MathPreviewField
+                                    label={`Choice ${index + 1}`}
                                     value={choice}
-                                    onChange={(event) =>
-                                      updateMultipleChoiceChoice(index, event.target.value)
-                                    }
-                                  />
-                                </MathPreviewField>
-                                <button
-                                  type="button"
-                                  onClick={() => removeMultipleChoiceChoice(index)}
-                                  disabled={choices.length <= 2}
-                                >
-                                  Remove
-                                </button>
-                              </div>
-                            ))}
+                                    editing={editingFieldsEnabled}
+                                    preferWholeExpression
+                                    className="choice-math-field"
+                                  >
+                                    <input
+                                      value={choice}
+                                      placeholder={choiceAsset ? "Optional label" : undefined}
+                                      onChange={(event) =>
+                                        updateMultipleChoiceChoice(index, event.target.value)
+                                      }
+                                    />
+                                  </MathPreviewField>
+                                  <div className="choice-row-actions">
+                                    <button
+                                      type="button"
+                                      className={`choice-image-toggle${choiceAsset ? " has-image" : ""}`}
+                                      aria-pressed={isExpanded}
+                                      aria-label={
+                                        choiceAsset
+                                          ? `Choice ${index + 1} has an attached image`
+                                          : `Attach image to choice ${index + 1}`
+                                      }
+                                      title={choiceAsset ? "Choice image attached" : "Attach image"}
+                                      onClick={() =>
+                                        setExpandedChoiceImageRows((current) => {
+                                          const next = new Set(current);
+                                          if (next.has(index)) {
+                                            next.delete(index);
+                                          } else {
+                                            next.add(index);
+                                          }
+                                          return next;
+                                        })
+                                      }
+                                    >
+                                      🖼
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => removeMultipleChoiceChoice(index)}
+                                      disabled={choices.length <= 2}
+                                    >
+                                      Remove
+                                    </button>
+                                  </div>
+                                  {isExpanded ? (
+                                    <div className="choice-image-panel">
+                                      <input
+                                        type="file"
+                                        accept="image/png,image/jpeg,image/gif,image/webp"
+                                        className="visually-hidden"
+                                        ref={(element) => {
+                                          choiceAssetInputRefs.current[index] = element;
+                                        }}
+                                        onChange={(event) =>
+                                          void handleChoiceAssetUpload(index, event.target.files)
+                                        }
+                                      />
+                                      {choiceAsset ? (
+                                        <>
+                                          <img
+                                            className="choice-image-thumb"
+                                            src={getAssetFileUrl(choiceAsset.path)}
+                                            alt=""
+                                          />
+                                          <button
+                                            type="button"
+                                            onClick={() => choiceAssetInputRefs.current[index]?.click()}
+                                            disabled={choiceAssetBusy[index]}
+                                          >
+                                            {choiceAssetBusy[index] ? "Uploading..." : "Replace"}
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => updateChoiceAsset(index, null)}
+                                          >
+                                            Remove Image
+                                          </button>
+                                        </>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          onClick={() => choiceAssetInputRefs.current[index]?.click()}
+                                          disabled={choiceAssetBusy[index]}
+                                        >
+                                          {choiceAssetBusy[index] ? "Uploading..." : "Add Image"}
+                                        </button>
+                                      )}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              );
+                            })}
                           </>
                         );
                       })()}

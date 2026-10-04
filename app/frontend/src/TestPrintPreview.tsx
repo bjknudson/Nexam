@@ -95,6 +95,11 @@ function getChoices(question: QuestionModel): string[] {
   return Array.isArray(choices) ? choices.map(String) : [];
 }
 
+function getChoiceAssets(question: QuestionModel): Record<string, AssetModel> {
+  const assets = question.answer?.choice_assets;
+  return assets && typeof assets === "object" ? (assets as Record<string, AssetModel>) : {};
+}
+
 function isQuestionItem(item: TestItemModel) {
   return (item.item_type ?? "question") === "question";
 }
@@ -560,6 +565,7 @@ function buildPrintBlocks({
       ? getSectionMetadata(section, instructionOptions, sectionRun)
       : {};
     const choices = question ? getChoices(question) : [];
+    const choiceAssets = question ? getChoiceAssets(question) : {};
     const responseLines =
       item.response_space_lines ?? settings.default_response_space_lines;
 
@@ -617,12 +623,24 @@ function buildPrintBlocks({
             <QuestionAssetFigures question={question} renders={assetRenders} />
             {choices.length > 0 ? (
               <ol className="print-choice-list">
-                {choices.map((choice, choiceIndex) => (
-                  <li key={`${choice}-${choiceIndex}`}>
-                    <span>{CHOICE_LABELS[choiceIndex] ?? `${choiceIndex + 1}`}</span>
-                    <MathTextPreview text={choice} preferWholeExpression />
-                  </li>
-                ))}
+                {choices.map((choice, choiceIndex) => {
+                  const choiceAsset = choiceAssets[String(choiceIndex)];
+                  return (
+                    <li key={`${choice}-${choiceIndex}`}>
+                      <span>{CHOICE_LABELS[choiceIndex] ?? `${choiceIndex + 1}`}</span>
+                      <div className="print-choice-content">
+                        <MathTextPreview text={choice} preferWholeExpression />
+                        {choiceAsset ? (
+                          <img
+                            className="print-choice-image"
+                            src={getAssetFileUrl(choiceAsset.path)}
+                            alt=""
+                          />
+                        ) : null}
+                      </div>
+                    </li>
+                  );
+                })}
               </ol>
             ) : null}
             {responseLines > 0 ? (

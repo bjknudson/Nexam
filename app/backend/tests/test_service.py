@@ -169,6 +169,24 @@ def test_update_question_from_json_model_refreshes_index_and_save(
     assert saved_question["tags"] == ["json-edit"]
 
 
+def test_create_question_produces_a_valid_blank_multiple_choice_question(
+    bank_service: BankWorkspaceService,
+    demo_bok: Path,
+) -> None:
+    """Regression test: _build_blank_question()'s default choices must satisfy
+    QuestionModel's validator (every choice needs text or an image), since the
+    "New" button in the editor calls this with no template and expects a
+    question back, not a 422 from the choices-need-text-or-an-image rule."""
+
+    bank_service.open_bank(str(demo_bok))
+
+    created = bank_service.create_question(template_question_id=None)
+
+    assert created.type == "multiple_choice"
+    assert created.answer["choices"] == ["Choice 1", "Choice 2"]
+    assert bank_service.get_question(created.id).id == created.id
+
+
 def test_create_question_from_json_assigns_unique_id(
     bank_service: BankWorkspaceService,
     demo_bok: Path,
@@ -1016,6 +1034,93 @@ def test_multiple_choice_indices_still_reject_unusable_values() -> None:
         QuestionModel.model_validate(
             {**base, "answer": {**base["answer"], "correct_choice_indices": ["0"]}}
         )
+
+
+def test_multiple_choice_choice_assets_normalize_and_persist() -> None:
+    from app.backend.models import QuestionModel
+
+    base = {
+        "id": "q_mc_9003",
+        "type": "multiple_choice",
+        "topic": "Diagrams",
+        "difficulty": 2,
+        "prompt": "Which diagram shows a pulley at rest?",
+        "answer": {
+            "choices": ["a", ""],
+            "correct_choice_index": 0,
+            "choice_assets": {
+                "1": {"path": "assets/pulley.png", "kind": "image", "svg_variables": {}},
+            },
+        },
+    }
+
+    # Regression test: choice_assets must persist even when the question uses
+    # the single correct_choice_index form, not only the correct_choice_indices
+    # form (the validator used to only write self.answer back in that branch).
+    question = QuestionModel.model_validate(base)
+    assert question.answer["choice_assets"] == {
+        "1": {"path": "assets/pulley.png", "kind": "image", "svg_variables": {}},
+    }
+    assert question.answer["correct_choice_index"] == 0
+
+    # An empty choice_assets map is dropped rather than persisted as {}.
+    cleared = QuestionModel.model_validate(
+        {**base, "answer": {**base["answer"], "choices": ["a", "b"], "choice_assets": {}}}
+    )
+    assert "choice_assets" not in cleared.answer
+
+
+def test_multiple_choice_choice_assets_reject_invalid_shapes() -> None:
+    import pytest as _pytest
+
+    from app.backend.models import QuestionModel
+
+    base = {
+        "id": "q_mc_9004",
+        "type": "multiple_choice",
+        "topic": "Diagrams",
+        "difficulty": 2,
+        "prompt": "Which diagram shows a pulley at rest?",
+        "answer": {"choices": ["a", "b"], "correct_choice_index": 0},
+    }
+
+    with _pytest.raises(ValueError, match="mapping of choice index to asset"):
+        QuestionModel.model_validate(
+            {**base, "answer": {**base["answer"], "choice_assets": ["not", "a", "dict"]}}
+        )
+
+    with _pytest.raises(ValueError, match="must reference a choice"):
+        QuestionModel.model_validate(
+            {
+                **base,
+                "answer": {
+                    **base["answer"],
+                    "choice_assets": {
+                        "5": {"path": "assets/pulley.png", "kind": "image"},
+                    },
+                },
+            }
+        )
+
+    with _pytest.raises(ValueError, match="needs text or an image"):
+        QuestionModel.model_validate(
+            {**base, "answer": {**base["answer"], "choices": ["a", ""]}}
+        )
+
+    # Blank text is fine as long as the same choice has an attached image.
+    accepted = QuestionModel.model_validate(
+        {
+            **base,
+            "answer": {
+                **base["answer"],
+                "choices": ["a", ""],
+                "choice_assets": {
+                    "1": {"path": "assets/pulley.png", "kind": "image", "svg_variables": {}},
+                },
+            },
+        }
+    )
+    assert accepted.answer["choice_assets"]["1"]["path"] == "assets/pulley.png"
 
 
 def test_import_keeps_standards_with_their_own_sources(
