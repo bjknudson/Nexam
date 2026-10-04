@@ -225,3 +225,4 @@ app/frontend/dist/
 src-tauri/target/
 .DS_Store
 app/backend/_baked_version.py
+.DS_Store
