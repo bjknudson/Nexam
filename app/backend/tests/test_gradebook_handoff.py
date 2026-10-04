@@ -343,6 +343,39 @@ def test_non_key_breaking_edit_stays_in_place_after_sheets_generated(
     assert updated.test.has_generated_sheets is True
 
 
+def test_choice_image_edit_after_sheets_generated_does_not_force_a_fork(
+    bank_service: BankWorkspaceService, demo_bok: Path
+) -> None:
+    bank_service.open_bank(str(demo_bok))
+    detail = bank_service.add_question_to_test(
+        bank_service.create_test_draft("Locked Unit", "A").test.id, "q_mc_0001"
+    )
+    bank_service.update_test_draft(
+        detail.test.id, detail.test.model_copy(update={"finished": True})
+    )
+    bank_service.mark_test_administered(detail.test.id)
+
+    question = bank_service.get_question("q_mc_0001")
+    answer = dict(question.answer or {})
+    choices = answer["choices"]
+    answer["choice_assets"] = {
+        "0": {"path": "assets/pulley.png", "kind": "image", "svg_variables": {}},
+    }
+    bank_service.update_question(
+        "q_mc_0001", question.model_copy(update={"answer": answer})
+    )
+
+    locked = bank_service.get_test_draft(detail.test.id).test
+    updated = bank_service.update_test_draft(
+        locked.id, locked.model_copy(update={"version_description": "Image added to a choice"})
+    )
+    assert updated.test.has_generated_sheets is True
+
+    refreshed_question = bank_service.get_question("q_mc_0001")
+    assert refreshed_question.answer["choice_assets"]["0"]["path"] == "assets/pulley.png"
+    assert refreshed_question.answer["choices"] == choices
+
+
 def test_key_breaking_edit_after_sheets_generated_is_rejected(
     bank_service: BankWorkspaceService, demo_bok: Path
 ) -> None:

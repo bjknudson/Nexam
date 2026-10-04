@@ -233,6 +233,11 @@ export interface QuestionModel {
   assets: AssetModel[];
 }
 
+export interface QuestionDetailModel {
+  question: QuestionModel;
+  issues: QuestionImportValidationIssueModel[];
+}
+
 export interface QuestionListItemModel {
   id: string;
   topic: string;

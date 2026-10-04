@@ -169,6 +169,24 @@ def test_update_question_from_json_model_refreshes_index_and_save(
     assert saved_question["tags"] == ["json-edit"]
 
 
+def test_create_question_produces_a_valid_blank_multiple_choice_question(
+    bank_service: BankWorkspaceService,
+    demo_bok: Path,
+) -> None:
+    """Regression test: _build_blank_question()'s default choices must satisfy
+    QuestionModel's validator (every choice needs text or an image), since the
+    "New" button in the editor calls this with no template and expects a
+    question back, not a 422 from the choices-need-text-or-an-image rule."""
+
+    bank_service.open_bank(str(demo_bok))
+
+    created = bank_service.create_question(template_question_id=None)
+
+    assert created.type == "multiple_choice"
+    assert created.answer["choices"] == ["Choice 1", "Choice 2"]
+    assert bank_service.get_question(created.id).id == created.id
+
+
 def test_create_question_from_json_assigns_unique_id(
     bank_service: BankWorkspaceService,
     demo_bok: Path,
@@ -255,7 +273,7 @@ def test_stage_question_import_reports_validation_errors(
     bank_service.open_bank(str(demo_bok))
     source = bank_service.get_question("q_sa_0001").model_dump()
     source.pop("id")
-    source["sample_solution"] = ""
+    source["prompt"] = ""
 
     stage = bank_service.stage_question_import(
         filename="invalid.json",
@@ -265,8 +283,35 @@ def test_stage_question_import_reports_validation_errors(
     assert stage.rows[0].status == "invalid"
     assert stage.rows[0].selected is False
     assert any(
-        "short_answer questions need a sample_solution" in issue.message
+        "field must not be empty" in issue.message
         for issue in stage.rows[0].issues
+    )
+
+
+def test_stage_question_import_warns_without_blocking_for_incomplete_rows(
+    bank_service: BankWorkspaceService,
+    demo_bok: Path,
+) -> None:
+    """A staged row that's merely incomplete (blank sample_solution, a lint
+    warning) must not be rejected the way a structurally broken row is -- it
+    should stage as valid, selected, with the gap visible as a warning."""
+
+    bank_service.open_bank(str(demo_bok))
+    source = bank_service.get_question("q_sa_0001").model_dump()
+    source.pop("id")
+    source["sample_solution"] = ""
+
+    stage = bank_service.stage_question_import(
+        filename="incomplete.json",
+        content=json.dumps({"items": [source]}).encode("utf-8"),
+    )
+
+    row = stage.rows[0]
+    assert row.status == "valid"
+    assert row.selected is True
+    assert any(
+        issue.code == "short_answer_needs_sample_solution" and issue.severity == "warning"
+        for issue in row.issues
     )
 
 
@@ -421,7 +466,7 @@ def test_update_question_import_row_revalidates_invalid_row(
     bank_service.open_bank(str(demo_bok))
     source = bank_service.get_question("q_sa_0001").model_dump()
     source.pop("id")
-    source["sample_solution"] = ""
+    source["prompt"] = ""
 
     stage = bank_service.stage_question_import(
         filename="invalid.json",
@@ -429,7 +474,7 @@ def test_update_question_import_row_revalidates_invalid_row(
     )
     assert stage.rows[0].status == "invalid"
 
-    source["sample_solution"] = "Ohm's law states V = IR."
+    source["prompt"] = "State Ohm's law."
     updated_stage = bank_service.update_question_import_row(
         stage.id,
         stage.rows[0].row_id,
@@ -502,7 +547,7 @@ def test_promote_question_import_rows_rejects_invalid_rows(
     bank_service.open_bank(str(demo_bok))
     source = bank_service.get_question("q_sa_0001").model_dump()
     source.pop("id")
-    source["sample_solution"] = ""
+    source["prompt"] = ""
 
     stage = bank_service.stage_question_import(
         filename="invalid.json",
@@ -1007,15 +1052,230 @@ def test_multiple_choice_indices_still_reject_unusable_values() -> None:
             {**base, "answer": {**base["answer"], "correct_choice_indices": [5]}}
         )
 
-    with _pytest.raises(ValueError, match="at least one choice"):
-        QuestionModel.model_validate(
-            {**base, "answer": {**base["answer"], "correct_choice_indices": []}}
-        )
-
     with _pytest.raises(ValueError, match="list of integers"):
         QuestionModel.model_validate(
             {**base, "answer": {**base["answer"], "correct_choice_indices": ["0"]}}
         )
+
+    # An empty correct_choice_indices list no longer raises -- it collapses to
+    # "no correct answer designated yet", which is a lint warning, not a
+    # structural failure (see test_multiple_choice_lint_flags_missing_correct_answer).
+    no_answer = QuestionModel.model_validate(
+        {**base, "answer": {**base["answer"], "correct_choice_indices": []}}
+    )
+    assert "correct_choice_index" not in no_answer.answer
+    assert "correct_choice_indices" not in no_answer.answer
+
+
+def test_multiple_choice_choice_assets_normalize_and_persist() -> None:
+    from app.backend.models import QuestionModel
+
+    base = {
+        "id": "q_mc_9003",
+        "type": "multiple_choice",
+        "topic": "Diagrams",
+        "difficulty": 2,
+        "prompt": "Which diagram shows a pulley at rest?",
+        "answer": {
+            "choices": ["a", ""],
+            "correct_choice_index": 0,
+            "choice_assets": {
+                "1": {"path": "assets/pulley.png", "kind": "image", "svg_variables": {}},
+            },
+        },
+    }
+
+    # Regression test: choice_assets must persist even when the question uses
+    # the single correct_choice_index form, not only the correct_choice_indices
+    # form (the validator used to only write self.answer back in that branch).
+    question = QuestionModel.model_validate(base)
+    assert question.answer["choice_assets"] == {
+        "1": {"path": "assets/pulley.png", "kind": "image", "svg_variables": {}},
+    }
+    assert question.answer["correct_choice_index"] == 0
+
+    # An empty choice_assets map is dropped rather than persisted as {}.
+    cleared = QuestionModel.model_validate(
+        {**base, "answer": {**base["answer"], "choices": ["a", "b"], "choice_assets": {}}}
+    )
+    assert "choice_assets" not in cleared.answer
+
+
+def test_multiple_choice_choice_assets_reject_invalid_shapes() -> None:
+    import pytest as _pytest
+
+    from app.backend.models import QuestionModel
+
+    base = {
+        "id": "q_mc_9004",
+        "type": "multiple_choice",
+        "topic": "Diagrams",
+        "difficulty": 2,
+        "prompt": "Which diagram shows a pulley at rest?",
+        "answer": {"choices": ["a", "b"], "correct_choice_index": 0},
+    }
+
+    with _pytest.raises(ValueError, match="mapping of choice index to asset"):
+        QuestionModel.model_validate(
+            {**base, "answer": {**base["answer"], "choice_assets": ["not", "a", "dict"]}}
+        )
+
+    with _pytest.raises(ValueError, match="must reference a choice"):
+        QuestionModel.model_validate(
+            {
+                **base,
+                "answer": {
+                    **base["answer"],
+                    "choice_assets": {
+                        "5": {"path": "assets/pulley.png", "kind": "image"},
+                    },
+                },
+            }
+        )
+
+    # A choice with blank text and no image no longer raises -- it's a lint
+    # warning now (see test_multiple_choice_lint_flags_choice_needing_text_or_image),
+    # so construction succeeds.
+    QuestionModel.model_validate({**base, "answer": {**base["answer"], "choices": ["a", ""]}})
+
+    # Blank text is fine as long as the same choice has an attached image.
+    accepted = QuestionModel.model_validate(
+        {
+            **base,
+            "answer": {
+                **base["answer"],
+                "choices": ["a", ""],
+                "choice_assets": {
+                    "1": {"path": "assets/pulley.png", "kind": "image", "svg_variables": {}},
+                },
+            },
+        }
+    )
+    assert accepted.answer["choice_assets"]["1"]["path"] == "assets/pulley.png"
+
+
+def test_multiple_choice_lint_flags_missing_correct_answer() -> None:
+    from app.backend.models import QuestionModel
+    from app.backend.validation import lint_question
+
+    question = QuestionModel.model_validate(
+        {
+            "id": "q_mc_9005",
+            "type": "multiple_choice",
+            "topic": "Diagrams",
+            "difficulty": 2,
+            "prompt": "Which diagram shows a pulley at rest?",
+            "answer": {"choices": ["a", "b"]},
+        }
+    )
+    issues = lint_question(question)
+    assert any(issue.code == "mc_needs_correct_answer" for issue in issues)
+
+
+def test_multiple_choice_lint_flags_choice_needing_text_or_image() -> None:
+    from app.backend.models import QuestionModel
+    from app.backend.validation import lint_question
+
+    question = QuestionModel.model_validate(
+        {
+            "id": "q_mc_9006",
+            "type": "multiple_choice",
+            "topic": "Diagrams",
+            "difficulty": 2,
+            "prompt": "Which diagram shows a pulley at rest?",
+            "answer": {"choices": ["a", ""], "correct_choice_index": 0},
+        }
+    )
+    issues = lint_question(question)
+    assert any(
+        issue.code == "mc_choice_needs_text_or_image" and issue.location == ["answer", "choices", 1]
+        for issue in issues
+    )
+
+    # Attaching an image to that same choice clears the warning.
+    with_image = QuestionModel.model_validate(
+        {
+            "id": "q_mc_9007",
+            "type": "multiple_choice",
+            "topic": "Diagrams",
+            "difficulty": 2,
+            "prompt": "Which diagram shows a pulley at rest?",
+            "answer": {
+                "choices": ["a", ""],
+                "correct_choice_index": 0,
+                "choice_assets": {
+                    "1": {"path": "assets/pulley.png", "kind": "image", "svg_variables": {}},
+                },
+            },
+        }
+    )
+    assert not any(
+        issue.code == "mc_choice_needs_text_or_image" for issue in lint_question(with_image)
+    )
+
+
+def test_numeric_response_lint_flags_missing_value_and_tolerance() -> None:
+    from app.backend.models import QuestionModel
+    from app.backend.validation import lint_question
+
+    question = QuestionModel.model_validate(
+        {
+            "id": "q_num_9001",
+            "type": "numeric_response",
+            "topic": "Mechanics",
+            "difficulty": 2,
+            "prompt": "What is the speed?",
+            "answer": {},
+        }
+    )
+    codes = {issue.code for issue in lint_question(question)}
+    assert codes == {"numeric_needs_value", "numeric_needs_tolerance"}
+
+    complete = QuestionModel.model_validate(
+        {**question.model_dump(), "answer": {"value": 6, "tolerance": 0.5}}
+    )
+    assert lint_question(complete) == []
+
+
+def test_short_answer_lint_flags_blank_sample_solution() -> None:
+    from app.backend.models import QuestionModel
+    from app.backend.validation import lint_question
+
+    question = QuestionModel.model_validate(
+        {
+            "id": "q_sa_9001",
+            "type": "short_answer",
+            "topic": "Circuits",
+            "difficulty": 2,
+            "prompt": "State Ohm's law.",
+            "sample_solution": "",
+        }
+    )
+    issues = lint_question(question)
+    assert any(issue.code == "short_answer_needs_sample_solution" for issue in issues)
+
+    complete = QuestionModel.model_validate(
+        {**question.model_dump(), "sample_solution": "V = IR"}
+    )
+    assert lint_question(complete) == []
+
+
+def test_free_response_lint_flags_empty_rubric() -> None:
+    from app.backend.models import QuestionModel
+    from app.backend.validation import lint_question
+
+    question = QuestionModel.model_validate(
+        {
+            "id": "q_fr_9001",
+            "type": "free_response",
+            "topic": "Essays",
+            "difficulty": 2,
+            "prompt": "Explain the causes of the war.",
+            "rubric": [],
+        }
+    )
+    issues = lint_question(question)
+    assert any(issue.code == "free_response_needs_rubric" for issue in issues)
 
 
 def test_import_keeps_standards_with_their_own_sources(

@@ -2,7 +2,28 @@ import type { ReactNode } from "react";
 import { BlockMath, InlineMath } from "react-katex";
 
 import { getAssetFileUrl } from "./api";
-import type { AssetInspectionResponseModel, AssetModel, QuestionModel } from "./types";
+import type {
+  AssetInspectionResponseModel,
+  AssetModel,
+  QuestionImportValidationIssueModel,
+  QuestionModel,
+} from "./types";
+
+/** Small, non-blocking visual cue for advisory lint issues -- a colored dot
+ *  with the issue message(s) as a tooltip. Renders nothing when there are no
+ *  issues, so callers can pass an empty/filtered array unconditionally. */
+export function IssueDot({ issues }: { issues: QuestionImportValidationIssueModel[] }) {
+  if (issues.length === 0) return null;
+  const hasError = issues.some((issue) => issue.severity === "error");
+  const title = issues.map((issue) => issue.message).join("\n");
+  return (
+    <span
+      className={`issue-dot ${hasError ? "issue-dot-error" : "issue-dot-warning"}`}
+      title={title}
+      aria-label={title}
+    />
+  );
+}
 
 type MathToken =
   | { kind: "text"; value: string }
@@ -16,6 +37,7 @@ interface MathPreviewFieldProps {
   children: ReactNode;
   className?: string;
   preferWholeExpression?: boolean;
+  issues?: QuestionImportValidationIssueModel[];
 }
 
 interface MathPreviewSection {
@@ -139,17 +161,24 @@ export function MathPreviewField({
   children,
   className,
   preferWholeExpression = false,
+  issues = [],
 }: MathPreviewFieldProps) {
   const showLivePreview = editing && hasMathMarkup(value);
 
   return (
     <div
-      className={["math-preview-field", showLivePreview ? "with-preview" : "", className]
+      className={[
+        "math-preview-field",
+        showLivePreview ? "with-preview" : "",
+        issues.length > 0 ? "has-issue" : "",
+        className,
+      ]
         .filter(Boolean)
         .join(" ")}
     >
       <label>
         {label}
+        <IssueDot issues={issues} />
         {editing ? (
           children
         ) : value.trim() ? (
