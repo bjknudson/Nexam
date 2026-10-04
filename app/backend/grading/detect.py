@@ -14,6 +14,7 @@ either without touching the rest of this module.
 from __future__ import annotations
 
 import json
+import math
 
 import cv2
 import numpy as np
@@ -32,6 +33,11 @@ LOW_CONFIDENCE_THRESHOLD = 0.5
 _SEARCH_WINDOW_FRACTION = 0.12
 _AREA_TOLERANCE = (0.25, 4.0)
 _FILL_SAMPLE_RADIUS_FRACTION = 0.7
+
+# How much an off-size candidate is penalised against a closer-but-wronger one
+# when picking which blob in the search window is the fiducial. Distance leads;
+# area only breaks ties between things at similar distances.
+_AREA_SCORE_WEIGHT = 0.5
 
 # The sheet prints its QR in a fixed corner, so looking there before scanning
 # the whole page is both quicker and more reliable: OpenCV localises a code
@@ -77,6 +83,22 @@ _QR_WHOLE_PAGE_ATTEMPTS = (
 # see the misregistered-corner case in docs/grading-plan.md.
 _MAX_CORNER_ANGLE_DEVIATION_DEG = 12.0
 _MAX_ASPECT_RATIO_DEVIATION = 0.2
+
+# Angles and aspect describe the quadrilateral as a whole, and a single corner
+# that latched onto the wrong feature can leave both looking fine: displace one
+# corner along its diagonal and the shape stays near-rectangular while every
+# row below it reads off-position. Measured on a real misread, the bad corner
+# sat 0.56in from the true marker, yet the quad was 3.2 degrees off square and
+# 4.2% off aspect -- inside both limits above, and a *better* aspect score than
+# the correct quad.
+#
+# So check the corners against each other instead of against the page. A real
+# scan differs from the printed layout by a crop offset, a scale, and a little
+# rotation and skew -- all affine -- so a best-fit affine transform lands every
+# marker near where it was found. One wrong marker cannot be absorbed and
+# leaves a residual the others do not have. Real scans measure 0.07-0.09
+# fiducial widths of residual; the misread above measures 0.51.
+_MAX_AFFINE_RESIDUAL_FIDUCIAL_FRACTION = 0.25
 
 
 def _qr_search_regions(image: np.ndarray):
@@ -216,12 +238,15 @@ def locate_fiducials(
     _mask_out_qr(binary, page, page_width_pt, page_height_pt, image_w, image_h)
 
     found: dict[str, tuple[float, float]] = {}
+    expected_points: list[tuple[float, float]] = []
     window = int(max(image_w, image_h) * _SEARCH_WINDOW_FRACTION)
+    fiducial_side = 0.0
 
     for marker in page.fiducials:
         expected_x = (marker.center_x_pt / page_width_pt) * image_w
         expected_y = (1 - marker.center_y_pt / page_height_pt) * image_h
         expected_area = ((marker.size_pt / page_width_pt) * image_w) ** 2
+        fiducial_side = math.sqrt(expected_area)
 
         x0, x1 = max(0, int(expected_x - window)), min(image_w, int(expected_x + window))
         y0, y1 = max(0, int(expected_y - window)), min(image_h, int(expected_y + window))
@@ -239,16 +264,64 @@ def locate_fiducials(
             if expected_area * _AREA_TOLERANCE[0] <= cv2.contourArea(c) <= expected_area * _AREA_TOLERANCE[1]
         ]
         candidates = in_band or contours
-        best = max(candidates, key=cv2.contourArea)
 
-        moments = cv2.moments(best)
-        if moments["m00"] == 0:
+        # Nearest the expected spot, not simply the biggest. The search window
+        # spans a good inch of page, so a scan's edge shadow or a torn border
+        # can sit inside it and outweigh a fiducial on area alone -- which is
+        # exactly how a marker 0.56in adrift got picked over the real one, with
+        # the other three corners landing within a pixel.
+        best: tuple[float, float] | None = None
+        best_score: float | None = None
+        for contour in candidates:
+            moments = cv2.moments(contour)
+            if moments["m00"] == 0:
+                continue
+            center_x = x0 + moments["m10"] / moments["m00"]
+            center_y = y0 + moments["m01"] / moments["m00"]
+            area = max(cv2.contourArea(contour), 1.0)
+            distance = math.hypot(center_x - expected_x, center_y - expected_y)
+            area_ratio = max(area, expected_area) / min(area, expected_area)
+            score = distance / fiducial_side + _AREA_SCORE_WEIGHT * (area_ratio - 1.0)
+            if best_score is None or score < best_score:
+                best, best_score = (center_x, center_y), score
+
+        if best is None:
             return None
-        found[marker.corner] = (x0 + moments["m10"] / moments["m00"], y0 + moments["m01"] / moments["m00"])
+        found[marker.corner] = best
+        expected_points.append((expected_x, expected_y))
 
     if len(found) != len(page.fiducials):
         return None
-    return found if _registration_is_plausible(found, page_width_pt, page_height_pt) else None
+    if not _registration_is_plausible(found, page_width_pt, page_height_pt):
+        return None
+
+    found_points = [found[marker.corner] for marker in page.fiducials]
+    residual = _affine_fit_residual(expected_points, found_points)
+    if residual > fiducial_side * _MAX_AFFINE_RESIDUAL_FIDUCIAL_FRACTION:
+        return None
+    return found
+
+
+def _affine_fit_residual(
+    expected: list[tuple[float, float]], found: list[tuple[float, float]]
+) -> float:
+    """How far the found markers sit from the best affine reading of them.
+
+    Returns the largest distance, in pixels, between a found marker and where a
+    least-squares affine transform of the expected layout puts it. Four markers
+    over-determine an affine (eight equations, six unknowns), so the fit cannot
+    bend to accommodate a single bad corner the way a four-point homography
+    silently would -- see _MAX_AFFINE_RESIDUAL_FIDUCIAL_FRACTION.
+    """
+
+    if len(expected) < 4 or len(expected) != len(found):
+        return 0.0
+
+    source = np.array([[x, y, 1.0] for x, y in expected], dtype=np.float64)
+    target = np.array(found, dtype=np.float64)
+    solution, *_ = np.linalg.lstsq(source, target, rcond=None)
+    predicted = source @ solution
+    return float(np.max(np.linalg.norm(predicted - target, axis=1)))
 
 
 def _corner_angle_deg(

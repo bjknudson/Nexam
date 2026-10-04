@@ -150,6 +150,10 @@ fn pick_directory_dialog(initial_directory: Option<String>) -> Option<String> {
 }
 
 /// Paper sizes in points (72 per inch), matching the frontend's page sizes.
+///
+/// Only `apply_print_info` (macOS) calls this outside tests, so it's dead
+/// code on other platforms.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn paper_size_points(page_size: &str) -> (f64, f64) {
     match page_size {
         "legal" => (612.0, 1008.0),
@@ -181,6 +185,63 @@ fn apply_print_info(page_size: &str) {
 #[cfg(not(target_os = "macos"))]
 fn apply_print_info(_page_size: &str) {}
 
+/// Windows: hand the generated PDF to whatever already opens PDFs here.
+///
+/// The webview route below does not survive on Windows. WebView2 shows the
+/// PDF window blank, and opening its print UI from the shell wedges the UI
+/// thread -- the print window stops responding, every other window freezes
+/// behind it, and the app dies. Every Windows machine already has a PDF
+/// handler with a preview and a print dialog, so the file goes there instead
+/// and the teacher prints from a viewer they already know.
+#[cfg(target_os = "windows")]
+fn open_pdf_in_default_viewer(url: &str) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|error| format!("Could not start the PDF download: {error}"))?;
+
+    let response = client
+        .get(url)
+        .send()
+        .map_err(|error| format!("Could not fetch the generated PDF: {error}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "The response sheets could not be fetched for printing ({}).",
+            response.status()
+        ));
+    }
+
+    let bytes = response
+        .bytes()
+        .map_err(|error| format!("Could not read the generated PDF: {error}"))?;
+
+    // A temp file, not a save dialog: this is the print path, and the teacher
+    // already has "Save PDF..." next to the button that got them here.
+    let path = std::env::temp_dir().join(format!(
+        "nexam-print-{}.pdf",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|value| value.as_millis())
+            .unwrap_or(0)
+    ));
+    std::fs::write(&path, &bytes)
+        .map_err(|error| format!("Could not write the PDF to a temporary file: {error}"))?;
+
+    // The empty "" is required -- `start` treats a lone quoted argument as
+    // the window title rather than the file to open.
+    Command::new("cmd")
+        .args(["/C", "start", "", &path.display().to_string()])
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .map_err(|error| format!("Could not open the PDF for printing: {error}"))?;
+
+    Ok(())
+}
+
 /// Show a generated PDF in its own Nexam window and open the print dialog on it.
 ///
 /// The alternative was handing the file to Preview and asking the teacher to
@@ -188,33 +249,44 @@ fn apply_print_info(_page_size: &str) {}
 /// same panel as any other page, so a short-lived window keeps printing inside
 /// the app. The window stays up afterwards: it doubles as the preview of what
 /// was sent, and closing it is the teacher's call.
+///
+/// Windows takes the viewer route instead -- see `open_pdf_in_default_viewer`.
 #[tauri::command]
 fn print_pdf_url(app_handle: AppHandle, url: String, title: Option<String>) -> Result<(), String> {
-    let parsed = url
-        .parse()
-        .map_err(|_| format!("Not a printable address: {url}"))?;
-    let label = format!(
-        "nexam-print-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|value| value.as_millis())
-            .unwrap_or(0)
-    );
+    #[cfg(target_os = "windows")]
+    {
+        let _ = (&app_handle, &title);
+        return open_pdf_in_default_viewer(&url);
+    }
 
-    tauri::WebviewWindowBuilder::new(&app_handle, label, tauri::WebviewUrl::External(parsed))
-        .title(title.unwrap_or_else(|| "Print Response Sheets".to_string()))
-        .inner_size(900.0, 1100.0)
-        .on_page_load(|window, payload| {
-            // Only once the PDF has actually rendered -- printing at request
-            // time would hand the printer a blank page.
-            if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
-                let _ = window.print();
-            }
-        })
-        .build()
-        .map_err(|error| format!("Could not open the print window: {error}"))?;
+    #[cfg(not(target_os = "windows"))]
+    {
+        let parsed = url
+            .parse()
+            .map_err(|_| format!("Not a printable address: {url}"))?;
+        let label = format!(
+            "nexam-print-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|value| value.as_millis())
+                .unwrap_or(0)
+        );
 
-    Ok(())
+        tauri::WebviewWindowBuilder::new(&app_handle, label, tauri::WebviewUrl::External(parsed))
+            .title(title.unwrap_or_else(|| "Print Response Sheets".to_string()))
+            .inner_size(900.0, 1100.0)
+            .on_page_load(|window, payload| {
+                // Only once the PDF has actually rendered -- printing at request
+                // time would hand the printer a blank page.
+                if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                    let _ = window.print();
+                }
+            })
+            .build()
+            .map_err(|error| format!("Could not open the print window: {error}"))?;
+
+        Ok(())
+    }
 }
 
 /// Open the system print dialog for the window that asked for it.
@@ -224,6 +296,22 @@ fn print_pdf_url(app_handle: AppHandle, url: String, title: Option<String>) -> R
 #[tauri::command]
 fn print_current_window(webview_window: tauri::WebviewWindow, page_size: Option<String>) -> Result<(), String> {
     apply_print_info(page_size.as_deref().unwrap_or("letter"));
+
+    #[cfg(target_os = "windows")]
+    {
+        // WebView2's print UI has to be opened from the thread that owns the
+        // webview, and a command handler does not run there. Calling it
+        // straight from here wedges the window instead of printing it.
+        let window = webview_window.clone();
+        return webview_window
+            .app_handle()
+            .run_on_main_thread(move || {
+                let _ = window.print();
+            })
+            .map_err(|error| format!("Could not open the print dialog: {error}"));
+    }
+
+    #[cfg(not(target_os = "windows"))]
     webview_window
         .print()
         .map_err(|error| format!("Could not open the print dialog: {error}"))
@@ -339,7 +427,7 @@ fn run_update_check(app_handle: &AppHandle) {
             .show();
 
         if choice == MessageDialogResult::Yes {
-            let _ = Command::new("open").arg(release_url).spawn();
+            open_external_url(&release_url);
         }
     } else {
         show_update_message(
@@ -356,6 +444,28 @@ fn show_update_message(level: MessageLevel, message: impl Into<String>) {
         .set_description(message.into())
         .set_buttons(MessageButtons::Ok)
         .show();
+}
+
+/// Open a URL in the user's default browser.
+///
+/// Each platform's blessed way to hand a URL to the browser without pulling
+/// in `tauri-plugin-opener`, which would also mean editing
+/// capabilities/default.json.
+fn open_external_url(url: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = Command::new("open").arg(url).spawn();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // The empty "" is required -- `start` treats a lone quoted argument
+        // as the window title, not the URL to open.
+        let _ = Command::new("cmd").args(["/C", "start", "", url]).spawn();
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let _ = Command::new("xdg-open").arg(url).spawn();
+    }
 }
 
 fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
@@ -424,40 +534,55 @@ fn main() {
                 .accelerator("CmdOrCtrl+Shift+S")
                 .build(handle)?;
 
-            let app_menu = SubmenuBuilder::new(handle, "Nexam")
-                .item(&PredefinedMenuItem::about(handle, Some("About Nexam"), None)?)
-                .separator()
-                .item(&settings_item)
-                .separator()
-                .services()
-                .separator()
-                .hide()
-                .hide_others()
-                .show_all()
-                .separator()
-                .quit()
-                .build()?;
-
-            let file_menu = SubmenuBuilder::new(handle, "File")
-                .item(&new_bank_item)
-                .item(&open_bank_item)
-                .item(&open_demo_item)
-                .separator()
-                .item(&bank_properties_item)
-                .separator()
-                .item(&save_bank_item)
-                .item(&save_as_item)
-                .item(&close_bank_item)
-                .separator()
-                // A gradebook is its own document, so it gets its own section
-                // rather than being mixed in with the bank's commands.
-                .item(&new_gradebook_item)
-                .item(&open_gradebook_item)
-                .item(&open_demo_gradebook_item)
-                .item(&close_gradebook_item)
-                .separator()
-                .close_window()
-                .build()?;
+            // macOS gets a dedicated app submenu ahead of File -- About,
+            // Settings, Services, Hide/Hide Others/Show All, Quit -- which is
+            // the platform convention wry/Tauri expect. Windows (and Linux)
+            // have no such submenu, so Settings and Quit move into File
+            // instead, and About moves into Help, matching convention there.
+            let file_menu = if cfg!(target_os = "macos") {
+                SubmenuBuilder::new(handle, "File")
+                    .item(&new_bank_item)
+                    .item(&open_bank_item)
+                    .item(&open_demo_item)
+                    .separator()
+                    .item(&bank_properties_item)
+                    .separator()
+                    .item(&save_bank_item)
+                    .item(&save_as_item)
+                    .item(&close_bank_item)
+                    .separator()
+                    // A gradebook is its own document, so it gets its own
+                    // section rather than being mixed in with the bank's
+                    // commands.
+                    .item(&new_gradebook_item)
+                    .item(&open_gradebook_item)
+                    .item(&open_demo_gradebook_item)
+                    .item(&close_gradebook_item)
+                    .separator()
+                    .close_window()
+                    .build()?
+            } else {
+                SubmenuBuilder::new(handle, "File")
+                    .item(&new_bank_item)
+                    .item(&open_bank_item)
+                    .item(&open_demo_item)
+                    .separator()
+                    .item(&bank_properties_item)
+                    .separator()
+                    .item(&save_bank_item)
+                    .item(&save_as_item)
+                    .item(&close_bank_item)
+                    .separator()
+                    .item(&new_gradebook_item)
+                    .item(&open_gradebook_item)
+                    .item(&open_demo_gradebook_item)
+                    .item(&close_gradebook_item)
+                    .separator()
+                    .item(&settings_item)
+                    .separator()
+                    .quit()
+                    .build()?
+            };
 
             let edit_menu = SubmenuBuilder::new(handle, "Edit")
                 .undo()
@@ -471,13 +596,42 @@ fn main() {
 
             let window_menu = SubmenuBuilder::new(handle, "Window").minimize().build()?;
 
-            let help_menu = SubmenuBuilder::new(handle, "Help")
-                .item(&view_help_item)
-                .item(&check_updates_item)
-                .build()?;
+            let help_menu = if cfg!(target_os = "macos") {
+                SubmenuBuilder::new(handle, "Help")
+                    .item(&view_help_item)
+                    .item(&check_updates_item)
+                    .build()?
+            } else {
+                SubmenuBuilder::new(handle, "Help")
+                    .item(&view_help_item)
+                    .item(&check_updates_item)
+                    .separator()
+                    .item(&PredefinedMenuItem::about(handle, Some("About Nexam"), None)?)
+                    .build()?
+            };
 
-            tauri::menu::MenuBuilder::new(handle)
-                .item(&app_menu)
+            let menu_builder = tauri::menu::MenuBuilder::new(handle);
+
+            let menu_builder = if cfg!(target_os = "macos") {
+                let app_menu = SubmenuBuilder::new(handle, "Nexam")
+                    .item(&PredefinedMenuItem::about(handle, Some("About Nexam"), None)?)
+                    .separator()
+                    .item(&settings_item)
+                    .separator()
+                    .services()
+                    .separator()
+                    .hide()
+                    .hide_others()
+                    .show_all()
+                    .separator()
+                    .quit()
+                    .build()?;
+                menu_builder.item(&app_menu)
+            } else {
+                menu_builder
+            };
+
+            menu_builder
                 .item(&file_menu)
                 .item(&edit_menu)
                 .item(&window_menu)
@@ -493,7 +647,7 @@ fn main() {
             }
             "view-help" => {
                 let help_url = format!("https://github.com/{UPDATE_REPO}#readme");
-                let _ = Command::new("open").arg(help_url).spawn();
+                open_external_url(&help_url);
             }
             "new-bank" => {
                 let _ = app_handle.emit("nexam://new-bank", ());
@@ -552,6 +706,47 @@ fn main() {
         .expect("error while running Nexam");
 
     app.run(|app_handle, event| match event {
+            // Closing the last window *is* quitting on Windows, and the window
+            // is already destroyed by the time ExitRequested arrives -- so
+            // preventing the exit there leaves a live process with nothing on
+            // screen, which reads as "it quit anyway and threw away my work".
+            // Ask here instead, while the window still exists and declining
+            // can genuinely call the close off.
+            //
+            // macOS keeps its existing path untouched: closing the last window
+            // does not quit there, so the question belongs on Cmd+Q, where
+            // ExitRequested already handles it correctly.
+            #[cfg(not(target_os = "macos"))]
+            RunEvent::WindowEvent { event: WindowEvent::CloseRequested { api, .. }, .. } => {
+                let state = app_handle.state::<Arc<AppRuntimeState>>();
+                if state.allow_exit() {
+                    return;
+                }
+                // Shutting a pop-out pane or the gradebook is not quitting;
+                // only the last window standing carries the question.
+                if app_handle.webview_windows().len() > 1 {
+                    return;
+                }
+                if !state.desktop_context().archive_dirty {
+                    return;
+                }
+
+                api.prevent_close();
+                let confirm = MessageDialog::new()
+                    .set_level(MessageLevel::Warning)
+                    .set_title("Unsaved Archive Changes")
+                    .set_description(
+                        "The working copy has changes that have not been written back to the .bok archive. Quit anyway?",
+                    )
+                    .set_buttons(MessageButtons::YesNo)
+                    .show();
+
+                if confirm == MessageDialogResult::Yes {
+                    state.set_allow_exit(true);
+                    state.stop_backend();
+                    app_handle.exit(0);
+                }
+            }
             RunEvent::WindowEvent { event: WindowEvent::Destroyed, .. } => {
                 let state = app_handle.state::<Arc<AppRuntimeState>>();
                 if app_handle.webview_windows().is_empty() {

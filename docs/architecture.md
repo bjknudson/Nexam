@@ -2,7 +2,7 @@
 
 ## Design goals
 
-- Local-first desktop app for macOS.
+- Local-first desktop app for macOS and Windows.
 - Single-user workflow.
 - Explicit file-based storage using `.bok` zip packages.
 

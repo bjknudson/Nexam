@@ -13,7 +13,13 @@ import cv2
 import numpy as np
 import pytest
 
-from app.backend.grading.detect import decode_qr_payload, locate_fiducials, read_sheet
+from app.backend.grading.detect import (
+    _MAX_AFFINE_RESIDUAL_FIDUCIAL_FRACTION,
+    _affine_fit_residual,
+    decode_qr_payload,
+    locate_fiducials,
+    read_sheet,
+)
 from app.backend.grading.layout import SheetCopySpec, build_sheet_layout
 from app.backend.models import AnswerKeyItemModel, AnswerKeyModel
 
@@ -116,6 +122,50 @@ def test_perspective_skew_and_noise_still_recovers_answers():
     assert fiducial_confidence == 1.0
     assert results[0].detected_choice_indices == [2]
     assert results[0].flag == "none"
+
+
+def test_a_dark_scan_edge_beside_a_corner_does_not_outrank_the_fiducial():
+    """A phone scanning app's crop can leave a dark strip down one edge, inside
+    a corner's search window and larger than the fiducial itself. Picking the
+    largest blob there put one corner 0.56in adrift on a real sheet: the other
+    three still anchored the page, so the quad stayed near-rectangular and
+    passed every plausibility check, while the skewed homography read six rows
+    as blank at 99-100% confidence.
+    """
+
+    layout, page = _layout_and_page()
+    image = rasterize_layout_page(layout, 0, 300)
+    mc_row = page.rows[0]
+    fill_cells(image, layout, [mc_row.cells[2]], 300)
+
+    # Down the right edge, clear of the bottom-right fiducial but well inside
+    # its search window, and comfortably the bigger of the two.
+    height, width = image.shape
+    image[height - 400 : height - 60, width - 30 : width] = 0
+
+    results, fiducial_confidence, _ = read_sheet(
+        image, page, layout.page_width_pt, layout.page_height_pt
+    )
+
+    assert fiducial_confidence == 1.0
+    assert results[0].detected_choice_indices == [2]
+    assert results[0].flag == "none"
+
+
+def test_affine_residual_tells_a_displaced_corner_from_an_honestly_skewed_scan():
+    """Both quads below come from the same real scan -- the second is what the
+    detector actually picked. Angle and aspect could not tell them apart (3.2
+    degrees and 4.2% off, against limits of 12 and 20%), and the bad quad
+    scored *better* on aspect than the good one.
+    """
+
+    expected = [(142.6, 150.0), (2282.4, 150.0), (142.6, 3150.0), (2282.4, 3150.0)]
+    correct = [(199.0, 212.6), (2269.0, 220.0), (206.2, 3114.2), (2254.2, 3124.6)]
+    displaced = [(200.0, 213.2), (2268.8, 220.6), (206.9, 3114.9), (2418.6, 3095.1)]
+    limit = (18.0 / 612.0) * 2425 * _MAX_AFFINE_RESIDUAL_FIDUCIAL_FRACTION
+
+    assert _affine_fit_residual(expected, correct) < limit
+    assert _affine_fit_residual(expected, displaced) > limit
 
 
 def test_blank_bubble_flagged_no_mark_not_silently_wrong():

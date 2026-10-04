@@ -137,13 +137,14 @@ npm run dev
 ```
 
 The Vite dev server runs on `http://127.0.0.1:5173` and proxies `/api`
-to the backend on port `8000` in browser-only dev.
+to the backend on port `8001` in browser-only dev. Override that with
+`VITE_API_PROXY_TARGET` -- see [vite.config.ts](../app/frontend/vite.config.ts).
 
 ## Browser dev flow
 
 Run the frontend in a browser without Tauri:
 
-1. Start the backend: `python3 -m uvicorn app.backend.main:app --reload --port 8000`
+1. Start the backend: `python3 -m uvicorn app.backend.main:app --reload --port 8001`
 2. Start the frontend: `cd app/frontend && npm install && npm run dev`
 3. Open `http://localhost:5173`
 
@@ -154,7 +155,7 @@ field as a fallback.
 ## Tauri dev shell
 
 Prerequisites: Rust toolchain, Tauri CLI, Xcode command line tools on
-macOS.
+macOS, MSVC Build Tools on Windows.
 
 Recommended local setup:
 
@@ -168,6 +169,41 @@ npm install
 npm run tauri:dev
 ```
 
+### Windows setup
+
+Install the toolchain from an **elevated** PowerShell, then reopen the
+terminal so PATH picks up:
+
+```powershell
+winget install -e --id OpenJS.NodeJS.LTS --source winget
+winget install -e --id Python.Python.3.12 --source winget
+winget install -e --id Rustlang.Rustup --source winget
+winget install -e --id Microsoft.VisualStudio.2022.BuildTools --source winget `
+  --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+```
+
+Disable the Python Store aliases first, or `python` resolves to a stub
+that cannot run: **Settings -> Apps -> Advanced app settings -> App
+execution aliases**, then turn off `python.exe` and `python3.exe`.
+
+Then set up the repo:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r app\backend\requirements.txt -r app\backend\requirements-dev.txt
+cd app\frontend; npm ci; cd ..\..
+rustup default stable-x86_64-pc-windows-msvc
+```
+
+`rustc -vV` should report `host: x86_64-pc-windows-msvc`.
+
+One ordering gotcha: `tauri-build` checks that everything in
+`bundle.resources` exists, so `cargo check` fails on a fresh clone until
+the backend has been frozen once. Run
+[scripts/build_backend_binary.ps1](../scripts/build_backend_binary.ps1)
+(or the `.sh` on macOS) before the first `cargo` command.
+
 The `tauri:dev` script enters `src-tauri/` before invoking the Tauri
 CLI, so the CLI, config, and build hooks all resolve paths from the
 same place.
@@ -175,16 +211,19 @@ same place.
 What the desktop shell does ([src-tauri/src/backend.rs](../src-tauri/src/backend.rs)):
 
 - in dev builds, launches the backend with repo-root `.venv/bin/python3`
-  (falling back to `python3` on PATH)
+  (`.venv\Scripts\python.exe` on Windows), falling back to `python3` /
+  `python` on PATH
 - in release builds, launches a PyInstaller-frozen backend bundled as
   an app resource — no Python install required (see below)
 - waits for the backend health check before enabling the UI
 - exposes the backend base URL to the frontend
-- opens native macOS open/save dialogs for `.bok`
+- opens native open/save dialogs for `.bok`
 - warns on close if the working copy has unsaved changes
 - checks GitHub releases for updates on launch and from the Help menu
 
 ## Building a distributable bundle
+
+### macOS
 
 ```bash
 source .venv/bin/activate
@@ -199,6 +238,24 @@ is bundled in, which passes locally but gets Gatekeeper-rejected as
 "damaged" (not just "unidentified developer") once a copy is downloaded and
 carries the `com.apple.quarantine` flag. See [DISTRIBUTION.md](../DISTRIBUTION.md)
 for the full explanation and for sharing a beta build with testers.
+
+### Windows
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+.\scripts\build_backend_binary.ps1
+cd app\frontend; npm run tauri:build
+```
+
+Writes an NSIS installer to
+`src-tauri\target\release\bundle\nsis\Nexam_<version>_x64-setup.exe`.
+There is no re-signing step: the macOS one exists only because PyInstaller
+ships Python as a versioned framework held together by symlinks, and Windows
+has no equivalent.
+
+`installMode: "both"` means a teacher on a locked-down school machine can
+install per-user without an admin prompt, while IT can still install
+per-machine.
 
 ## API endpoints
 
