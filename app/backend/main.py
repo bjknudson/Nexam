@@ -34,6 +34,7 @@ from .models import (
     OpenBankRequest,
     OpenGradebookRequest,
     OverrideRowResultRequest,
+    QuestionDetailModel,
     QuestionImportPromoteRequest,
     QuestionImportRowUpdateRequest,
     QuestionModel,
@@ -56,6 +57,7 @@ from .models import (
 )
 from .gradebook_service import GradebookService
 from .service import BankWorkspaceError, BankWorkspaceService
+from .validation import lint_question
 from .version import get_backend_version, is_frozen
 
 
@@ -796,24 +798,30 @@ def list_assets():
     return service.list_assets()
 
 
+def _question_detail(question: QuestionModel) -> QuestionDetailModel:
+    return QuestionDetailModel(question=question, issues=lint_question(question))
+
+
 @app.get("/api/questions/{question_id}")
 def get_question(question_id: str):
-    return service.get_question(question_id)
+    return _question_detail(service.get_question(question_id))
 
 
 @app.put("/api/questions/{question_id}")
 def update_question(question_id: str, payload: QuestionModel):
-    return service.update_question(question_id, payload)
+    return _question_detail(service.update_question(question_id, payload))
 
 
 @app.post("/api/questions")
 def create_question(request: CreateQuestionRequest):
-    return service.create_question(template_question_id=request.template_question_id)
+    return _question_detail(
+        service.create_question(template_question_id=request.template_question_id)
+    )
 
 
 @app.post("/api/questions/from-json")
 def create_question_from_json(payload: dict[str, Any]):
-    return service.create_question_from_json(payload)
+    return _question_detail(service.create_question_from_json(payload))
 
 
 @app.post("/api/questions/from-json-batch")

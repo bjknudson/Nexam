@@ -65,12 +65,16 @@ import GradebookApp from "./GradebookApp";
 import {
   escapeLikelyLatexBackslashesInJson,
   hasMathMarkup,
+  IssueDot,
   looksLikeUnescapedLatexInJson,
   MathPreviewField,
   MathTextPreview,
   QuestionAssetPreviewList,
   QuestionMathSummaryPreview,
 } from "./MathPreview";
+import { issuesForPath } from "./validationIssues";
+import { locateJsonPath } from "./jsonLocate";
+import { findJsonSyntaxError, type JsonSyntaxError } from "./jsonSyntaxCheck";
 import BankPropertiesDialog, { type BankPropertiesMode } from "./BankPropertiesDialog";
 import CoursesWorkspace from "./CoursesWorkspace";
 import QuestionImportWorkspace from "./QuestionImportWorkspace";
@@ -87,6 +91,8 @@ import type {
   BankSummaryModel,
   CourseModel,
   DesktopContext,
+  QuestionDetailModel,
+  QuestionImportValidationIssueModel,
   QuestionListItemModel,
   QuestionModel,
   QuestionType,
@@ -1002,6 +1008,11 @@ function App() {
   const [availableTypes, setAvailableTypes] = useState<string[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draftQuestion, setDraftQuestion] = useState<QuestionModel | null>(null);
+  // Advisory lint issues for the current draftQuestion. Deliberately NOT part of
+  // draftQuestion/rawJson -- the backend keeps them off QuestionModel for the same
+  // reason (see QuestionDetailModel), so they can never leak into the raw-JSON tab
+  // or get echoed back to the server on save.
+  const [questionIssues, setQuestionIssues] = useState<QuestionImportValidationIssueModel[]>([]);
   const [editorMode, setEditorMode] = useState<EditorMode>("form");
   const [pendingTypeChange, setPendingTypeChange] = useState<QuestionType | null>(null);
   const [backendVersionWarning, setBackendVersionWarning] = useState("");
@@ -1023,6 +1034,7 @@ function App() {
   const [workspaceDirty, setWorkspaceDirty] = useState(false);
   const [jsonError, setJsonError] = useState(false);
   const [jsonErrorMessage, setJsonErrorMessage] = useState("");
+  const [jsonErrorLocation, setJsonErrorLocation] = useState<JsonSyntaxError | null>(null);
   const [assetInspections, setAssetInspections] = useState<AssetInspectionResponseModel[]>([]);
   const [bankAssets, setBankAssets] = useState<AssetListItemModel[]>([]);
   const [sourceStandardLists, setSourceStandardLists] = useState<SourceStandardListModel[]>([]);
@@ -1118,6 +1130,7 @@ function App() {
 
   const saveTimerRef = useRef<number | null>(null);
   const assetInputRef = useRef<HTMLInputElement | null>(null);
+  const jsonTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const choiceAssetInputRefs = useRef<Record<number, HTMLInputElement | null>>({});
   const selectedIdRef = useRef<string | null>(null);
   const draftQuestionRef = useRef<QuestionModel | null>(null);
@@ -1135,6 +1148,7 @@ function App() {
     selectedIdRef.current = selectedId;
     setExpandedChoiceImageRows(new Set());
     setChoiceAssetBusy({});
+    setQuestionIssues([]);
   }, [selectedId]);
 
   useEffect(() => {
@@ -1564,10 +1578,11 @@ function App() {
   async function loadQuestion(questionId: string) {
     try {
       isHydratingRef.current = true;
-      const question = await getQuestion(questionId);
+      const detail = await getQuestion(questionId);
       draftDirtyRef.current = false;
-      setDraftQuestion(question);
-      setRawJson(JSON.stringify(question, null, 2));
+      setDraftQuestion(detail.question);
+      setQuestionIssues(detail.issues);
+      setRawJson(JSON.stringify(detail.question, null, 2));
       setAutosaveState("idle");
       setJsonError(false);
       setJsonErrorMessage("");
@@ -1585,11 +1600,12 @@ function App() {
     setAutosaveState("dirty");
   }
 
-  function replaceDraftLocally(question: QuestionModel) {
+  function replaceDraftLocally(detail: QuestionDetailModel) {
     isHydratingRef.current = true;
-    draftQuestionRef.current = question;
-    setDraftQuestion(question);
-    setRawJson(JSON.stringify(question, null, 2));
+    draftQuestionRef.current = detail.question;
+    setDraftQuestion(detail.question);
+    setQuestionIssues(detail.issues);
+    setRawJson(JSON.stringify(detail.question, null, 2));
     setJsonError(false);
     setJsonErrorMessage("");
     isHydratingRef.current = false;
@@ -1650,17 +1666,17 @@ function App() {
         setErrorMessage("");
         replaceDraftLocally(savedQuestion);
 
-        if (savedQuestion.id !== previousId) {
-          selectedIdRef.current = savedQuestion.id;
-          setSelectedId(savedQuestion.id);
+        if (savedQuestion.question.id !== previousId) {
+          selectedIdRef.current = savedQuestion.question.id;
+          setSelectedId(savedQuestion.question.id);
         }
 
-        await refreshQuestionList(savedQuestion.id);
+        await refreshQuestionList(savedQuestion.question.id);
         await refreshAssetList();
 
         if (reason === "autosave" || reason === "manual") {
           setStatusMessage(
-            `Saved ${savedQuestion.id} to the working copy. Save Bank writes the archive.`,
+            `Saved ${savedQuestion.question.id} to the working copy. Save Bank writes the archive.`,
           );
         }
 
@@ -2378,12 +2394,12 @@ function App() {
       setWorkspaceDirty(true);
       setAutosaveState("saved");
       replaceDraftLocally(createdQuestion);
-      selectedIdRef.current = createdQuestion.id;
-      setSelectedId(createdQuestion.id);
-      await refreshQuestionList(createdQuestion.id);
+      selectedIdRef.current = createdQuestion.question.id;
+      setSelectedId(createdQuestion.question.id);
+      await refreshQuestionList(createdQuestion.question.id);
       await refreshAssetList();
       setStatusMessage(
-        `Saved new question ${createdQuestion.id} to the working copy. Save Bank writes the archive.`,
+        `Saved new question ${createdQuestion.question.id} to the working copy. Save Bank writes the archive.`,
       );
       setErrorMessage("");
     } catch (error) {
@@ -2479,14 +2495,14 @@ function App() {
       setWorkspaceDirty(true);
       setAutosaveState("idle");
       replaceDraftLocally(createdQuestion);
-      selectedIdRef.current = createdQuestion.id;
-      setSelectedId(createdQuestion.id);
-      await refreshQuestionList(createdQuestion.id);
+      selectedIdRef.current = createdQuestion.question.id;
+      setSelectedId(createdQuestion.question.id);
+      await refreshQuestionList(createdQuestion.question.id);
       await refreshAssetList();
       setStatusMessage(
         templateQuestionId
-          ? `Copied ${templateQuestionId} to ${createdQuestion.id} in the working copy.`
-          : `Created ${createdQuestion.id} in the working copy.`,
+          ? `Copied ${templateQuestionId} to ${createdQuestion.question.id} in the working copy.`
+          : `Created ${createdQuestion.question.id} in the working copy.`,
       );
       setErrorMessage("");
     } catch (error) {
@@ -2615,14 +2631,49 @@ function App() {
       const previewQuestion = normalizeQuestionForView(parsed);
       setJsonError(false);
       setJsonErrorMessage("");
+      setJsonErrorLocation(null);
       draftQuestionRef.current = previewQuestion;
       setDraftQuestion(previewQuestion);
       setErrorMessage("");
     } catch (error) {
+      // The native JSON.parse error text is engine-dependent (V8 includes a
+      // character position; JavaScriptCore, which the real Tauri desktop
+      // shell runs on macOS, does not) -- our own scanner gives a consistent
+      // message and an exact offset to jump to regardless of which engine
+      // actually rejected the input. Fall back to the native message only if
+      // our scanner can't explain the failure (it should always agree with
+      // JSON.parse, but this keeps a failure visible instead of masking it).
+      const syntaxError = findJsonSyntaxError(value);
+      const message = syntaxError?.message ?? (error as Error).message;
       setJsonError(true);
-      setJsonErrorMessage((error as Error).message);
-      setErrorMessage((error as Error).message);
+      setJsonErrorMessage(message);
+      setJsonErrorLocation(syntaxError);
+      setErrorMessage(message);
     }
+  }
+
+  function jumpToRawJsonRange(start: number, end: number, line: number) {
+    const textarea = jsonTextareaRef.current;
+    if (!textarea) return;
+    textarea.focus();
+    textarea.setSelectionRange(start, end);
+    const lineHeight = parseFloat(window.getComputedStyle(textarea).lineHeight || "0") || 18;
+    textarea.scrollTop = Math.max(0, (line - 3) * lineHeight);
+  }
+
+  function jumpToIssueInRawJson(issue: QuestionImportValidationIssueModel) {
+    const location = locateJsonPath(rawJson, issue.location);
+    if (!location) return;
+    jumpToRawJsonRange(location.start, location.end, location.line);
+  }
+
+  function jumpToJsonSyntaxError() {
+    if (!jsonErrorLocation) return;
+    jumpToRawJsonRange(
+      jsonErrorLocation.offset,
+      jsonErrorLocation.offset + 1,
+      jsonErrorLocation.line,
+    );
   }
 
   /**
@@ -2701,11 +2752,11 @@ function App() {
       setWorkspaceDirty(true);
       setAutosaveState("saved");
       replaceDraftLocally(created);
-      selectedIdRef.current = created.id;
-      setSelectedId(created.id);
-      await refreshQuestionList(created.id);
+      selectedIdRef.current = created.question.id;
+      setSelectedId(created.question.id);
+      await refreshQuestionList(created.question.id);
       setStatusMessage(
-        `Created ${created.id} as a ${nextType} copy. ${base.id} is unchanged.`,
+        `Created ${created.question.id} as a ${nextType} copy. ${base.id} is unchanged.`,
       );
       setErrorMessage("");
     } catch (error) {
@@ -3978,7 +4029,19 @@ function App() {
                     <div className="json-editor-shell">
                       {jsonError ? (
                         <div className="json-error-banner">
-                          <span>{jsonErrorMessage || "Raw JSON is invalid."}</span>
+                          <span>
+                            {jsonErrorMessage || "Raw JSON is invalid."}
+                            {jsonErrorLocation ? ` (line ${jsonErrorLocation.line})` : ""}
+                          </span>
+                          {jsonErrorLocation ? (
+                            <button
+                              type="button"
+                              className="json-jump-to-error"
+                              onClick={jumpToJsonSyntaxError}
+                            >
+                              Jump to error
+                            </button>
+                          ) : null}
                           {looksLikeUnescapedLatexInJson(rawJson) ? (
                             <div className="json-latex-helper">
                               <span>
@@ -3996,10 +4059,31 @@ function App() {
                           ) : null}
                         </div>
                       ) : null}
+                      {questionIssues.length > 0 ? (
+                        <div className="json-issues-panel">
+                          {questionIssues.map((issue, index) => {
+                            const location = locateJsonPath(rawJson, issue.location);
+                            return (
+                              <button
+                                key={`${issue.code}-${index}`}
+                                type="button"
+                                className={`json-issue-row json-issue-${issue.severity ?? "warning"}`}
+                                onClick={() => jumpToIssueInRawJson(issue)}
+                                disabled={!location}
+                              >
+                                <span className="issue-dot issue-dot-warning" aria-hidden />
+                                <span>{issue.message}</span>
+                                {location ? <span className="json-issue-line">Line {location.line}</span> : null}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : null}
                       <div
                         className={`json-editor-layout ${!editingFieldsEnabled ? "with-preview" : ""}`}
                       >
                         <textarea
+                          ref={jsonTextareaRef}
                           className="json-editor"
                           value={rawJson}
                           spellCheck={false}
@@ -4377,6 +4461,15 @@ function App() {
                                 <span className="status-pill">
                                   {correctChoiceIndices.length} correct
                                 </span>
+                                {correctChoiceIndices.length === 0 ? (
+                                  <IssueDot
+                                    issues={issuesForPath(questionIssues, [
+                                      "answer",
+                                      "correct_choice_index",
+                                    ])}
+                                  />
+                                ) : null}
+                                <IssueDot issues={issuesForPath(questionIssues, ["answer", "choices"])} />
                               </div>
                               <button type="button" onClick={() => addMultipleChoiceChoice()}>
                                 Add Choice
@@ -4385,8 +4478,16 @@ function App() {
                             {choices.map((choice, index) => {
                               const choiceAsset = choiceAssets[String(index)] ?? null;
                               const isExpanded = expandedChoiceImageRows.has(index) || !!choiceAsset;
+                              const choiceIssues = issuesForPath(questionIssues, [
+                                "answer",
+                                "choices",
+                                index,
+                              ]);
                               return (
-                                <div key={index} className="choice-row">
+                                <div
+                                  key={index}
+                                  className={`choice-row${choiceIssues.length > 0 ? " has-issue" : ""}`}
+                                >
                                   <label className="choice-correct-toggle">
                                     <input
                                       type="checkbox"
@@ -4413,6 +4514,7 @@ function App() {
                                     />
                                   </MathPreviewField>
                                   <div className="choice-row-actions">
+                                    <IssueDot issues={choiceIssues} />
                                     <button
                                       type="button"
                                       className={`choice-image-toggle${choiceAsset ? " has-image" : ""}`}
@@ -4513,8 +4615,15 @@ function App() {
                   {draftQuestion.type === "numeric_response" ? (
                     <section className="question-specific">
                       <h2>Numeric Response</h2>
-                      <label>
+                      <label
+                        className={
+                          issuesForPath(questionIssues, ["answer", "value"]).length > 0
+                            ? "has-issue"
+                            : undefined
+                        }
+                      >
                         Answer Value
+                        <IssueDot issues={issuesForPath(questionIssues, ["answer", "value"])} />
                         <input
                           type="number"
                           value={Number((draftQuestion.answer as Record<string, unknown>)?.value ?? 0)}
@@ -4531,8 +4640,15 @@ function App() {
                           onChange={(event) => updateNumericAnswer("unit", event.target.value)}
                         />
                       </MathPreviewField>
-                      <label>
+                      <label
+                        className={
+                          issuesForPath(questionIssues, ["answer", "tolerance"]).length > 0
+                            ? "has-issue"
+                            : undefined
+                        }
+                      >
                         Tolerance
+                        <IssueDot issues={issuesForPath(questionIssues, ["answer", "tolerance"])} />
                         <input
                           type="number"
                           step="0.01"
@@ -4565,6 +4681,7 @@ function App() {
                         label="Sample Solution"
                         value={draftQuestion.sample_solution ?? ""}
                         editing={editingFieldsEnabled}
+                        issues={issuesForPath(questionIssues, ["sample_solution"])}
                       >
                         <textarea
                           value={draftQuestion.sample_solution ?? ""}
@@ -4603,6 +4720,12 @@ function App() {
                           }
                         />
                       </MathPreviewField>
+                      <div className="question-section-header">
+                        <div>
+                          <h3>Rubric</h3>
+                          <IssueDot issues={issuesForPath(questionIssues, ["rubric"])} />
+                        </div>
+                      </div>
                       <div className="rubric-list">
                         {draftQuestion.rubric.map((row, index) => (
                           <div key={index} className="rubric-row">

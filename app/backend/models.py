@@ -656,11 +656,18 @@ class QuestionModel(BaseModel):
 
     @model_validator(mode="after")
     def validate_question_shape(self) -> "QuestionModel":
+        """Structural invariants only -- is the data well-formed and internally
+        consistent? Whether a question is actually *finished* (has a correct
+        answer designated, choices with content, a rubric, etc.) is a separate,
+        non-blocking concern handled by `validation.lint_question` so an
+        in-progress question is never rejected just for being incomplete.
+        """
+
         if self.type == "multiple_choice":
             answer = dict(self.answer or {})
             choices = answer.get("choices")
-            if not isinstance(choices, list) or len(choices) < 2:
-                raise ValueError("multiple_choice questions need at least two choices")
+            if not isinstance(choices, list):
+                raise ValueError("multiple_choice choices must be a list")
             correct_indices = answer.get("correct_choice_indices")
             correct_index = answer.get("correct_choice_index")
             if correct_indices is not None:
@@ -676,25 +683,21 @@ class QuestionModel(BaseModel):
                 # A repeated index carries no extra meaning, and a single index is
                 # just a single-answer question written the long way. Normalize both
                 # so question JSON written by another tool imports cleanly, matching
-                # what the question form already does when it builds an answer.
+                # what the question form already does when it builds an answer. An
+                # empty list collapses to "no correct answer designated yet" rather
+                # than raising -- lint_question flags that instead.
                 unique_indices = sorted(dict.fromkeys(correct_indices))
-                if not unique_indices:
-                    raise ValueError(
-                        "multiple_choice correct_choice_indices must reference at least one choice"
-                    )
-
                 answer.pop("correct_choice_index", None)
                 answer.pop("correct_choice_indices", None)
                 if len(unique_indices) == 1:
                     answer["correct_choice_index"] = unique_indices[0]
-                else:
+                elif len(unique_indices) > 1:
                     answer["correct_choice_indices"] = unique_indices
-            elif type(correct_index) is not int:
-                raise ValueError(
-                    "multiple_choice questions need a correct_choice_index or correct_choice_indices"
-                )
-            elif correct_index < 0 or correct_index >= len(choices):
-                raise ValueError("multiple_choice correct_choice_index must reference a choice")
+            elif correct_index is not None:
+                if type(correct_index) is not int:
+                    raise ValueError("multiple_choice correct_choice_index must be an integer")
+                if correct_index < 0 or correct_index >= len(choices):
+                    raise ValueError("multiple_choice correct_choice_index must reference a choice")
 
             choice_assets = answer.get("choice_assets")
             normalized_choice_assets: dict[str, dict[str, Any]] = {}
@@ -713,33 +716,11 @@ class QuestionModel(BaseModel):
                         raise ValueError("multiple_choice choice_assets must reference a choice")
                     normalized_choice_assets[key] = AssetModel.model_validate(value).model_dump()
 
-            # A choice needs something to show a student: either its own text or
-            # an attached image. Neither is required on top of the other, since
-            # forcing a text label on an image-only choice (e.g. one of several
-            # diagram options) is pure authoring overhead with nothing to show for it.
-            for index, choice in enumerate(choices):
-                has_text = isinstance(choice, str) and choice.strip() != ""
-                has_image = str(index) in normalized_choice_assets
-                if not has_text and not has_image:
-                    raise ValueError(f"choice {index + 1} needs text or an image")
-
             if normalized_choice_assets:
                 answer["choice_assets"] = normalized_choice_assets
             else:
                 answer.pop("choice_assets", None)
             self.answer = answer
-        elif self.type == "numeric_response":
-            answer = self.answer or {}
-            if "value" not in answer:
-                raise ValueError("numeric_response questions need an answer value")
-            if "tolerance" not in answer:
-                raise ValueError("numeric_response questions need an answer tolerance")
-        elif self.type == "short_answer":
-            if not (self.sample_solution or "").strip():
-                raise ValueError("short_answer questions need a sample_solution")
-        elif self.type == "free_response":
-            if not self.rubric:
-                raise ValueError("free_response questions need at least one rubric row")
         return self
 
 
@@ -764,6 +745,19 @@ class UpdateBankDetailsRequest(BaseModel):
 
 class CreateQuestionRequest(BaseModel):
     template_question_id: str | None = None
+
+
+class QuestionDetailModel(BaseModel):
+    """A question plus its advisory lint issues (see validation.lint_question).
+
+    Issues are deliberately not a field on QuestionModel itself: that model is
+    what gets written verbatim to disk (`.bok` question JSON) and round-tripped
+    through the raw-JSON editor tab, so a derived, ephemeral list like this
+    would either get persisted as stale data or echoed back on the next save.
+    """
+
+    question: QuestionModel
+    issues: list[QuestionImportValidationIssueModel] = Field(default_factory=list)
 
 
 class CreateQuestionsFromJsonRequest(BaseModel):

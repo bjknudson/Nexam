@@ -19,14 +19,17 @@ def test_api_accepts_question_json_updates(client: TestClient, demo_bok: Path) -
 
     question_response = client.get("/api/questions/q_sa_0001")
     assert question_response.status_code == 200
-    payload = question_response.json()
+    payload = question_response.json()["question"]
     payload["prompt"] = "State Ohm's law using one sentence and one equation."
     payload["tags"] = ["circuits", "raw-json"]
 
     update_response = client.put("/api/questions/q_sa_0001", json=payload)
 
     assert update_response.status_code == 200
-    assert update_response.json()["prompt"] == "State Ohm's law using one sentence and one equation."
+    assert (
+        update_response.json()["question"]["prompt"]
+        == "State Ohm's law using one sentence and one equation."
+    )
 
     list_response = client.get("/api/questions", params={"search": "raw-json"})
     assert list_response.status_code == 200
@@ -41,14 +44,14 @@ def test_api_creates_question_from_json_with_automatic_id(
     assert open_response.status_code == 200
 
     question_response = client.get("/api/questions/q_sa_0001")
-    payload = question_response.json()
+    payload = question_response.json()["question"]
     payload.pop("id")
     payload["prompt"] = "AI-generated short answer JSON can be added as a new question."
 
     create_response = client.post("/api/questions/from-json", json=payload)
 
     assert create_response.status_code == 200
-    assert create_response.json()["id"] == "q_sa_0011"
+    assert create_response.json()["question"]["id"] == "q_sa_0011"
 
     list_response = client.get("/api/questions", params={"search": "AI-generated"})
     assert list_response.status_code == 200
@@ -65,18 +68,41 @@ def test_api_returns_next_question_id_for_type(client: TestClient, demo_bok: Pat
     assert response.json() == {"id": "q_num_0008"}
 
 
-def test_api_rejects_invalid_question_json(client: TestClient, demo_bok: Path) -> None:
+def test_api_accepts_incomplete_question_with_an_advisory_issue(
+    client: TestClient, demo_bok: Path
+) -> None:
+    """A blank sample_solution is incomplete, not broken -- saving must still
+    succeed, with the gap surfaced as an advisory issue instead of a 422."""
+
     open_response = client.post("/api/banks/open", json={"path": str(demo_bok)})
     assert open_response.status_code == 200
 
     question_response = client.get("/api/questions/q_sa_0001")
-    payload = question_response.json()
+    payload = question_response.json()["question"]
     payload["sample_solution"] = ""
 
     update_response = client.put("/api/questions/q_sa_0001", json=payload)
 
+    assert update_response.status_code == 200
+    body = update_response.json()
+    assert body["question"]["sample_solution"] == ""
+    assert any(
+        issue["code"] == "short_answer_needs_sample_solution" for issue in body["issues"]
+    )
+
+
+def test_api_rejects_structurally_invalid_question_json(client: TestClient, demo_bok: Path) -> None:
+    open_response = client.post("/api/banks/open", json={"path": str(demo_bok)})
+    assert open_response.status_code == 200
+
+    question_response = client.get("/api/questions/q_sa_0001")
+    payload = question_response.json()["question"]
+    payload["prompt"] = ""
+
+    update_response = client.put("/api/questions/q_sa_0001", json=payload)
+
     assert update_response.status_code == 422
-    assert "short_answer questions need a sample_solution" in str(update_response.json()["detail"])
+    assert "field must not be empty" in str(update_response.json()["detail"])
 
 
 def test_api_stages_question_json_import(client: TestClient, demo_bok: Path) -> None:
@@ -84,7 +110,7 @@ def test_api_stages_question_json_import(client: TestClient, demo_bok: Path) -> 
     assert open_response.status_code == 200
 
     question_response = client.get("/api/questions/q_num_0001")
-    payload = question_response.json()
+    payload = question_response.json()["question"]
     payload.pop("id")
     payload["prompt"] = "Question import JSON can be staged before promotion."
 
@@ -143,7 +169,7 @@ def test_api_promotes_staged_question_import(client: TestClient, demo_bok: Path)
     assert open_response.status_code == 200
 
     question_response = client.get("/api/questions/q_sa_0001")
-    payload = question_response.json()
+    payload = question_response.json()["question"]
     payload.pop("id")
     payload["prompt"] = "API promotion writes staged rows to questions."
 
@@ -172,7 +198,10 @@ def test_api_promotes_staged_question_import(client: TestClient, demo_bok: Path)
 
     question_after_response = client.get("/api/questions/q_sa_0011")
     assert question_after_response.status_code == 200
-    assert question_after_response.json()["prompt"] == "API promotion writes staged rows to questions."
+    assert (
+        question_after_response.json()["question"]["prompt"]
+        == "API promotion writes staged rows to questions."
+    )
 
 
 def test_api_updates_staged_question_import_row(client: TestClient, demo_bok: Path) -> None:
@@ -180,9 +209,9 @@ def test_api_updates_staged_question_import_row(client: TestClient, demo_bok: Pa
     assert open_response.status_code == 200
 
     question_response = client.get("/api/questions/q_sa_0001")
-    payload = question_response.json()
+    payload = question_response.json()["question"]
     payload.pop("id")
-    payload["sample_solution"] = ""
+    payload["prompt"] = ""
 
     stage_response = client.post(
         "/api/question-imports/stage",
@@ -197,7 +226,7 @@ def test_api_updates_staged_question_import_row(client: TestClient, demo_bok: Pa
     stage = stage_response.json()
     assert stage["rows"][0]["status"] == "invalid"
 
-    payload["sample_solution"] = "Ohm's law is V = IR."
+    payload["prompt"] = "State Ohm's law."
     update_response = client.put(
         f"/api/question-imports/{stage['id']}/rows/{stage['rows'][0]['row_id']}",
         json={"question": payload},

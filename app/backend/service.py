@@ -62,6 +62,7 @@ from .models import (
     TestSectionItemModel,
     TestStandardBalanceModel,
 )
+from .validation import lint_question
 
 
 class BankWorkspaceError(Exception):
@@ -2406,6 +2407,8 @@ class BankWorkspaceService:
                     )
                 )
             return issues
+
+        issues.extend(lint_question(question))
 
         for index, reference in enumerate(question.standards):
             if reference.standard_id not in existing_standard_ids:

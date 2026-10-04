@@ -24,6 +24,7 @@ import type {
   QuestionImportListResponseModel,
   QuestionImportPromoteResponseModel,
   QuestionImportStageModel,
+  QuestionDetailModel,
   QuestionListResponseModel,
   QuestionModel,
   ResponseSheetVersionAssignment,
@@ -61,13 +62,38 @@ export interface ApiError extends Error {
   status?: number;
 }
 
+/**
+ * FastAPI/pydantic validation failures (422s) send `detail` as an array of
+ * `{loc, msg, type}` objects, not a string -- e.g. a blank `topic` or a bad
+ * `type` literal. Rendering that array with JSON.stringify produces an
+ * unreadable blob like `[{"type":"value_error","loc":["body","topic"],...}]`.
+ * Format it into one readable line per field instead.
+ */
+function formatErrorDetail(detail: unknown): string {
+  if (typeof detail === "string") return detail;
+  if (
+    Array.isArray(detail) &&
+    detail.length > 0 &&
+    detail.every((item) => item && typeof item === "object")
+  ) {
+    return detail
+      .map((item: { loc?: Array<string | number>; msg?: string }) => {
+        const field = Array.isArray(item.loc)
+          ? item.loc.filter((segment) => segment !== "body").join(".")
+          : "";
+        const message = (item.msg ?? "Invalid value").replace(/^Value error,\s*/, "");
+        return field ? `${field}: ${message}` : message;
+      })
+      .join("\n");
+  }
+  return JSON.stringify(detail ?? "Request failed.");
+}
+
 async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const payload = await response.json().catch(() => ({ detail: "Request failed." }));
     const detail =
-      typeof payload.detail === "string"
-        ? payload.detail
-        : JSON.stringify(payload.detail ?? "Request failed.");
+      typeof payload.detail === "string" ? payload.detail : formatErrorDetail(payload.detail);
     const error: ApiError = new Error(detail);
     error.status = response.status;
     throw error;
@@ -171,9 +197,7 @@ export async function deleteCourse(courseId: string): Promise<void> {
   if (!response.ok) {
     const payload = await response.json().catch(() => ({ detail: "Request failed." }));
     const detail =
-      typeof payload.detail === "string"
-        ? payload.detail
-        : JSON.stringify(payload.detail ?? "Request failed.");
+      typeof payload.detail === "string" ? payload.detail : formatErrorDetail(payload.detail);
     throw new Error(detail);
   }
 }
@@ -476,14 +500,14 @@ export async function addQuestionToTest(payload: {
   );
 }
 
-export async function getQuestion(id: string): Promise<QuestionModel> {
+export async function getQuestion(id: string): Promise<QuestionDetailModel> {
   return handleResponse(await fetch(buildApiUrl(`/api/questions/${id}`)));
 }
 
 export async function updateQuestion(
   id: string,
   question: QuestionModel | Record<string, unknown>,
-): Promise<QuestionModel> {
+): Promise<QuestionDetailModel> {
   return handleResponse(
     await fetch(buildApiUrl(`/api/questions/${id}`), {
       method: "PUT",
@@ -493,7 +517,7 @@ export async function updateQuestion(
   );
 }
 
-export async function createQuestion(templateQuestionId?: string): Promise<QuestionModel> {
+export async function createQuestion(templateQuestionId?: string): Promise<QuestionDetailModel> {
   return handleResponse(
     await fetch(buildApiUrl("/api/questions"), {
       method: "POST",
@@ -505,7 +529,7 @@ export async function createQuestion(templateQuestionId?: string): Promise<Quest
 
 export async function createQuestionFromJson(
   question: Record<string, unknown>,
-): Promise<QuestionModel> {
+): Promise<QuestionDetailModel> {
   return handleResponse(
     await fetch(buildApiUrl("/api/questions/from-json"), {
       method: "POST",
@@ -529,9 +553,7 @@ export async function deleteQuestion(id: string): Promise<void> {
   if (!response.ok) {
     const payload = await response.json().catch(() => ({ detail: "Request failed." }));
     const detail =
-      typeof payload.detail === "string"
-        ? payload.detail
-        : JSON.stringify(payload.detail ?? "Request failed.");
+      typeof payload.detail === "string" ? payload.detail : formatErrorDetail(payload.detail);
     throw new Error(detail);
   }
 }
@@ -722,9 +744,7 @@ export async function deleteStudent(studentId: string): Promise<void> {
   if (!response.ok) {
     const payload = await response.json().catch(() => ({ detail: "Request failed." }));
     const detail =
-      typeof payload.detail === "string"
-        ? payload.detail
-        : JSON.stringify(payload.detail ?? "Request failed.");
+      typeof payload.detail === "string" ? payload.detail : formatErrorDetail(payload.detail);
     throw new Error(detail);
   }
 }
