@@ -488,6 +488,98 @@ def test_update_question_import_row_revalidates_invalid_row(
     assert updated_row.proposed_id == "q_sa_0011"
 
 
+def test_delete_question_import_row_removes_just_that_row(
+    bank_service: BankWorkspaceService,
+    demo_bok: Path,
+) -> None:
+    bank_service.open_bank(str(demo_bok))
+    first = bank_service.get_question("q_sa_0001").model_dump()
+    first.pop("id")
+    second = bank_service.get_question("q_mc_0001").model_dump()
+    second.pop("id")
+
+    stage = bank_service.stage_question_import(
+        filename="questions.json",
+        content=json.dumps([first, second]).encode("utf-8"),
+    )
+    assert len(stage.rows) == 2
+    row_to_discard, row_to_keep = stage.rows[0], stage.rows[1]
+
+    updated_stage = bank_service.delete_question_import_row(stage.id, row_to_discard.row_id)
+
+    assert [row.row_id for row in updated_stage.rows] == [row_to_keep.row_id]
+    assert [row.row_id for row in bank_service.get_question_import(stage.id).rows] == [
+        row_to_keep.row_id
+    ]
+
+
+def test_delete_question_import_row_rejects_promoted_row(
+    bank_service: BankWorkspaceService,
+    demo_bok: Path,
+) -> None:
+    bank_service.open_bank(str(demo_bok))
+    source = bank_service.get_question("q_sa_0001").model_dump()
+    source.pop("id")
+
+    stage = bank_service.stage_question_import(
+        filename="questions.json",
+        content=json.dumps([source]).encode("utf-8"),
+    )
+    bank_service.promote_question_import_rows(stage.id)
+
+    with pytest.raises(BankWorkspaceError) as exc_info:
+        bank_service.delete_question_import_row(stage.id, stage.rows[0].row_id)
+
+    assert exc_info.value.status_code == 409
+    assert "cannot be discarded" in exc_info.value.message
+
+
+def test_delete_question_import_removes_whole_batch(
+    bank_service: BankWorkspaceService,
+    demo_bok: Path,
+) -> None:
+    bank_service.open_bank(str(demo_bok))
+    source = bank_service.get_question("q_sa_0001").model_dump()
+    source.pop("id")
+
+    stage = bank_service.stage_question_import(
+        filename="questions.json",
+        content=json.dumps([source]).encode("utf-8"),
+    )
+
+    bank_service.delete_question_import(stage.id)
+
+    assert bank_service.list_question_imports().items == []
+    with pytest.raises(BankWorkspaceError) as exc_info:
+        bank_service.get_question_import(stage.id)
+    assert exc_info.value.status_code == 404
+
+
+def test_delete_question_import_rejects_batch_with_a_promoted_row(
+    bank_service: BankWorkspaceService,
+    demo_bok: Path,
+) -> None:
+    bank_service.open_bank(str(demo_bok))
+    first = bank_service.get_question("q_sa_0001").model_dump()
+    first.pop("id")
+    second = bank_service.get_question("q_mc_0001").model_dump()
+    second.pop("id")
+
+    stage = bank_service.stage_question_import(
+        filename="questions.json",
+        content=json.dumps([first, second]).encode("utf-8"),
+    )
+    bank_service.promote_question_import_rows(stage.id, row_ids=[stage.rows[0].row_id])
+
+    with pytest.raises(BankWorkspaceError) as exc_info:
+        bank_service.delete_question_import(stage.id)
+
+    assert exc_info.value.status_code == 409
+    # The unpromoted row can still be discarded individually.
+    updated_stage = bank_service.delete_question_import_row(stage.id, stage.rows[1].row_id)
+    assert len(updated_stage.rows) == 1
+
+
 def test_promote_question_import_rows_can_keep_unique_imported_ids(
     bank_service: BankWorkspaceService,
     demo_bok: Path,

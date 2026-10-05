@@ -175,6 +175,36 @@ textarea {
   font-size: 0.85rem;
 }
 
+.document-switcher-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  padding: 0.55rem 0.6rem;
+}
+
+.document-switcher-row:hover {
+  background: #eef3f8;
+}
+
+.document-switcher-recent-title {
+  font-weight: 600;
+}
+
+.document-switcher-recent-path {
+  font-size: 0.78rem;
+  color: #64748b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
 .bank-properties-field {
   display: grid;
   gap: 0.35rem;
@@ -292,9 +322,21 @@ textarea {
 }
 
 .topbar-title {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 220px;
+}
+
+.topbar-title-text {
   display: grid;
   gap: 0.3rem;
-  min-width: 220px;
+}
+
+.topbar-doc-switch {
+  padding: 0.35rem 0.65rem;
+  font-size: 0.82rem;
+  white-space: nowrap;
 }
 
 .topbar p {
@@ -520,6 +562,30 @@ textarea {
 
 .workspace.test-builder-workspace {
   grid-template-columns: auto minmax(0, 1fr);
+}
+
+/* Decoupled from the header's 980px breakpoint: the docked question list is
+   already a narrow, fixed-width (320px) sidebar by default, so it can stay
+   side-by-side with the editor at widths well below where the header needs
+   to reflow. Stacking it full-width that early just pushed the editor down
+   the page for no reason. */
+@media (max-width: 640px) {
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  /* Only meaningful once .workspace above has actually gone single-column --
+     width:100% on a grid item whose column track is still auto-sized (i.e.
+     the docked sidebar above 640px) fights the track and blows it up far
+     past its normal 320px, which is what happened when this lived at the
+     header's wider 980px breakpoint instead of here. */
+  .dock-pane.docked,
+  .asset-pane.docked {
+    width: 100%;
+    border-left: 0;
+    border-right: 0;
+    border-bottom: 1px solid #d1dbe5;
+  }
 }
 
 .dock-pane {
@@ -793,6 +859,13 @@ textarea {
   min-width: 0;
 }
 
+.editor-mode-toggle-group {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 0 0 auto;
+}
+
 .editor-mode-toggle {
   display: inline-grid;
   grid-template-columns: repeat(2, minmax(84px, 1fr));
@@ -802,6 +875,65 @@ textarea {
   border-radius: 999px;
   background: #ffffff;
   flex: 0 0 auto;
+}
+
+/* Icon-only AI-prompting trigger, shown beside the pill only in Text View --
+   resets the base button chrome so it reads as a small glyph rather than a
+   bordered button, adding no layout weight beyond the icon itself. */
+.ai-prompt-hint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.3rem;
+  height: 1.3rem;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #7c3aed;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.ai-prompt-hint:hover {
+  background: #ede9fe;
+}
+
+.ai-prompt-hint svg {
+  width: 100%;
+  height: 100%;
+}
+
+.ai-prompt-modal {
+  width: min(560px, 90vw);
+}
+
+.ai-prompt-intro {
+  margin: 0;
+  color: #475569;
+}
+
+.ai-prompt-section {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.ai-prompt-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ai-prompt-section-header h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.ai-prompt-textarea {
+  width: 100%;
+  font-family: "SF Mono", "Menlo", monospace;
+  font-size: 0.82rem;
+  resize: vertical;
 }
 
 .editor-mode-toggle button {
@@ -878,6 +1010,10 @@ textarea {
   border: 1px solid #d1dbe5;
   border-radius: 12px;
   padding: 1rem;
+}
+
+.empty-state button {
+  margin-top: 0.5rem;
 }
 
 .question-specific h2 {
@@ -980,6 +1116,18 @@ textarea {
   gap: 0.75rem;
 }
 
+/* Sticky within .editor-scroll (the actual scrolling element -- the toolbar
+   above it stays put because it's a separate grid row, not because of
+   sticky) so a long pasted JSON blob can't push these out of view: without
+   this, scrolling down into the textarea to read past the fold scrolled the
+   banner away with it, leaving just a sliver peeking out above the text. */
+.json-error-banner,
+.json-batch-banner {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
 .json-error-banner {
   border: 1px solid #f1a6a6;
   border-radius: 8px;
@@ -988,6 +1136,28 @@ textarea {
   padding: 0.7rem 0.85rem;
   display: grid;
   gap: 0.6rem;
+}
+
+/* Same shape as .json-error-banner but an actionable prompt, not a rejection
+   -- a multi-question paste isn't an error, it's the wrong tool. */
+.json-batch-banner {
+  border: 1px solid #93c5fd;
+  border-radius: 8px;
+  background: #eff6ff;
+  color: #1e3a8a;
+  padding: 0.7rem 0.85rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.json-batch-banner button {
+  flex: 0 0 auto;
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #ffffff;
 }
 
 .json-jump-to-error {
@@ -1212,14 +1382,31 @@ textarea {
 }
 
 .question-import-workspace {
-  display: grid;
+  /* Always a standalone pop-out window now (see openPaneWindow("import", ...)
+     in App.tsx), not a strip squeezed above the editor. A grid's rows only
+     ever size to their own content, so at window height the leftover space
+     below a short row of rows just sat empty -- flex instead, with the
+     review section (below) set to grow, so it actually fills the window. */
+  display: flex;
+  flex-direction: column;
   gap: 0.9rem;
-  max-height: 36vh;
-  min-height: 210px;
+  height: 100%;
   overflow: auto;
   padding: 1rem 1.25rem;
   background: #eef3f8;
   border-bottom: 1px solid #d1dbe5;
+}
+
+.question-import-workspace.drag-active {
+  outline: 2px dashed #2563eb;
+  outline-offset: -4px;
+  background: #e0ecff;
+}
+
+.question-import-close-hint {
+  margin: 0.3rem 0 0;
+  color: #475569;
+  font-size: 0.88rem;
 }
 
 .question-import-header,
@@ -1479,10 +1666,13 @@ textarea {
 }
 
 .pending-import-workspace {
-  max-height: min(76vh, 920px);
+  /* Leftover from when this was a capped inline strip: max-height here
+     fought the standalone window's height:100% (above) and left dead space
+     below the box once the review section hit its own cap. grid-template-rows
+     assumed a fixed child count too, which broke whenever the status/error
+     banners (conditionally rendered) changed how many siblings preceded the
+     review section -- flex content-sizing (above) doesn't have that problem. */
   min-height: 560px;
-  align-content: start;
-  grid-template-rows: auto auto auto auto minmax(0, 1fr);
 }
 
 .pending-import-intake {
@@ -1491,11 +1681,37 @@ textarea {
   align-items: stretch;
 }
 
+.pending-import-intake-header {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.pending-import-intake-header h3 {
+  margin: 0;
+}
+
+/* Once there's something to vet, the paste/upload card collapses to this
+   strip so the review list + editor -- the actual task at that point -- get
+   the room instead. */
+.pending-import-intake-collapsed {
+  align-self: flex-start;
+  border-style: dashed;
+  color: #475569;
+  background: transparent;
+}
+
 .pending-paste-box textarea {
   min-height: 128px;
   resize: vertical;
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 0.92rem;
+}
+
+.pending-paste-count {
+  font-size: 0.82rem;
+  color: #475569;
 }
 
 .pending-import-controls {
@@ -1518,7 +1734,9 @@ textarea {
 .pending-import-review {
   grid-template-columns: minmax(320px, 0.85fr) minmax(520px, 1.15fr);
   min-height: 420px;
-  max-height: min(58vh, 680px);
+  /* Grows to fill whatever's left in the standalone window instead of
+     stopping at a fraction of the viewport -- see .question-import-workspace. */
+  flex: 1 1 auto;
 }
 
 .pending-card-panel,
@@ -1587,6 +1805,24 @@ textarea {
   padding: 0.35rem 0.55rem;
 }
 
+.pending-question-card-discard {
+  flex: 0 0 auto;
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0 !important;
+  line-height: 1;
+  border-color: transparent;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 1.1rem;
+}
+
+.pending-question-card-discard:hover {
+  border-color: #f1a6a6;
+  background: #fff5f5;
+  color: #991b1b;
+}
+
 .pending-question-card-top span,
 .pending-issue-count {
   color: #475569;
@@ -1640,6 +1876,23 @@ textarea {
   gap: 0.35rem;
   color: #334155;
   font-weight: 700;
+}
+
+/* Difficulty/Points/Time don't need a full grid column's width for a couple
+   of digits -- splitting them out of .pending-question-editor-grid lets
+   Type/Topic/Subtopic above use that space instead. */
+.pending-question-editor-numbers {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.pending-question-editor-numbers label {
+  display: grid;
+  gap: 0.35rem;
+  color: #334155;
+  font-weight: 700;
+  width: 100px;
 }
 
 .pending-prompt-editor textarea {
@@ -3838,18 +4091,32 @@ textarea {
 }
 
 @media (max-width: 980px) {
+  /* Title and controls share one compact row (each sized to its own
+     content, title left / controls right) instead of a strict single
+     column, which forced every region to full width and left both rows
+     mostly empty. The page-toggle pill needs the extra width for its four
+     tabs, so it's the only one forced onto its own row, always last. */
   .topbar {
-    grid-template-columns: minmax(0, 1fr);
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    row-gap: 0.5rem;
   }
 
-  .topbar-page-slot,
-  .topbar-controls {
-    justify-self: stretch;
+  .topbar-title {
+    order: 1;
+    flex: 0 1 auto;
   }
 
   .topbar-controls {
-    grid-template-columns: 1fr;
-    width: 100%;
+    order: 2;
+    flex: 0 1 auto;
+  }
+
+  .topbar-page-slot {
+    order: 3;
+    flex: 1 1 100%;
+    justify-content: center;
   }
 
   .archive-strip {
@@ -3857,10 +4124,6 @@ textarea {
   }
 
   .archive-open-path {
-    grid-template-columns: 1fr;
-  }
-
-  .workspace {
     grid-template-columns: 1fr;
   }
 
@@ -3914,14 +4177,6 @@ textarea {
   .rubric-criterion-field.with-preview,
   .json-editor-layout.with-preview {
     grid-template-columns: 1fr;
-  }
-
-  .dock-pane.docked,
-  .asset-pane.docked {
-    width: 100%;
-    border-left: 0;
-    border-right: 0;
-    border-bottom: 1px solid #d1dbe5;
   }
 
   .metadata-span-2 {

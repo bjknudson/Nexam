@@ -3,6 +3,9 @@ import type { DragEvent } from "react";
 
 import {
   createStandardPlaceholders,
+  deleteQuestionImport,
+  deleteQuestionImportRow,
+  getCurrentBank,
   listQuestionImports,
   promoteQuestionImport,
   stageQuestionImport,
@@ -14,6 +17,12 @@ import type { QuestionImportRowModel, QuestionImportStageModel } from "./types";
 type PendingFilter = "all" | "pending" | "needs_attention" | "selected" | "adopted";
 type ImportFormat = "json" | "csv";
 type PostAdoptAction = "none" | "new_test" | "current_test";
+
+// Shared with App.tsx/GradebookApp.tsx's own copies of the same name/value --
+// this workspace runs in its own pop-out window (see openPaneWindow in
+// desktop.ts), so it talks back to the main window over this channel instead
+// of through props: it has no parent to call back into directly.
+const PANE_SYNC_CHANNEL = "nexam-pane-sync";
 
 const QUESTION_IMPORT_JSON_TEMPLATE = JSON.stringify(
   [
@@ -46,14 +55,9 @@ const QUESTION_IMPORT_CSV_TEMPLATE = [
   'q_mc_example_001,multiple_choice,Algebra,1,"Which expression is equivalent to $2(x + 3)$?","algebra;expressions",STANDARD-ID-1,45,1,draft,,"Distribute 2 to both terms.",,"{""choices"":[""2x + 3"",""2x + 6"",""x + 6"",""2x - 6""],""correct_choice_index"":1}",[],[]',
 ].join("\n");
 
-interface QuestionImportWorkspaceProps {
-  open: boolean;
-  hasBank: boolean;
-  selectedTestLabel?: string | null;
-  onClose: () => void;
-  onWorkspaceChanged: (message: string, promotedQuestionIds?: string[]) => void;
-  onCreateTestFromQuestions?: (questionIds: string[]) => void;
-  onAddQuestionsToCurrentTest?: (questionIds: string[]) => void;
+interface TestContext {
+  hasCurrentTest: boolean;
+  label: string | null;
 }
 
 interface PendingQuestion {
@@ -142,10 +146,25 @@ function getPromptPreview(question: Record<string, unknown>) {
   return prompt || "No prompt yet.";
 }
 
-function getIssueTone(row: QuestionImportRowModel) {
+// With "Use automatic Nexam IDs" (the default), adoption never looks at the
+// imported/duplicate id at all -- it always assigns a fresh one (see
+// _resolve_promoted_question_id in service.py). These two issue codes are
+// the only ones that flag id conflicts, so they're pure noise in that mode:
+// nothing needs fixing, but every row that happened to arrive with a
+// colliding id still got flagged "Fix" and invited a click that did nothing.
+const ID_CONFLICT_ISSUE_CODES = new Set(["duplicate_existing_id", "duplicate_import_id"]);
+
+function visibleIssues(row: QuestionImportRowModel, idPolicy: "auto" | "keep_imported") {
+  return idPolicy === "auto"
+    ? row.issues.filter((issue) => !ID_CONFLICT_ISSUE_CODES.has(issue.code))
+    : row.issues;
+}
+
+function getIssueTone(row: QuestionImportRowModel, idPolicy: "auto" | "keep_imported") {
   if (row.status === "promoted") return "adopted";
-  if (row.issues.some((issue) => issue.severity !== "warning")) return "invalid";
-  if (row.issues.length > 0) return "warning";
+  const issues = visibleIssues(row, idPolicy);
+  if (issues.some((issue) => issue.severity !== "warning")) return "invalid";
+  if (issues.length > 0) return "warning";
   return "ready";
 }
 
@@ -157,6 +176,37 @@ function getUnknownStandardIds(row: QuestionImportRowModel) {
       return match?.[1]?.trim() ?? "";
     })
     .filter(Boolean);
+}
+
+/** A quick client-side preview of how many questions a paste looks like,
+ *  before the user even clicks Import Paste -- the backend's own parser
+ *  (service.py's _parse_json_question_import) is the real source of truth,
+ *  this is just an early hint. CSV is a rough line count, not a real parse
+ *  (a quoted field containing a newline would throw it off). */
+function describePasteCount(text: string, format: ImportFormat): string | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+
+  if (format === "json") {
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      let count = 1;
+      if (Array.isArray(parsed)) {
+        count = parsed.length;
+      } else if (parsed && typeof parsed === "object") {
+        const record = parsed as Record<string, unknown>;
+        if (Array.isArray(record.questions)) count = record.questions.length;
+        else if (Array.isArray(record.items)) count = record.items.length;
+      }
+      return `Looks like ${count} question${count === 1 ? "" : "s"}.`;
+    } catch {
+      return "Doesn't parse as JSON yet.";
+    }
+  }
+
+  const lines = trimmed.split("\n").filter((line) => line.trim().length > 0);
+  const count = Math.max(lines.length - 1, 0);
+  return `Looks like about ${count} question${count === 1 ? "" : "s"} (header row + one per line).`;
 }
 
 function downloadTemplateFile(filename: string, content: string, type: string) {
@@ -171,19 +221,21 @@ function downloadTemplateFile(filename: string, content: string, type: string) {
   URL.revokeObjectURL(url);
 }
 
-export default function QuestionImportWorkspace({
-  open,
-  hasBank,
-  selectedTestLabel,
-  onClose,
-  onWorkspaceChanged,
-  onCreateTestFromQuestions,
-  onAddQuestionsToCurrentTest,
-}: QuestionImportWorkspaceProps) {
+export default function QuestionImportWorkspace() {
+  const [hasBank, setHasBank] = useState(false);
+  const [testContext, setTestContext] = useState<TestContext>({
+    hasCurrentTest: false,
+    label: null,
+  });
   const [imports, setImports] = useState<QuestionImportStageModel[]>([]);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [pasteText, setPasteText] = useState("");
   const [pasteFormat, setPasteFormat] = useState<ImportFormat>("json");
+  const [dragActive, setDragActive] = useState(false);
+  // Collapses the paste/upload card once there's something to vet, so the
+  // review list + editor (the actual task at that point) get the space
+  // instead. Re-expand manually to import more.
+  const [intakeCollapsed, setIntakeCollapsed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [statusMessage, setStatusMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
@@ -198,6 +250,94 @@ export default function QuestionImportWorkspace({
   const [jsonFieldError, setJsonFieldError] = useState("");
   const [draftDirty, setDraftDirty] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // This workspace is only ever a standalone pop-out window now (see
+  // openPaneWindow("import", ...) in App.tsx) -- it has no parent passing
+  // down whether a bank is open, so it asks the shared backend directly,
+  // the same way GradebookApp independently discovers its own document.
+  useEffect(() => {
+    let cancelled = false;
+    void getCurrentBank().then(
+      () => {
+        if (!cancelled) setHasBank(true);
+      },
+      () => {
+        if (!cancelled) setHasBank(false);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /** Receives a pasted question batch handed off from the single-question
+   *  editor's Text View (see detectQuestionBatch/handleSendPasteToImport in
+   *  App.tsx) and stages it immediately -- the teacher lands on a window
+   *  that's already showing review rows, not an empty paste box they have
+   *  to resubmit. `stageFile` is declared further down; function
+   *  declarations hoist, so this is safe to call from the effects below. */
+  function stageHandoffText(text: string, format: ImportFormat) {
+    setPasteText(text);
+    setPasteFormat(format);
+    const filename = format === "json" ? "pasted-questions.json" : "pasted-questions.csv";
+    const type = format === "json" ? "application/json" : "text/csv";
+    void stageFile(new File([text], filename, { type }));
+  }
+
+  // A freshly-created window gets the handoff text on its own URL. Staging
+  // is a one-shot side effect (not a subscription), so React.StrictMode's
+  // deliberate mount -> cleanup -> mount-again in development would otherwise
+  // run this twice and stage the same pasted batch as two separate imports --
+  // each batch assigning its own "unique" auto ids against the same
+  // not-yet-promoted on-disk snapshot, so neither copy looks like a
+  // duplicate to the conflict check, and "Adopt All Ready" would happily
+  // promote both. The ref makes the second StrictMode pass a no-op.
+  const handledUrlPasteRef = useRef(false);
+  useEffect(() => {
+    if (handledUrlPasteRef.current) return;
+    const params = new URLSearchParams(window.location.search);
+    const text = params.get("pasteText");
+    if (!text) return;
+    handledUrlPasteRef.current = true;
+    stageHandoffText(text, (params.get("pasteFormat") as ImportFormat) ?? "json");
+    // Acting once on load is the point; re-running would fight the teacher.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // A reused/focused existing window instead gets it over the broadcast
+  // channel (openPaneWindow can't tell "focus me" from "focus me AND here's
+  // a new paste" via the URL alone, since reusing a window never reloads
+  // it -- same reasoning as openGradebookWindow's intent broadcast). This
+  // channel doubles as how the "Adopt + Current Test" button learns whether
+  // the main window has a test selected, since this workspace has no parent
+  // passing that down directly anymore.
+  useEffect(() => {
+    if (typeof BroadcastChannel === "undefined") return;
+    let channel: BroadcastChannel;
+    try {
+      channel = new BroadcastChannel(PANE_SYNC_CHANNEL);
+    } catch {
+      return;
+    }
+    channel.onmessage = (event) => {
+      if (event.data?.type === "question-import-context") {
+        setTestContext({
+          hasCurrentTest: !!event.data.hasCurrentTest,
+          label: event.data.currentTestLabel ?? null,
+        });
+      } else if (event.data?.type === "question-import-paste") {
+        stageHandoffText(
+          event.data.pasteText ?? "",
+          (event.data.pasteFormat as ImportFormat) ?? "json",
+        );
+      }
+    };
+    channel.postMessage({ type: "question-import-context-request" });
+    return () => {
+      channel.onmessage = null;
+      channel.close();
+    };
+  }, []);
 
   const pendingQuestions = useMemo<PendingQuestion[]>(
     () =>
@@ -217,7 +357,7 @@ export default function QuestionImportWorkspace({
   const visiblePendingQuestions = pendingQuestions.filter((item) => {
     const { row } = item;
     if (pendingFilter === "pending" && row.status === "promoted") return false;
-    if (pendingFilter === "needs_attention" && row.issues.length === 0) return false;
+    if (pendingFilter === "needs_attention" && visibleIssues(row, idPolicy).length === 0) return false;
     if (pendingFilter === "selected" && !row.selected) return false;
     if (pendingFilter === "adopted" && row.status !== "promoted") return false;
     const needle = pendingSearch.trim().toLowerCase();
@@ -246,7 +386,7 @@ export default function QuestionImportWorkspace({
   );
 
   async function refreshImports() {
-    if (!open || !hasBank) return;
+    if (!hasBank) return;
     setBusy(true);
     try {
       const response = await listQuestionImports();
@@ -261,7 +401,7 @@ export default function QuestionImportWorkspace({
 
   useEffect(() => {
     void refreshImports();
-  }, [open, hasBank]);
+  }, [hasBank]);
 
   useEffect(() => {
     if (!selectedPending) {
@@ -297,6 +437,28 @@ export default function QuestionImportWorkspace({
     return () => window.clearTimeout(timer);
   }, [draftDirty, draftQuestion, selectedPending?.key]);
 
+  /** Tells the main window's bank/question state to catch up -- this window
+   *  has no parent to call back into directly, so it broadcasts instead of
+   *  invoking a prop (mirrors GradebookApp's status broadcasts). */
+  function notifyMainWindow(
+    message: string,
+    promotedQuestionIds: string[] = [],
+    postAction: PostAdoptAction = "none",
+  ) {
+    try {
+      const channel = new BroadcastChannel(PANE_SYNC_CHANNEL);
+      channel.postMessage({
+        type: "question-import-adopted",
+        message,
+        promotedQuestionIds,
+        postAction,
+      });
+      channel.close();
+    } catch {
+      // Best effort only.
+    }
+  }
+
   async function stageFile(file: File) {
     setBusy(true);
     try {
@@ -312,7 +474,8 @@ export default function QuestionImportWorkspace({
       const message = `Imported ${stage.rows.length} pending questions from ${stage.source_filename}. ${validCount} ready, ${invalidCount} need attention.`;
       setStatusMessage(message);
       setErrorMessage("");
-      onWorkspaceChanged(message);
+      notifyMainWindow(message);
+      setIntakeCollapsed(true);
     } catch (error) {
       setErrorMessage((error as Error).message);
     } finally {
@@ -322,7 +485,7 @@ export default function QuestionImportWorkspace({
 
   async function handleStageFile() {
     if (!importFile) {
-      setErrorMessage("Choose, drop, or paste questions first.");
+      setErrorMessage("Choose a file first.");
       return;
     }
     await stageFile(importFile);
@@ -339,8 +502,21 @@ export default function QuestionImportWorkspace({
     await stageFile(new File([content], filename, { type }));
   }
 
+  function handleDragEnter(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    setDragActive(true);
+  }
+
+  function handleDragLeave(event: DragEvent<HTMLElement>) {
+    // Children re-fire dragenter/dragleave as the pointer crosses them --
+    // only clear the highlight once the pointer actually leaves the section.
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+    setDragActive(false);
+  }
+
   function handleDrop(event: DragEvent<HTMLElement>) {
     event.preventDefault();
+    setDragActive(false);
     const file = event.dataTransfer.files[0];
     if (file) {
       void stageFile(file);
@@ -453,13 +629,7 @@ export default function QuestionImportWorkspace({
       const message = `Adopted ${promotedIds.length} pending questions into the bank.`;
       setStatusMessage(message);
       setErrorMessage("");
-      onWorkspaceChanged(message, promotedIds);
-      if (postAction === "new_test" && promotedIds.length > 0) {
-        onCreateTestFromQuestions?.(promotedIds);
-      }
-      if (postAction === "current_test" && promotedIds.length > 0) {
-        onAddQuestionsToCurrentTest?.(promotedIds);
-      }
+      notifyMainWindow(message, promotedIds, postAction);
     } catch (error) {
       setErrorMessage((error as Error).message);
     } finally {
@@ -473,6 +643,46 @@ export default function QuestionImportWorkspace({
     delete next.id;
     setDraftQuestion(next);
     await saveDraftQuestion(next, selectedPending.row.selected, "Using an automatic Nexam id.");
+  }
+
+  /** A bad paste or an unwanted row used to just sit in the pending list
+   *  forever -- there was no way to remove it. */
+  async function discardPendingRow(item: PendingQuestion) {
+    const { importId, rowId } = parsePendingKey(item.key);
+    setBusy(true);
+    try {
+      const updatedStage = await deleteQuestionImportRow({ importId, rowId });
+      setImports((current) =>
+        current.map((stage) => (stage.id === updatedStage.id ? updatedStage : stage)),
+      );
+      setStatusMessage("Discarded the pending question.");
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function discardImportBatch(stage: QuestionImportStageModel) {
+    if (
+      !window.confirm(
+        `Discard all ${stage.rows.length} question(s) from ${stage.source_filename}? This can't be undone.`,
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await deleteQuestionImport(stage.id);
+      setImports((current) => current.filter((item) => item.id !== stage.id));
+      setStatusMessage(`Discarded the ${stage.source_filename} import.`);
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function addMissingStandards(ids: string[]) {
@@ -505,7 +715,7 @@ export default function QuestionImportWorkspace({
       const message = `Added ${standardIds.length} placeholder standards for pending questions.`;
       setStatusMessage(message);
       setErrorMessage("");
-      onWorkspaceChanged(message);
+      notifyMainWindow(message);
     } catch (error) {
       setErrorMessage((error as Error).message);
     } finally {
@@ -513,15 +723,15 @@ export default function QuestionImportWorkspace({
     }
   }
 
-  if (!open) return null;
-
   const selectedUnknownStandardIds = selectedPending ? getUnknownStandardIds(selectedPending.row) : [];
-  const selectedTone = selectedPending ? getIssueTone(selectedPending.row) : "ready";
+  const selectedTone = selectedPending ? getIssueTone(selectedPending.row, idPolicy) : "ready";
 
   return (
     <section
-      className="question-import-workspace pending-import-workspace"
+      className={`question-import-workspace pending-import-workspace ${dragActive ? "drag-active" : ""}`}
       onDragOver={(event) => event.preventDefault()}
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
       <header className="question-import-header">
@@ -533,26 +743,50 @@ export default function QuestionImportWorkspace({
             <span className="status-pill error">{countPending(imports, "invalid")} need fixes</span>
             <span className="status-pill">{countPending(imports, "promoted")} adopted</span>
           </div>
+          <p className="question-import-close-hint">
+            Close this window when finished -- the question editor keeps working separately.
+          </p>
         </div>
         <div className="question-import-actions">
           <button type="button" onClick={() => void refreshImports()} disabled={busy || !hasBank}>
             Refresh
           </button>
-          <button type="button" onClick={onClose}>
-            Return to Editor
-          </button>
         </div>
       </header>
 
+      {intakeCollapsed ? (
+        <button
+          type="button"
+          className="pending-import-intake-collapsed"
+          onClick={() => setIntakeCollapsed(false)}
+        >
+          + Import more questions
+        </button>
+      ) : (
       <div className="question-import-stage-panel pending-import-intake">
+        <div className="pending-import-intake-header">
+          <h3>Paste Questions</h3>
+          {pendingQuestions.length > 0 ? (
+            <button type="button" onClick={() => setIntakeCollapsed(true)}>
+              Minimize
+            </button>
+          ) : null}
+        </div>
         <label className="pending-paste-box">
-          Paste Questions
           <textarea
+            aria-label="Paste Questions"
             value={pasteText}
             onChange={(event) => setPasteText(event.target.value)}
-            placeholder="Paste JSON or CSV question content here."
+            placeholder={
+              pasteFormat === "json"
+                ? "Paste a JSON array of questions here, e.g. from an AI chat response."
+                : "Paste CSV question rows here, including the header row."
+            }
             disabled={busy || !hasBank}
           />
+          {pasteText.trim() ? (
+            <span className="pending-paste-count">{describePasteCount(pasteText, pasteFormat)}</span>
+          ) : null}
         </label>
         <div className="pending-import-controls">
           <label>
@@ -609,6 +843,7 @@ export default function QuestionImportWorkspace({
           </div>
         </div>
       </div>
+      )}
 
       {statusMessage ? <div className="question-import-status">{statusMessage}</div> : null}
       {errorMessage ? <div className="json-error-banner">{errorMessage}</div> : null}
@@ -619,6 +854,7 @@ export default function QuestionImportWorkspace({
           <select
             value={idPolicy}
             onChange={(event) => setIdPolicy(event.target.value as "auto" | "keep_imported")}
+            title="Applies to every Adopt action below."
           >
             <option value="auto">Use automatic Nexam IDs</option>
             <option value="keep_imported">Keep imported IDs</option>
@@ -628,6 +864,7 @@ export default function QuestionImportWorkspace({
           type="button"
           onClick={() => void adoptPendingQuestions(selectedPending ? [selectedPending] : [])}
           disabled={busy || !selectedPending || selectedPending.row.status !== "valid"}
+          title="Adopts only the question open in the editor panel on the right."
         >
           Adopt This
         </button>
@@ -635,6 +872,7 @@ export default function QuestionImportWorkspace({
           type="button"
           onClick={() => void adoptPendingQuestions(selectedReadyPending)}
           disabled={busy || selectedReadyPending.length === 0}
+          title="Adopts every ready question with its checkbox marked Included, across all pastes/files staged so far."
         >
           Adopt Selected
         </button>
@@ -642,6 +880,7 @@ export default function QuestionImportWorkspace({
           type="button"
           onClick={() => void adoptPendingQuestions(allReadyPending)}
           disabled={busy || allReadyPending.length === 0}
+          title="Adopts every ready question, whether or not it's marked Included -- across all pastes/files staged so far."
         >
           Adopt All Ready
         </button>
@@ -649,15 +888,17 @@ export default function QuestionImportWorkspace({
           type="button"
           onClick={() => void adoptPendingQuestions(selectedReadyPending, "new_test")}
           disabled={busy || selectedReadyPending.length === 0}
+          title="Adopts the Included questions, then creates a brand-new test containing them."
         >
           Adopt + New Test
         </button>
         <button
           type="button"
           onClick={() => void adoptPendingQuestions(selectedReadyPending, "current_test")}
-          disabled={busy || selectedReadyPending.length === 0 || !onAddQuestionsToCurrentTest}
+          disabled={busy || selectedReadyPending.length === 0 || !testContext.hasCurrentTest}
+          title="Adopts the Included questions, then adds them to the test currently selected in the main window."
         >
-          Adopt + {selectedTestLabel ? selectedTestLabel : "Current Test"}
+          Adopt + {testContext.label ? testContext.label : "Current Test"}
         </button>
         {unknownStandardIds.length > 0 ? (
           <button type="button" onClick={() => void addMissingStandards(unknownStandardIds)} disabled={busy}>
@@ -694,7 +935,8 @@ export default function QuestionImportWorkspace({
 
           <div className="pending-question-card-list">
             {visiblePendingQuestions.map((item) => {
-              const tone = getIssueTone(item.row);
+              const tone = getIssueTone(item.row, idPolicy);
+              const visibleIssueCount = visibleIssues(item.row, idPolicy).length;
               const title = getString(item.row.question, "topic") || "Missing topic";
               return (
                 <article
@@ -716,12 +958,25 @@ export default function QuestionImportWorkspace({
                       {item.row.selected ? "Included" : "Include"}
                     </button>
                     <span>{item.row.status === "promoted" ? "Adopted" : tone === "ready" ? "Ready" : "Fix"}</span>
+                    <button
+                      type="button"
+                      className="pending-question-card-discard"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void discardPendingRow(item);
+                      }}
+                      disabled={busy || item.row.status === "promoted"}
+                      title="Discard this pending question"
+                      aria-label="Discard this pending question"
+                    >
+                      &times;
+                    </button>
                   </div>
                   <strong>{item.row.proposed_id ?? item.row.imported_id ?? item.row.row_id}</strong>
                   <span>{String(item.row.question.type ?? "unknown")} / {title}</span>
                   <p>{getPromptPreview(item.row.question)}</p>
-                  {item.row.issues.length > 0 ? (
-                    <span className="pending-issue-count">{item.row.issues.length} issue(s)</span>
+                  {visibleIssueCount > 0 ? (
+                    <span className="pending-issue-count">{visibleIssueCount} issue(s)</span>
                   ) : null}
                 </article>
               );
@@ -756,12 +1011,30 @@ export default function QuestionImportWorkspace({
                       Add Standard
                     </button>
                   ) : null}
+                  <button
+                    type="button"
+                    className="danger-button"
+                    onClick={() => void discardPendingRow(selectedPending)}
+                    disabled={busy || selectedPending.row.status === "promoted"}
+                    title="Removes just this one pending question."
+                  >
+                    Discard This
+                  </button>
+                  <button
+                    type="button"
+                    className="danger-button"
+                    onClick={() => void discardImportBatch(selectedPending.stage)}
+                    disabled={busy}
+                    title={`Removes all ${selectedPending.stage.rows.length} question(s) pasted/uploaded together as ${selectedPending.stage.source_filename}.`}
+                  >
+                    Discard Import
+                  </button>
                 </div>
               </div>
 
-              {selectedPending.row.issues.length > 0 ? (
+              {visibleIssues(selectedPending.row, idPolicy).length > 0 ? (
                 <div className="question-import-issues">
-                  {selectedPending.row.issues.map((issue, index) => (
+                  {visibleIssues(selectedPending.row, idPolicy).map((issue, index) => (
                     <div
                       key={`${issue.code}-${index}`}
                       className={issue.severity === "warning" ? "warning" : ""}
@@ -804,6 +1077,17 @@ export default function QuestionImportWorkspace({
                     onChange={(event) => updateDraftField("topic", event.target.value)}
                   />
                 </label>
+                <label className="metadata-span-full">
+                  Subtopic
+                  <input
+                    value={getString(draftQuestion, "subtopic")}
+                    disabled={selectedPending.row.status === "promoted"}
+                    onChange={(event) => updateDraftField("subtopic", event.target.value)}
+                  />
+                </label>
+              </div>
+
+              <div className="pending-question-editor-numbers">
                 <label>
                   Difficulty
                   <input
@@ -831,7 +1115,7 @@ export default function QuestionImportWorkspace({
                   />
                 </label>
                 <label>
-                  Time Seconds
+                  Time (sec)
                   <input
                     type="number"
                     min={0}
@@ -842,6 +1126,9 @@ export default function QuestionImportWorkspace({
                     }
                   />
                 </label>
+              </div>
+
+              <div className="pending-question-editor-grid">
                 <label className="metadata-span-full">
                   Tags
                   <input

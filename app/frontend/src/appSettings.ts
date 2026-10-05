@@ -14,7 +14,41 @@ export const SETTINGS_KEYS = {
   rubricMasteryLevels: "nexam:rubric-mastery-levels",
   bankDirectory: "nexam:bank-directory",
   lastGradebookPath: "nexam:last-gradebook-path",
+  recentBanks: "nexam:recent-banks",
+  recentGradebooks: "nexam:recent-gradebooks",
 } as const;
+
+export interface RecentDocument {
+  path: string;
+  title: string;
+}
+
+const MAX_RECENT_DOCUMENTS = 5;
+
+/** Parses a recent-documents list from the raw JSON string a usePersistedString
+ *  call for recentBanks/recentGradebooks holds. */
+export function parseRecentDocuments(raw: string): RecentDocument[] {
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (entry): entry is RecentDocument =>
+        typeof entry?.path === "string" && typeof entry?.title === "string",
+    );
+  } catch {
+    return [];
+  }
+}
+
+/** Returns the next raw JSON string for a recent-documents list after
+ *  recording a successfully opened/created document -- moved to the front,
+ *  deduped by path. Pass the result to the usePersistedString setter so the
+ *  write goes through React state (same-window re-render) and localStorage
+ *  (cross-window sync) the same way every other persisted setting does. */
+export function withRecentDocument(raw: string, path: string, title: string): string {
+  const existing = parseRecentDocuments(raw).filter((entry) => entry.path !== path);
+  return JSON.stringify([{ path, title }, ...existing].slice(0, MAX_RECENT_DOCUMENTS));
+}
 
 /** The same setting under the app's former name.
  *

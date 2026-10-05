@@ -11,7 +11,8 @@ type PaneKind =
   | "test-preview"
   | "response-sheet-print"
   | "editor"
-  | "tests";
+  | "tests"
+  | "import";
 
 interface OpenPaneWindowOptions {
   mode?: string;
@@ -20,6 +21,13 @@ interface OpenPaneWindowOptions {
   snapshotId?: string;
   width?: number;
   height?: number;
+  /** Hands a pasted question batch off to the "import" pane so it lands
+   *  already staged instead of an empty paste box -- see the single-question
+   *  editor's batch-paste detection in App.tsx. A fresh window reads these
+   *  off its own URL; a reused/focused existing window gets them via the
+   *  same broadcast channel openGradebookWindow's intent already uses. */
+  pasteText?: string;
+  pasteFormat?: "json" | "csv";
 }
 
 function getPaneWindowLabel(pane: PaneKind, mode?: string): string {
@@ -143,6 +151,10 @@ export async function openPaneWindow(
   if (options.snapshotId) {
     url.searchParams.set("snapshot", options.snapshotId);
   }
+  if (options.pasteText) {
+    url.searchParams.set("pasteText", options.pasteText);
+    url.searchParams.set("pasteFormat", options.pasteFormat ?? "json");
+  }
 
   const label = getPaneWindowLabel(pane, options.mode ?? options.snapshotId);
 
@@ -163,6 +175,22 @@ export async function openPaneWindow(
   const existing = await WebviewWindow.getByLabel(label);
 
   if (existing) {
+    // Reusing the window means it never reloads, so a fresh pasteText in the
+    // URL would otherwise be silently ignored -- same issue openGradebookWindow
+    // solves for its `intent` param, same fix: broadcast it instead.
+    if (options.pasteText) {
+      try {
+        const channel = new BroadcastChannel("nexam-pane-sync");
+        channel.postMessage({
+          type: "question-import-paste",
+          pasteText: options.pasteText,
+          pasteFormat: options.pasteFormat ?? "json",
+        });
+        channel.close();
+      } catch {
+        // BroadcastChannel is a convenience here, never a requirement.
+      }
+    }
     await existing.show();
     await existing.setFocus();
     return;
@@ -191,6 +219,7 @@ const GRADEBOOK_WINDOW_LABEL = "nexam-gradebook";
  *  docs/grading.md. */
 export async function openGradebookWindow(
   intent?: "new" | "open" | "demo",
+  path?: string,
 ): Promise<void> {
   const url = new URL(window.location.href);
   url.search = "";
@@ -198,6 +227,9 @@ export async function openGradebookWindow(
   // Carries File-menu intent through to the gradebook window, which reads it on
   // load so "Open Demo Gradebook" lands on the demo rather than a chooser.
   if (intent) url.searchParams.set("intent", intent);
+  // Only meaningful alongside intent "open" -- opens this specific recent
+  // file directly instead of raising the native picker.
+  if (path) url.searchParams.set("path", path);
 
   if (!isDesktopShell()) {
     const popup = window.open(
@@ -222,7 +254,7 @@ export async function openGradebookWindow(
     if (intent) {
       try {
         const channel = new BroadcastChannel("nexam-pane-sync");
-        channel.postMessage({ type: "gradebook-open-intent", intent });
+        channel.postMessage({ type: "gradebook-open-intent", intent, path });
         channel.close();
       } catch {
         // BroadcastChannel is a convenience here, never a requirement.

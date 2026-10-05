@@ -239,6 +239,37 @@ def test_api_updates_staged_question_import_row(client: TestClient, demo_bok: Pa
     assert updated_stage["rows"][0]["issues"] == []
 
 
+def test_api_discards_a_staged_question_import_row_and_then_the_whole_batch(
+    client: TestClient, demo_bok: Path
+) -> None:
+    open_response = client.post("/api/banks/open", json={"path": str(demo_bok)})
+    assert open_response.status_code == 200
+
+    first = client.get("/api/questions/q_sa_0001").json()["question"]
+    first.pop("id")
+    second = client.get("/api/questions/q_mc_0001").json()["question"]
+    second.pop("id")
+
+    stage_response = client.post(
+        "/api/question-imports/stage",
+        files={"file": ("questions.json", json.dumps([first, second]), "application/json")},
+    )
+    stage = stage_response.json()
+    assert len(stage["rows"]) == 2
+
+    discard_row_response = client.delete(
+        f"/api/question-imports/{stage['id']}/rows/{stage['rows'][0]['row_id']}"
+    )
+    assert discard_row_response.status_code == 200
+    assert len(discard_row_response.json()["rows"]) == 1
+
+    discard_batch_response = client.delete(f"/api/question-imports/{stage['id']}")
+    assert discard_batch_response.status_code == 204
+
+    list_response = client.get("/api/question-imports")
+    assert list_response.json()["items"] == []
+
+
 def test_api_creates_standards_manually(client: TestClient, demo_bok: Path) -> None:
     open_response = client.post("/api/banks/open", json={"path": str(demo_bok)})
     assert open_response.status_code == 200

@@ -79,7 +79,15 @@ import BankPropertiesDialog, { type BankPropertiesMode } from "./BankPropertiesD
 import CoursesWorkspace from "./CoursesWorkspace";
 import QuestionImportWorkspace from "./QuestionImportWorkspace";
 import Settings from "./Settings";
-import { SETTINGS_KEYS, usePersistedBoolean, usePersistedString } from "./appSettings";
+import {
+  SETTINGS_KEYS,
+  usePersistedBoolean,
+  usePersistedString,
+  parseRecentDocuments,
+  withRecentDocument,
+} from "./appSettings";
+import DocumentSwitcherDialog from "./DocumentSwitcherDialog";
+import AiPromptDialog from "./AiPromptDialog";
 import StandardsWorkspace from "./StandardsWorkspace";
 import TestBuilderPane from "./TestBuilderPane";
 import TestPrintPreview from "./TestPrintPreview";
@@ -115,7 +123,8 @@ type PaneKind =
   | "test-preview"
   | "response-sheet-print"
   | "editor"
-  | "tests";
+  | "tests"
+  | "import";
 type WorkspacePage = "questions" | "tests" | "standards" | "courses";
 
 // The top-level views, and the pop-out window each one opens.
@@ -347,6 +356,7 @@ const PANE_KINDS: PaneKind[] = [
   "response-sheet-print",
   "editor",
   "tests",
+  "import",
 ];
 
 function getPaneMode(): PaneKind | null {
@@ -475,6 +485,34 @@ function extractQuestionJsonPayload(raw: string): Record<string, unknown> {
   return candidate;
 }
 
+/** Detects a pasted batch of questions (e.g. "5 questions on this topic" from
+ *  an AI chat) so the Text View can offer a handoff to Import Questions
+ *  instead of just rejecting it. Mirrors the backend's own lenient shape
+ *  sniffing in `_parse_json_question_import` (service.py) -- a bare array, or
+ *  `{questions:[...]}` / `{items:[...]}` -- so "what we detect as a batch"
+ *  matches "what the import tool will actually accept". A one-item array is
+ *  already handled as a single question by extractQuestionJsonPayload above,
+ *  so it isn't a batch. Returns null for anything else, including invalid
+ *  JSON (that's extractQuestionJsonPayload's error to raise). */
+function detectQuestionBatch(raw: string): unknown[] | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+
+  const candidate = Array.isArray(parsed)
+    ? parsed
+    : isRecord(parsed) && Array.isArray(parsed.questions)
+      ? parsed.questions
+      : isRecord(parsed) && Array.isArray(parsed.items)
+        ? parsed.items
+        : null;
+
+  return candidate && candidate.length > 1 ? candidate : null;
+}
+
 interface QuestionPaneProps {
   open: boolean;
   poppedOut: boolean;
@@ -515,7 +553,6 @@ interface QuestionPaneProps {
   addToAllLabel?: string;
   onAddToAllTests?: () => void;
   showImportToggle?: boolean;
-  importOpen?: boolean;
   onToggleImport?: () => void;
 }
 
@@ -559,7 +596,6 @@ function QuestionPane({
   addToAllLabel = "Add to All",
   onAddToAllTests,
   showImportToggle = false,
-  importOpen = false,
   onToggleImport,
 }: QuestionPaneProps) {
   const [difficultyFilter, setDifficultyFilter] = useState("");
@@ -704,7 +740,7 @@ function QuestionPane({
                 onClick={onToggleImport}
                 disabled={loading || !hasBank}
               >
-                {importOpen ? "Return to Editor" : "Import Questions"}
+                Import Questions
               </button>
             ) : null}
           </div>
@@ -1003,6 +1039,13 @@ function App() {
       : null,
   );
   const [bank, setBank] = useState<BankSummaryModel | null>(null);
+  // Window-presence metadata only (never roster/test/score content) -- see
+  // the isolation note above GradebookApp's component, which broadcasts this.
+  const [gradebookStatus, setGradebookStatus] = useState<{
+    open: boolean;
+    title: string | null;
+    dirty: boolean;
+  }>({ open: false, title: null, dirty: false });
   const [questionItems, setQuestionItems] = useState<QuestionListItemModel[]>([]);
   const [availableTopics, setAvailableTopics] = useState<string[]>([]);
   const [availableTypes, setAvailableTypes] = useState<string[]>([]);
@@ -1035,6 +1078,7 @@ function App() {
   const [jsonError, setJsonError] = useState(false);
   const [jsonErrorMessage, setJsonErrorMessage] = useState("");
   const [jsonErrorLocation, setJsonErrorLocation] = useState<JsonSyntaxError | null>(null);
+  const [detectedBatch, setDetectedBatch] = useState<unknown[] | null>(null);
   const [assetInspections, setAssetInspections] = useState<AssetInspectionResponseModel[]>([]);
   const [bankAssets, setBankAssets] = useState<AssetListItemModel[]>([]);
   const [sourceStandardLists, setSourceStandardLists] = useState<SourceStandardListModel[]>([]);
@@ -1043,11 +1087,10 @@ function App() {
   const [assetBusy, setAssetBusy] = useState(false);
   const [expandedChoiceImageRows, setExpandedChoiceImageRows] = useState<Set<number>>(new Set());
   const [choiceAssetBusy, setChoiceAssetBusy] = useState<Record<number, boolean>>({});
-  const [questionDrawerOpen, setQuestionDrawerOpen] = useState(true);
+  const [questionDrawerOpen, setQuestionDrawerOpen] = useState(false);
   const [assetDrawerOpen, setAssetDrawerOpen] = useState(false);
   const [questionPanePoppedOut, setQuestionPanePoppedOut] = useState(false);
   const [assetPanePoppedOut, setAssetPanePoppedOut] = useState(false);
-  const [questionImportOpen, setQuestionImportOpen] = useState(false);
   const [workspacePage, setWorkspacePage] = useState<WorkspacePage>("questions");
   const [poppedOutPages, setPoppedOutPages] = useState<Record<WorkspacePage, boolean>>({
     questions: false,
@@ -1105,7 +1148,12 @@ function App() {
     false,
   );
   const [bankDirectory, setBankDirectory] = usePersistedString(SETTINGS_KEYS.bankDirectory, "");
+  const [recentBanksRaw, setRecentBanksRaw] = usePersistedString(SETTINGS_KEYS.recentBanks, "[]");
+  const [recentGradebooksRaw] = usePersistedString(SETTINGS_KEYS.recentGradebooks, "[]");
   const [bankPropertiesOpen, setBankPropertiesOpen] = useState(false);
+  const [bankSwitcherOpen, setBankSwitcherOpen] = useState(false);
+  const [gradebookSwitcherOpen, setGradebookSwitcherOpen] = useState(false);
+  const [aiPromptDialogOpen, setAiPromptDialogOpen] = useState(false);
   const [bankPropertiesMode, setBankPropertiesMode] = useState<BankPropertiesMode>("create");
   const [assetSearch, setAssetSearch] = useState("");
   const [questionPaneSnapshot, setQuestionPaneSnapshot] = useState<QuestionPaneSnapshot>({
@@ -1374,6 +1422,7 @@ function App() {
       setRawJson("");
       setJsonError(false);
       setJsonErrorMessage("");
+      setDetectedBatch(null);
       draftDirtyRef.current = false;
       setAutosaveState("idle");
       isHydratingRef.current = false;
@@ -1482,6 +1531,84 @@ function App() {
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [workspaceDirty]);
 
+  // Collapsed until there's something to show, open the moment a bank loads.
+  // `bank` only changes at open/close/create boundaries, never per-edit, so
+  // this never fights a manual collapse mid-session.
+  useEffect(() => {
+    setQuestionDrawerOpen(!!bank);
+  }, [bank]);
+
+  // Learns whether a gradebook is open purely so the header button can read
+  // "Open Gradebook" vs. "Switch Gradebook" -- see GradebookApp's broadcast.
+  // A fresh request on mount covers the case where the gradebook window was
+  // already open before this window (re)loaded.
+  useEffect(() => {
+    if (!isMainWindow || typeof BroadcastChannel === "undefined") return;
+    let channel: BroadcastChannel;
+    try {
+      channel = new BroadcastChannel(PANE_SYNC_CHANNEL);
+    } catch {
+      return;
+    }
+    channel.onmessage = (event) => {
+      if (event.data?.type !== "gradebook-status") return;
+      setGradebookStatus({
+        open: !!event.data.open,
+        title: event.data.title ?? null,
+        dirty: !!event.data.dirty,
+      });
+    };
+    channel.postMessage({ type: "gradebook-status-request" });
+    return () => {
+      channel.onmessage = null;
+      channel.close();
+    };
+  }, [isMainWindow]);
+
+  // Import Questions runs in its own window now (see QuestionImportWorkspace),
+  // so it can't call back into this window's state directly the way it used
+  // to as an inline component. It asks for "is a test currently selected"
+  // once on mount (to label its "Adopt + Current Test" button), and reports
+  // back what it adopted so this window can refresh the question list and,
+  // for the "+ New Test"/"+ Current Test" shortcuts, actually create/update
+  // that test -- the same two steps `onWorkspaceChanged`/`onCreateTestFromQuestions`/
+  // `onAddQuestionsToCurrentTest` used to do as direct prop calls.
+  useEffect(() => {
+    if (!isMainWindow || typeof BroadcastChannel === "undefined") return;
+    let channel: BroadcastChannel;
+    try {
+      channel = new BroadcastChannel(PANE_SYNC_CHANNEL);
+    } catch {
+      return;
+    }
+    channel.onmessage = (event) => {
+      if (event.data?.type === "question-import-context-request") {
+        channel.postMessage({
+          type: "question-import-context",
+          hasCurrentTest: !!selectedTestId,
+          currentTestLabel:
+            testDrafts.find((detail) => detail.test.id === selectedTestId)?.test.title ?? null,
+        });
+        return;
+      }
+      if (event.data?.type === "question-import-adopted") {
+        const promotedQuestionIds = Array.isArray(event.data.promotedQuestionIds)
+          ? (event.data.promotedQuestionIds as string[])
+          : [];
+        void handleQuestionImportWorkspaceChanged(event.data.message ?? "", promotedQuestionIds);
+        if (event.data.postAction === "new_test" && promotedQuestionIds.length > 0) {
+          void handleCreateTestFromImportedQuestions(promotedQuestionIds);
+        } else if (event.data.postAction === "current_test" && promotedQuestionIds.length > 0) {
+          void handleAddImportedQuestionsToCurrentTest(promotedQuestionIds);
+        }
+      }
+    };
+    return () => {
+      channel.onmessage = null;
+      channel.close();
+    };
+  }, [isMainWindow, selectedTestId, testDrafts]);
+
   async function refreshCurrentBank() {
     try {
       const summary = await getCurrentBank();
@@ -1586,6 +1713,7 @@ function App() {
       setAutosaveState("idle");
       setJsonError(false);
       setJsonErrorMessage("");
+      setDetectedBatch(null);
       setErrorMessage("");
     } catch (error) {
       setErrorMessage((error as Error).message);
@@ -1608,6 +1736,7 @@ function App() {
     setRawJson(JSON.stringify(detail.question, null, 2));
     setJsonError(false);
     setJsonErrorMessage("");
+    setDetectedBatch(null);
     isHydratingRef.current = false;
   }
 
@@ -1700,10 +1829,10 @@ function App() {
       const summary = await openBank(path);
       setBank(summary);
       setSelectedId(null);
-      setQuestionImportOpen(false);
       setWorkspaceDirty(false);
       setAutosaveState("idle");
       setStatusMessage(`Opened ${summary.manifest.title}`);
+      setRecentBanksRaw(withRecentDocument(recentBanksRaw, summary.source_path, summary.manifest.title));
       await refreshAssetList();
       await refreshStandardsData();
       await refreshTestDrafts();
@@ -1715,7 +1844,29 @@ function App() {
     }
   }
 
+  /** Resolves true once it's safe to replace the open bank -- either there
+   *  was nothing pending, it just got saved, or the teacher chose to discard
+   *  it. Mirrors GradebookApp's ensureSafeToClose. Resolves false if they
+   *  backed out, so the caller should abort. */
+  async function ensureBankSafeToClose(): Promise<boolean> {
+    if (!workspaceDirty) return true;
+    const shouldSave = window.confirm("This bank has unsaved changes. Save before closing it?");
+    if (shouldSave) {
+      return await runSave();
+    }
+    return window.confirm("Discard the unsaved changes and close this bank anyway?");
+  }
+
+  /** Opens a "Recent" entry directly, same safety check as every other way
+   *  of switching banks. */
+  async function handleOpenRecentBank(path: string) {
+    if (!(await ensureBankSafeToClose())) return;
+    if (!(await persistDraft("open-bank"))) return;
+    await openBankAtPath(path);
+  }
+
   async function handleOpenDialog() {
+    if (!(await ensureBankSafeToClose())) return;
     if (!(await persistDraft("open-bank"))) return;
     const path = await openBankDialog(bankDirectory || undefined);
     if (!path) return;
@@ -1724,6 +1875,7 @@ function App() {
 
   async function handleCloseBank() {
     if (!bank) return;
+    if (!(await ensureBankSafeToClose())) return;
     if (!(await persistDraft("open-bank"))) return;
     setLoading(true);
     try {
@@ -1744,9 +1896,9 @@ function App() {
 
   /** The gradebook is its own window, so File's gradebook commands open that
    *  window and tell it what to do rather than doing it here. */
-  async function handleOpenGradebook(intent: "new" | "open" | "demo") {
+  async function handleOpenGradebook(intent: "new" | "open" | "demo", path?: string) {
     try {
-      await openGradebookWindow(intent);
+      await openGradebookWindow(intent, path);
     } catch (error) {
       setErrorMessage((error as Error).message);
     }
@@ -1770,6 +1922,7 @@ function App() {
   }
 
   async function handleOpenDemo() {
+    if (!(await ensureBankSafeToClose())) return;
     if (!(await persistDraft("open-bank"))) return;
 
     setLoading(true);
@@ -1777,7 +1930,6 @@ function App() {
       const summary = await openDemoBank();
       setBank(summary);
       setSelectedId(null);
-      setQuestionImportOpen(false);
       setWorkspaceDirty(false);
       setAutosaveState("idle");
       setStatusMessage(
@@ -1800,15 +1952,16 @@ function App() {
       return;
     }
 
+    if (!(await ensureBankSafeToClose())) return;
     if (!(await persistDraft("open-bank"))) return;
     await openBankAtPath(openPath.trim());
   }
 
-  async function runSave(destinationPath?: string) {
+  async function runSave(destinationPath?: string): Promise<boolean> {
     setLoading(true);
     try {
       const questionSaved = await persistDraft("save-bank");
-      if (!questionSaved) return;
+      if (!questionSaved) return false;
 
       const response = await saveBank(destinationPath);
       setStatusMessage(showFullPaths ? `Saved bank to ${response.saved_to}` : "Saved bank.");
@@ -1819,8 +1972,10 @@ function App() {
       await refreshStandardsData();
       await refreshTestDrafts(selectedTestId);
       setErrorMessage("");
+      return true;
     } catch (error) {
       setErrorMessage((error as Error).message);
+      return false;
     } finally {
       setLoading(false);
     }
@@ -1848,6 +2003,7 @@ function App() {
 
   async function handleOpenNewBankDialog() {
     if (!desktopMode) return;
+    if (!(await ensureBankSafeToClose())) return;
     if (!(await persistDraft("open-bank"))) return;
     setBankPropertiesMode("create");
     setBankPropertiesOpen(true);
@@ -1876,10 +2032,10 @@ function App() {
         });
         setBank(summary);
         setSelectedId(null);
-        setQuestionImportOpen(false);
         setWorkspaceDirty(false);
         setAutosaveState("idle");
         setStatusMessage(`Created ${summary.manifest.title}.`);
+        setRecentBanksRaw(withRecentDocument(recentBanksRaw, summary.source_path, summary.manifest.title));
         await refreshAssetList();
         await refreshStandardsData();
         await refreshTestDrafts();
@@ -2175,7 +2331,6 @@ function App() {
       });
       const detail = await addQuestionIdsToTest(created.test.id, questionIds);
       handleOpenTest(created.test.id);
-      setQuestionImportOpen(false);
       setWorkspacePage("tests");
       setWorkspaceDirty(true);
       setStatusMessage(
@@ -2195,7 +2350,6 @@ function App() {
     setLoading(true);
     try {
       const detail = await addQuestionIdsToTest(selectedTestId, questionIds);
-      setQuestionImportOpen(false);
       setWorkspacePage("tests");
       setWorkspaceDirty(true);
       setStatusMessage(
@@ -2432,6 +2586,7 @@ function App() {
       setRawJson(formatted);
       setJsonError(false);
       setJsonErrorMessage("");
+      setDetectedBatch(null);
       const previewQuestion = normalizeQuestionForView(payload);
       draftQuestionRef.current = previewQuestion;
       setDraftQuestion(previewQuestion);
@@ -2457,6 +2612,7 @@ function App() {
       rawJsonRef.current = formatted;
       setJsonError(false);
       setJsonErrorMessage("");
+      setDetectedBatch(null);
       const previewQuestion = normalizeQuestionForView(payload);
       draftQuestionRef.current = previewQuestion;
       setDraftQuestion(previewQuestion);
@@ -2481,6 +2637,7 @@ function App() {
       setAutosaveState("idle");
       setJsonError(false);
       setJsonErrorMessage("");
+      setDetectedBatch(null);
     }
     setSelectedId(nextId);
   }
@@ -2525,6 +2682,7 @@ function App() {
       setDraftQuestion(null);
       setRawJson("");
       setJsonError(false);
+      setDetectedBatch(null);
       setAutosaveState("idle");
       isHydratingRef.current = false;
       selectedIdRef.current = null;
@@ -2625,6 +2783,17 @@ function App() {
   function handleRawJsonChange(value: string) {
     setRawJson(value);
     markDraftDirty();
+
+    const batch = detectQuestionBatch(value);
+    if (batch) {
+      setDetectedBatch(batch);
+      setJsonError(true);
+      setJsonErrorMessage("");
+      setJsonErrorLocation(null);
+      setErrorMessage("");
+      return;
+    }
+    setDetectedBatch(null);
 
     try {
       const parsed = extractQuestionJsonPayload(value);
@@ -2968,6 +3137,29 @@ function App() {
       }
       setErrorMessage((error as Error).message);
     }
+  }
+
+  /** Import Questions always opens as its own window -- it never had a
+   *  docked/inline mode to track like Questions/Assets do, so this is just
+   *  "open or focus it," no pop/dock state to flip. */
+  async function handleOpenImportWindow(pasteText?: string, pasteFormat?: "json" | "csv") {
+    try {
+      await openPaneWindow("import", "Import Questions", { pasteText, pasteFormat });
+      setStatusMessage("Opened Import Questions in a separate window.");
+    } catch (error) {
+      setErrorMessage((error as Error).message);
+    }
+  }
+
+  /** The teacher pasted a batch of questions (e.g. "5 questions on this
+   *  topic" from an AI chat) into a single question's Text View -- hand the
+   *  text off to the Import Questions window instead of leaving them staring
+   *  at a rejection error, and put the question they were editing back the
+   *  way it was rather than leaving someone else's JSON sitting there
+   *  unsaved. */
+  async function handleSendPasteToImport(batchText: string) {
+    await handleRevertQuestion();
+    await handleOpenImportWindow(batchText, "json");
   }
 
   function setPagePoppedOut(page: WorkspacePage, poppedOut: boolean) {
@@ -3493,6 +3685,14 @@ function App() {
     );
   }
 
+  if (paneMode === "import") {
+    return (
+      <div className="pane-window-shell standards-window-shell">
+        <QuestionImportWorkspace />
+      </div>
+    );
+  }
+
   if (paneMode === "test-preview") {
     const paneSearchParams = new URLSearchParams(window.location.search);
     const testId = paneSearchParams.get("mode");
@@ -3714,10 +3914,53 @@ function App() {
         onSubmit={handleBankPropertiesSubmit}
       />
 
+      <DocumentSwitcherDialog
+        open={bankSwitcherOpen}
+        kind="bank"
+        recent={parseRecentDocuments(recentBanksRaw)}
+        onClose={() => setBankSwitcherOpen(false)}
+        onNew={() => void handleOpenNewBankDialog()}
+        onSelect={() => void handleOpenDialog()}
+        onDemo={() => void handleOpenDemo()}
+        onPickRecent={(path) => void handleOpenRecentBank(path)}
+      />
+
+      <DocumentSwitcherDialog
+        open={gradebookSwitcherOpen}
+        kind="gradebook"
+        recent={parseRecentDocuments(recentGradebooksRaw)}
+        onClose={() => setGradebookSwitcherOpen(false)}
+        onNew={() => void handleOpenGradebook("new")}
+        onSelect={() => void handleOpenGradebook("open")}
+        onDemo={() => void handleOpenGradebook("demo")}
+        onPickRecent={(path) => void handleOpenGradebook("open", path)}
+      />
+
+      <AiPromptDialog
+        open={aiPromptDialogOpen}
+        label="question"
+        json={rawJson}
+        onClose={() => setAiPromptDialogOpen(false)}
+      />
+
       <header className="topbar">
         <div className="topbar-title">
-          <h1>Nexam</h1>
-          <p>{bank ? bank.manifest.title : "No bank open"}</p>
+          <div className="topbar-title-text">
+            <h1>Nexam</h1>
+            <p>
+              {bank ? bank.manifest.title : "No bank open"}
+              {bank && workspaceDirty ? " •" : ""}
+            </p>
+          </div>
+          {isMainWindow ? (
+            <button
+              type="button"
+              className="topbar-doc-switch"
+              onClick={() => setBankSwitcherOpen(true)}
+            >
+              {bank ? "Switch Bank" : "Open Bank"}
+            </button>
+          ) : null}
         </div>
 
         <div className="topbar-page-slot">
@@ -3768,12 +4011,17 @@ function App() {
           {isMainWindow ? (
             <button
               type="button"
-              title="A gradebook is a separate file from this bank -- see docs/grading.md"
-              onClick={() => {
-                openGradebookWindow().catch((error) => setErrorMessage((error as Error).message));
-              }}
+              className="topbar-doc-switch"
+              title={
+                gradebookStatus.open
+                  ? `${gradebookStatus.title ?? "Gradebook"}${
+                      gradebookStatus.dirty ? " — unsaved changes" : ""
+                    }`
+                  : "A gradebook is a separate file from this bank -- see docs/grading.md"
+              }
+              onClick={() => setGradebookSwitcherOpen(true)}
             >
-              Open Gradebook
+              {gradebookStatus.open ? "Switch Gradebook" : "Open Gradebook"}
             </button>
           ) : null}
           {isMainWindow ? (
@@ -3852,26 +4100,6 @@ function App() {
         {errorMessage ? <span className="error-text">{errorMessage}</span> : null}
       </div>
 
-      <QuestionImportWorkspace
-        open={questionImportOpen && activeWorkspacePage === "questions"}
-        hasBank={!!bank}
-        selectedTestLabel={
-          testDrafts.find((detail) => detail.test.id === selectedTestId)?.test.title ?? null
-        }
-        onClose={() => setQuestionImportOpen(false)}
-        onWorkspaceChanged={(message, promotedQuestionIds) =>
-          void handleQuestionImportWorkspaceChanged(message, promotedQuestionIds)
-        }
-        onCreateTestFromQuestions={(questionIds) =>
-          void handleCreateTestFromImportedQuestions(questionIds)
-        }
-        onAddQuestionsToCurrentTest={
-          selectedTestId
-            ? (questionIds) => void handleAddImportedQuestionsToCurrentTest(questionIds)
-            : undefined
-        }
-      />
-
       <div
         className={`workspace ${activeWorkspacePage === "tests" ? "test-builder-workspace" : ""} ${
           activeWorkspacePage === "standards" ? "standards-page-workspace" : ""
@@ -3936,8 +4164,7 @@ function App() {
             }
             onAddToAllTests={() => void handleAddSelectedQuestionToAllOpenTests()}
             showImportToggle={activeWorkspacePage === "questions"}
-            importOpen={questionImportOpen}
-            onToggleImport={() => setQuestionImportOpen((current) => !current)}
+            onToggleImport={() => void handleOpenImportWindow()}
           />
         ) : null}
 
@@ -3953,23 +4180,45 @@ function App() {
               <>
                 <div className="editor-toolbar">
                   <div className="editor-toolbar-primary">
-                    <div className="editor-mode-toggle" role="group" aria-label="Editor mode">
-                      <button
-                        type="button"
-                        aria-pressed={editorMode === "form"}
-                        className={editorMode === "form" ? "active" : ""}
-                        onClick={() => setEditorMode("form")}
-                      >
-                        Form
-                      </button>
-                      <button
-                        type="button"
-                        aria-pressed={editorMode === "json"}
-                        className={editorMode === "json" ? "active" : ""}
-                        onClick={() => setEditorMode("json")}
-                      >
-                        Raw JSON
-                      </button>
+                    <div className="editor-mode-toggle-group">
+                      <div className="editor-mode-toggle" role="group" aria-label="Editor mode">
+                        <button
+                          type="button"
+                          aria-pressed={editorMode === "form"}
+                          className={editorMode === "form" ? "active" : ""}
+                          onClick={() => setEditorMode("form")}
+                        >
+                          Form
+                        </button>
+                        <button
+                          type="button"
+                          aria-pressed={editorMode === "json"}
+                          className={editorMode === "json" ? "active" : ""}
+                          onClick={() => setEditorMode("json")}
+                        >
+                          Text View
+                        </button>
+                      </div>
+                      {editorMode === "json" ? (
+                        <button
+                          type="button"
+                          className="ai-prompt-hint"
+                          aria-label="Use AI to edit this question"
+                          title="Use AI to edit this question -- opens a ready-to-copy prompt and this question's JSON."
+                          onClick={() => setAiPromptDialogOpen(true)}
+                        >
+                          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <path
+                              d="M12 2.5l1.8 5.2 5.2 1.8-5.2 1.8-1.8 5.2-1.8-5.2L5 9.5l5.2-1.8L12 2.5z"
+                              fill="currentColor"
+                            />
+                            <path
+                              d="M19 15l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9.9-2.1z"
+                              fill="currentColor"
+                            />
+                          </svg>
+                        </button>
+                      ) : null}
                     </div>
                     <div className="editor-question-actions">
                       {editorMode === "json" ? (
@@ -4010,7 +4259,7 @@ function App() {
                   <div className="editor-toolbar-meta">
                     <span className="editor-note">
                       {editorMode === "json"
-                        ? "Raw JSON edits wait for Save or Save as New. Save Bank writes the `.bok` archive."
+                        ? "Text view (raw JSON) edits wait for Save or Save as New. Save Bank writes the `.bok` archive."
                         : "Form edits autosave to the working copy. Save Bank writes the `.bok` archive."}
                     </span>
                     <label className="editor-toggle">
@@ -4027,7 +4276,20 @@ function App() {
                 <div className="editor-scroll">
                   {editorMode === "json" ? (
                     <div className="json-editor-shell">
-                      {jsonError ? (
+                      {detectedBatch ? (
+                        <div className="json-batch-banner">
+                          <span>
+                            This looks like {detectedBatch.length} questions, not one -- Text
+                            View only holds a single question.
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => void handleSendPasteToImport(rawJson)}
+                          >
+                            Send to Import Questions
+                          </button>
+                        </div>
+                      ) : jsonError ? (
                         <div className="json-error-banner">
                           <span>
                             {jsonErrorMessage || "Raw JSON is invalid."}
@@ -4805,6 +5067,11 @@ function App() {
                   ? "Import or create a question to get started."
                   : "Open a bank and select a question to start editing."}
               </p>
+              {!bank ? (
+                <button type="button" onClick={() => setBankSwitcherOpen(true)}>
+                  Open Bank
+                </button>
+              ) : null}
             </div>
           )}
           </div>
