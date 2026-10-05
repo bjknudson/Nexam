@@ -415,6 +415,33 @@ export async function promoteQuestionImport(payload: {
   );
 }
 
+export async function deleteQuestionImportRow(payload: {
+  importId: string;
+  rowId: string;
+}): Promise<QuestionImportStageModel> {
+  return handleResponse(
+    await fetch(
+      buildApiUrl(
+        `/api/question-imports/${encodeURIComponent(payload.importId)}/rows/${encodeURIComponent(payload.rowId)}`,
+      ),
+      { method: "DELETE" },
+    ),
+  );
+}
+
+export async function deleteQuestionImport(importId: string): Promise<void> {
+  const response = await fetch(buildApiUrl(`/api/question-imports/${encodeURIComponent(importId)}`), {
+    method: "DELETE",
+  });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({ detail: "Request failed." }));
+    const detail =
+      typeof payload.detail === "string" ? payload.detail : formatErrorDetail(payload.detail);
+    throw new Error(detail);
+  }
+}
+
 export async function listTestDrafts(): Promise<TestDraftListResponseModel> {
   return handleResponse(await fetch(buildApiUrl("/api/tests")));
 }

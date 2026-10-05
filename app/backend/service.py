@@ -989,6 +989,37 @@ class BankWorkspaceService:
         stage_path.write_text(stage.model_dump_json(indent=2) + "\n")
         return stage
 
+    def delete_question_import_row(self, import_id: str, row_id: str) -> QuestionImportStageModel:
+        stage_path = self._question_import_stage_path(import_id)
+        if not stage_path.exists():
+            raise BankWorkspaceError(f"Question import not found: {import_id}", status_code=404)
+
+        stage = QuestionImportStageModel.model_validate_json(stage_path.read_text())
+        row = next((item for item in stage.rows if item.row_id == row_id), None)
+        if row is None:
+            raise BankWorkspaceError(f"Question import row not found: {row_id}", status_code=404)
+        if row.status == "promoted":
+            raise BankWorkspaceError("Promoted import rows cannot be discarded.", status_code=409)
+
+        stage.rows = [item for item in stage.rows if item.row_id != row_id]
+        stage_path.write_text(stage.model_dump_json(indent=2) + "\n")
+        return stage
+
+    def delete_question_import(self, import_id: str) -> None:
+        stage_path = self._question_import_stage_path(import_id)
+        if not stage_path.exists():
+            raise BankWorkspaceError(f"Question import not found: {import_id}", status_code=404)
+
+        stage = QuestionImportStageModel.model_validate_json(stage_path.read_text())
+        if any(row.status == "promoted" for row in stage.rows):
+            raise BankWorkspaceError(
+                "This import has promoted questions in it and can't be discarded as a whole -- "
+                "discard the remaining rows individually instead.",
+                status_code=409,
+            )
+
+        shutil.rmtree(stage_path.parent)
+
     def promote_question_import_rows(
         self,
         import_id: str,

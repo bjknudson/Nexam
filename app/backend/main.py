@@ -743,6 +743,16 @@ def promote_question_import(import_id: str, request: QuestionImportPromoteReques
     )
 
 
+@app.delete("/api/question-imports/{import_id}/rows/{row_id}")
+def delete_question_import_row(import_id: str, row_id: str):
+    return service.delete_question_import_row(import_id, row_id)
+
+
+@app.delete("/api/question-imports/{import_id}", status_code=204)
+def delete_question_import(import_id: str):
+    service.delete_question_import(import_id)
+
+
 @app.get("/api/tests")
 def list_test_drafts():
     return service.list_test_drafts()

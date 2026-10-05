@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   closeGradebook,
@@ -15,7 +15,7 @@ import {
   resolveDefaultBankDirectory,
   saveGradebookDialog,
 } from "./desktop";
-import { SETTINGS_KEYS, usePersistedString } from "./appSettings";
+import { SETTINGS_KEYS, usePersistedString, withRecentDocument } from "./appSettings";
 import type { GradebookSummaryModel } from "./types";
 import RosterWorkspace from "./RosterWorkspace";
 import AdministeredTestsWorkspace from "./AdministeredTestsWorkspace";
@@ -47,7 +47,10 @@ const PANE_SYNC_CHANNEL = "nexam-pane-sync";
 
 /** The gradebook is a wholly separate document from a bank -- its own file
  *  (.nxgb), its own window, its own state. It never reads bank state and a
- *  bank never reads gradebook state. See docs/grading.md. */
+ *  bank never reads gradebook state. See docs/grading.md. The one deliberate
+ *  exception is a presence/dirty broadcast (`gradebook-status`, below) that
+ *  lets the main window label its "Open/Switch Gradebook" button correctly
+ *  -- window-presence metadata, not roster/test/score content. */
 export default function GradebookApp() {
   const desktopMode = isDesktopShell();
   const [gradebook, setGradebook] = useState<GradebookSummaryModel | null>(null);
@@ -66,6 +69,10 @@ export default function GradebookApp() {
   const [lastGradebookPath, setLastGradebookPath] = usePersistedString(
     SETTINGS_KEYS.lastGradebookPath,
     "",
+  );
+  const [recentGradebooksRaw, setRecentGradebooksRaw] = usePersistedString(
+    SETTINGS_KEYS.recentGradebooks,
+    "[]",
   );
 
   const [manualPath, setManualPath] = useState("");
@@ -109,12 +116,17 @@ export default function GradebookApp() {
   // command lands on the right thing instead of just showing this screen. Only
   // relevant for a freshly-opened window -- at this point in a fresh load,
   // `gradebook` is still null, so this never has to guard against unsaved work.
+  // The ref stops React.StrictMode's development-only double mount from
+  // running this twice -- e.g. "new" would otherwise try to create the same
+  // gradebook file a second time and fail with a confusing "already exists".
+  const handledUrlIntentRef = useRef(false);
   useEffect(() => {
-    const intent = new URLSearchParams(window.location.search).get("intent") as
-      | GradebookOpenIntent
-      | null;
+    if (handledUrlIntentRef.current) return;
+    const params = new URLSearchParams(window.location.search);
+    const intent = params.get("intent") as GradebookOpenIntent | null;
     if (!intent) return;
-    void handleIntent(intent);
+    handledUrlIntentRef.current = true;
+    void handleIntent(intent, params.get("path") ?? undefined);
     // Acting once on load is the point; re-running would fight the teacher.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -135,11 +147,52 @@ export default function GradebookApp() {
       if (event.data?.type === "gradebook-data-changed") {
         setWorkspaceDirty(true);
       } else if (event.data?.type === "gradebook-open-intent") {
-        void handleIntent(event.data.intent as GradebookOpenIntent);
+        void handleIntent(event.data.intent as GradebookOpenIntent, event.data.path as
+          | string
+          | undefined);
+      } else if (event.data?.type === "gradebook-status-request") {
+        broadcastStatus();
       }
     };
     return () => channel.close();
   }, [gradebook, workspaceDirty]);
+
+  // Lets the main window label its "Open/Switch Gradebook" button correctly
+  // without reading any actual gradebook document state -- see the isolation
+  // note above the component. Also answers "gradebook-status-request" above,
+  // for a main window that mounts after this one already has something open.
+  function broadcastStatus(forceClosed = false) {
+    try {
+      const channel = new BroadcastChannel(PANE_SYNC_CHANNEL);
+      channel.postMessage({
+        type: "gradebook-status",
+        open: forceClosed ? false : !!gradebook,
+        title: forceClosed ? null : (gradebook?.manifest.title ?? null),
+        dirty: forceClosed ? false : workspaceDirty,
+      });
+      channel.close();
+    } catch {
+      // Best effort only.
+    }
+  }
+
+  useEffect(() => {
+    broadcastStatus();
+    // Re-broadcasts whenever either changes; broadcastStatus always reads
+    // the latest values via closure, so it doesn't need to be a dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gradebook, workspaceDirty]);
+
+  // `beforeunload` can be cancelled (see the dirty-guard below); `unload`
+  // fires only once the window is actually going away, so that's the
+  // reliable place to tell the main window this one is no longer open.
+  useEffect(() => {
+    function handleUnload() {
+      broadcastStatus(true);
+    }
+    window.addEventListener("unload", handleUnload);
+    return () => window.removeEventListener("unload", handleUnload);
+  }, []);
 
   // Offer the gradebook you had open last rather than a blank field.
   useEffect(() => {
@@ -187,7 +240,7 @@ export default function GradebookApp() {
   /** Shared by the fresh-window URL intent and the same-window broadcast a
    *  reused window receives instead (see openGradebookWindow) -- closes
    *  whatever's open first, guarding against unsaved work, then acts. */
-  async function handleIntent(intent: GradebookOpenIntent) {
+  async function handleIntent(intent: GradebookOpenIntent, path?: string) {
     if (gradebook) {
       if (!(await ensureSafeToClose())) return;
       try {
@@ -213,7 +266,10 @@ export default function GradebookApp() {
       }
       return;
     }
-    if (intent === "open") void handleOpenViaDialog();
+    if (intent === "open") {
+      if (path) void handleOpenAtPath(path);
+      else void handleOpenViaDialog();
+    }
     if (intent === "new") void handlePickCreateDestination();
   }
 
@@ -224,8 +280,31 @@ export default function GradebookApp() {
       const path = await openGradebookDialog(initialDirectory);
       if (!path) return;
       setLoading(true);
-      setGradebook(await openGradebook(path));
+      const opened = await openGradebook(path);
+      setGradebook(opened);
       setLastGradebookPath(path);
+      setRecentGradebooksRaw(
+        withRecentDocument(recentGradebooksRaw, opened.source_path, opened.manifest.title),
+      );
+    } catch (error) {
+      setErrorMessage((error as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  /** Opens a specific "Recent" entry directly -- same as handleOpenViaDialog
+   *  but skipping the native file picker. */
+  async function handleOpenAtPath(path: string) {
+    setErrorMessage("");
+    setLoading(true);
+    try {
+      const opened = await openGradebook(path);
+      setGradebook(opened);
+      setLastGradebookPath(opened.source_path);
+      setRecentGradebooksRaw(
+        withRecentDocument(recentGradebooksRaw, opened.source_path, opened.manifest.title),
+      );
     } catch (error) {
       setErrorMessage((error as Error).message);
     } finally {
@@ -274,6 +353,9 @@ export default function GradebookApp() {
       });
       setGradebook(created);
       setLastGradebookPath(created.source_path);
+      setRecentGradebooksRaw(
+        withRecentDocument(recentGradebooksRaw, created.source_path, created.manifest.title),
+      );
       setNewTitle("");
       setNewDescription("");
       setNewDestinationPath("");
