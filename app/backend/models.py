@@ -25,6 +25,13 @@ class AssetUploadResponseModel(BaseModel):
     kind: str
 
 
+class AssetContentRequest(BaseModel):
+    """Replaces the text of an existing SVG asset, for the drawing window's Save."""
+
+    path: str
+    content: str
+
+
 class AssetInspectionRequest(BaseModel):
     path: str
     kind: str
@@ -51,10 +58,125 @@ class AssetListItemModel(BaseModel):
     kind: str
     referenced_by: list[str] = Field(default_factory=list)
     svg_placeholders: list[str] = Field(default_factory=list)
+    # From the file itself (see asset_metadata.py): words to search by, the
+    # teacher's topics/tags, and the drawing tool's saved preview values.
+    search_terms: list[str] = Field(default_factory=list)
+    topics: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    preview_values: dict[str, str] = Field(default_factory=dict)
+    # Seconds since the epoch, for "recently changed" sorting.
+    modified: float = 0
 
 
 class AssetListResponseModel(BaseModel):
     items: list[AssetListItemModel] = Field(default_factory=list)
+
+
+class StampModel(BaseModel):
+    """A drawing stamp from the teacher's stamp folder (see stamp_library.py)."""
+
+    id: str
+    name: str
+    category: str
+    svg: str
+    collection: str = ""
+    topics: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    description: str = ""
+    source_pack: str = ""
+    # Loose files from before stamps were filed into collections; the
+    # drawing tool offers to file them.
+    unfiled: bool = False
+
+
+class StampListResponseModel(BaseModel):
+    folder: str
+    items: list[StampModel] = Field(default_factory=list)
+
+
+class StampImportRowModel(BaseModel):
+    """One SVG in an import review (see stamp_library.py)."""
+
+    row_id: str
+    file: str
+    name: str = ""
+    collection: str = ""
+    category: str = ""
+    topics: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    description: str = ""
+    source_pack: str = ""
+    # new | duplicate | update | invalid | missing
+    status: str = "new"
+    reason: str = ""
+    svg: str = ""
+    # For filing an existing loose stamp: its current id.
+    move_from: str = ""
+
+
+class StampPackInfoModel(BaseModel):
+    name: str
+    description: str = ""
+    notes: str = ""
+
+
+class StampImportPreviewModel(BaseModel):
+    token: str
+    packs: list[StampPackInfoModel] = Field(default_factory=list)
+    rows: list[StampImportRowModel] = Field(default_factory=list)
+    # The library's existing collections and their categories, so a later
+    # batch is filed alongside earlier ones.
+    collections: dict[str, list[str]] = Field(default_factory=dict)
+
+
+class StampImportChoiceModel(BaseModel):
+    row_id: str
+    include: bool = True
+    name: str = ""
+    collection: str = ""
+    category: str = ""
+    topics: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    description: str = ""
+    # When the file is already there with different content.
+    on_conflict: Literal["replace", "keep_both", "skip"] = "replace"
+
+
+class StampImportCommitRequest(BaseModel):
+    token: str
+    rows: list[StampImportChoiceModel] = Field(default_factory=list)
+
+
+class StampImportResultModel(BaseModel):
+    added: int = 0
+    updated: int = 0
+    skipped: int = 0
+    merged: int = 0
+    filed: int = 0
+    messages: list[str] = Field(default_factory=list)
+
+
+class StampRemoveRequest(BaseModel):
+    """Stamp ids (paths inside the stamp folder) to set aside in .removed/."""
+
+    ids: list[str] = Field(default_factory=list)
+
+
+class StampRemovalResultModel(BaseModel):
+    # Pass back to /api/stamps/restore to undo.
+    removal_id: str = ""
+    removed: int = 0
+    missing: list[str] = Field(default_factory=list)
+
+
+class StampRestoreRequest(BaseModel):
+    removal_id: str
+
+
+class AddStampsResponseModel(BaseModel):
+    folder: str
+    added: list[StampModel] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
 
 
 class StandardReferenceModel(BaseModel):

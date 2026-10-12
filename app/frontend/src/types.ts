@@ -15,6 +15,76 @@ export interface AssetUploadResponseModel {
   kind: string;
 }
 
+/** A stamp from the teacher's stamp folder (app/backend/stamp_library.py). */
+export interface StampModel {
+  id: string;
+  name: string;
+  category: string;
+  svg: string;
+  collection?: string;
+  topics?: string[];
+  tags?: string[];
+  description?: string;
+  source_pack?: string;
+  unfiled?: boolean;
+}
+
+/** One SVG in a stamp import review (app/backend/stamp_library.py). */
+export interface StampImportRowModel {
+  row_id: string;
+  file: string;
+  name: string;
+  collection: string;
+  category: string;
+  topics: string[];
+  tags: string[];
+  description: string;
+  source_pack: string;
+  status: "new" | "duplicate" | "update" | "invalid" | "missing";
+  reason: string;
+  svg: string;
+  move_from: string;
+}
+
+export interface StampImportPreviewModel {
+  token: string;
+  packs: { name: string; description: string; notes: string }[];
+  rows: StampImportRowModel[];
+  collections: Record<string, string[]>;
+}
+
+export interface StampImportChoiceModel {
+  row_id: string;
+  include: boolean;
+  name: string;
+  collection: string;
+  category: string;
+  topics: string[];
+  tags: string[];
+  description: string;
+  on_conflict: "replace" | "keep_both" | "skip";
+}
+
+export interface StampImportResultModel {
+  added: number;
+  updated: number;
+  skipped: number;
+  merged: number;
+  filed: number;
+  messages: string[];
+}
+
+export interface StampListResponseModel {
+  folder: string;
+  items: StampModel[];
+}
+
+export interface AddStampsResponseModel {
+  folder: string;
+  added: StampModel[];
+  errors: string[];
+}
+
 export interface AssetInspectionResponseModel {
   path: string;
   kind: string;
@@ -37,6 +107,14 @@ export interface AssetListItemModel {
   kind: string;
   referenced_by: string[];
   svg_placeholders: string[];
+  /** Words from inside the file: stamp names, labels, variables (app/backend/asset_metadata.py). */
+  search_terms?: string[];
+  topics?: string[];
+  tags?: string[];
+  /** The drawing tool's saved preview values, for thumbnails. */
+  preview_values?: Record<string, string>;
+  /** Seconds since the epoch. */
+  modified?: number;
 }
 
 export interface AssetListResponseModel {

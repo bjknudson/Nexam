@@ -15,6 +15,10 @@ from pydantic import ValidationError
 
 from .models import (
     AdministeredTestSnapshotCollectionModel,
+    AssetContentRequest,
+    StampImportCommitRequest,
+    StampRemoveRequest,
+    StampRestoreRequest,
     AssetInspectionBatchRequest,
     AssetInspectionRequest,
     AddQuestionToTestRequest,
@@ -57,6 +61,7 @@ from .models import (
 )
 from .gradebook_service import GradebookService
 from .service import BankWorkspaceError, BankWorkspaceService
+from .stamp_library import StampLibrary, StampLibraryError
 from .validation import lint_question
 from .version import get_backend_version, is_frozen
 
@@ -64,6 +69,7 @@ from .version import get_backend_version, is_frozen
 app = FastAPI(title="Nexam Backend", version="0.1.0")
 service = BankWorkspaceService()
 gradebook_service = GradebookService()
+stamp_library = StampLibrary()
 
 app.add_middleware(
     CORSMiddleware,
@@ -81,6 +87,11 @@ app.add_middleware(
 
 @app.exception_handler(BankWorkspaceError)
 def handle_workspace_error(_, exc: BankWorkspaceError):
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.message})
+
+
+@app.exception_handler(StampLibraryError)
+def handle_stamp_library_error(_, exc: StampLibraryError):
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.message})
 
 
@@ -851,6 +862,11 @@ async def upload_asset(file: UploadFile = File(...)):
     return service.upload_asset(file.filename or "", await file.read())
 
 
+@app.put("/api/assets/content")
+def write_asset_content(payload: AssetContentRequest):
+    return service.write_svg_asset(payload.path, payload.content)
+
+
 @app.post("/api/assets/inspect")
 def inspect_asset(payload: AssetInspectionRequest):
     return service.inspect_asset(payload)
@@ -859,6 +875,41 @@ def inspect_asset(payload: AssetInspectionRequest):
 @app.post("/api/assets/inspect-batch")
 def inspect_assets(request: AssetInspectionBatchRequest):
     return service.inspect_assets(request.assets)
+
+
+@app.get("/api/stamps")
+def list_stamps():
+    return stamp_library.list_stamps()
+
+
+@app.post("/api/stamps")
+async def add_stamps(files: list[UploadFile] = File(...)):
+    return stamp_library.add_stamps([(file.filename or "", await file.read()) for file in files])
+
+
+@app.post("/api/stamps/import/preview")
+async def preview_stamp_import(files: list[UploadFile] = File(...)):
+    return stamp_library.preview_import([(file.filename or "", await file.read()) for file in files])
+
+
+@app.post("/api/stamps/import/unfiled")
+def preview_unfiled_stamps():
+    return stamp_library.preview_unfiled()
+
+
+@app.post("/api/stamps/import/commit")
+def commit_stamp_import(request: StampImportCommitRequest):
+    return stamp_library.commit_import(request)
+
+
+@app.post("/api/stamps/remove")
+def remove_stamps(request: StampRemoveRequest):
+    return stamp_library.remove_stamps(request.ids)
+
+
+@app.post("/api/stamps/restore")
+def restore_stamps(request: StampRestoreRequest):
+    return stamp_library.restore_removal(request.removal_id)
 
 
 @app.get("/api/assets/file")

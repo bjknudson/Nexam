@@ -1,0 +1,27 @@
+{
+  "format": "nexam-stamp-pack/1",
+  "pack": "<batch name, e.g. Physics stamp batch 02>",
+  "description": "<one sentence: what this batch contains or was derived from>",
+  "defaults": {
+    "collection": "<subject, e.g. Physics>",
+    "category": "<kind of component, e.g. Mechanics>",
+    "topics": ["<curriculum topic, e.g. Collisions>", "<another topic>"],
+    "tags": []
+  },
+  "stamps": [
+    {
+      "file": "<lower-case-hyphenated-name>.svg",
+      "name": "<Short display name>",
+      "description": "<what it shows, a few words>"
+    },
+    {
+      "file": "<another-stamp>.svg",
+      "name": "<Short display name>",
+      "description": "<what it shows>",
+      "category": "<only if different from defaults.category, e.g. Vectors>",
+      "topics": ["<only if different from defaults.topics; replaces them>"],
+      "tags": ["<optional look-and-feel words, e.g. top-view>"]
+    }
+  ],
+  "conventions": ["<optional notes for the teacher, e.g. Uses currentColor for stroke/fill>"]
+}

@@ -12,7 +12,8 @@ type PaneKind =
   | "response-sheet-print"
   | "editor"
   | "tests"
-  | "import";
+  | "import"
+  | "drawing";
 
 interface OpenPaneWindowOptions {
   mode?: string;
@@ -28,6 +29,12 @@ interface OpenPaneWindowOptions {
    *  same broadcast channel openGradebookWindow's intent already uses. */
   pasteText?: string;
   pasteFormat?: "json" | "csv";
+  /** For the "drawing" pane: the bank asset to open (e.g. "assets/fig.svg"). */
+  assetPath?: string;
+  /** For the "drawing" pane: the question the drawing was opened from. */
+  questionId?: string;
+  /** For the "drawing" pane: start a new drawing from a copy of this asset. */
+  copyFrom?: string;
 }
 
 function getPaneWindowLabel(pane: PaneKind, mode?: string): string {
@@ -155,6 +162,17 @@ export async function openPaneWindow(
     url.searchParams.set("pasteText", options.pasteText);
     url.searchParams.set("pasteFormat", options.pasteFormat ?? "json");
   }
+  if (options.assetPath || options.copyFrom) {
+    // In the hash, not the query: the Vite dev server refuses any page URL
+    // whose query mentions a .svg file, and the hash never reaches a server.
+    url.hash = new URLSearchParams({
+      ...(options.assetPath ? { asset: options.assetPath } : {}),
+      ...(options.copyFrom ? { copy: options.copyFrom } : {}),
+      ...(options.questionId ? { question: options.questionId } : {}),
+    }).toString();
+  } else {
+    url.hash = "";
+  }
 
   const label = getPaneWindowLabel(pane, options.mode ?? options.snapshotId);
 
@@ -208,6 +226,30 @@ export async function openPaneWindow(
   await new Promise<void>((resolve, reject) => {
     void child.once("tauri://created", () => resolve());
     void child.once("tauri://error", (event) => reject(new Error(String(event.payload))));
+  });
+}
+
+/** Open the drawing editor for an existing SVG asset, or for a new drawing.
+ *  `questionId` is the question it was opened from, if any: saving then
+ *  defaults to a copy for that question when other questions use the asset.
+ *  One window per asset and question (opening it again focuses it); each new
+ *  drawing gets its own window. */
+export async function openDrawingWindow(
+  assetPath?: string,
+  questionId?: string,
+  options: { copyFrom?: string } = {},
+): Promise<void> {
+  const fileName = assetPath?.split("/").pop();
+  await openPaneWindow("drawing", fileName ? `Drawing — ${fileName}` : "New Drawing", {
+    copyFrom: options.copyFrom,
+    // Window labels only allow letters, digits, -, _, / and :.
+    mode: assetPath
+      ? `${assetPath}${questionId ? `-${questionId}` : ""}`.replace(/[^A-Za-z0-9_-]/g, "_")
+      : `new-${Date.now()}`,
+    assetPath,
+    questionId,
+    width: 1280,
+    height: 860,
   });
 }
 

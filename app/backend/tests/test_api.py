@@ -492,3 +492,51 @@ def test_api_copies_a_shared_test_and_restores_the_original(
     original = client.get(f"/api/tests/{test_id}").json()["test"]
     assert original["items"] == []
     assert original["course_ids"] == ["physics-1"]
+
+
+def test_api_overwrites_svg_asset_content_in_place(client: TestClient, demo_bok: Path) -> None:
+    assert client.post("/api/banks/open", json={"path": str(demo_bok)}).status_code == 200
+    path = "assets/sample-svg-template.svg"
+    drawing = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">\n  <text>{{label}}</text>\n</svg>\n'
+
+    response = client.put("/api/assets/content", json={"path": path, "content": drawing})
+
+    assert response.status_code == 200
+    assert response.json() == {"path": path, "kind": "svg"}
+    assert client.get("/api/assets/file", params={"path": path}).text == drawing
+
+
+def test_api_rejects_svg_content_outside_assets_or_for_missing_files(
+    client: TestClient, demo_bok: Path
+) -> None:
+    assert client.post("/api/banks/open", json={"path": str(demo_bok)}).status_code == 200
+    drawing = '<svg xmlns="http://www.w3.org/2000/svg"/>'
+
+    escaping = client.put(
+        "/api/assets/content", json={"path": "assets/../manifest.json", "content": drawing}
+    )
+    missing = client.put(
+        "/api/assets/content", json={"path": "assets/not-there.svg", "content": drawing}
+    )
+    not_svg = client.put(
+        "/api/assets/content",
+        json={"path": "assets/sample-svg-template.svg", "content": "hello"},
+    )
+
+    assert escaping.status_code == 400
+    assert missing.status_code == 404
+    assert not_svg.status_code == 400
+
+
+def test_asset_list_counts_answer_choice_images_as_uses(client: TestClient, demo_bok: Path) -> None:
+    assert client.post("/api/banks/open", json={"path": str(demo_bok)}).status_code == 200
+    question = client.get("/api/questions/q_mc_0001").json()["question"]
+    question["answer"]["choice_assets"] = {
+        "0": {"path": "assets/sample-svg-template.svg", "kind": "svg", "svg_variables": {}}
+    }
+    assert client.put("/api/questions/q_mc_0001", json=question).status_code == 200
+
+    items = {item["path"]: item for item in client.get("/api/assets").json()["items"]}
+
+    assert "q_mc_0001" in items["assets/sample-svg-template.svg"]["referenced_by"]
+    assert "q_mc_0001" not in items["assets/sample-force-diagram.svg"]["referenced_by"]

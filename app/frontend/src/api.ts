@@ -1,4 +1,9 @@
 import type {
+  AddStampsResponseModel,
+  StampImportChoiceModel,
+  StampImportPreviewModel,
+  StampImportResultModel,
+  StampListResponseModel,
   AdministeredTestSnapshotCollectionModel,
   AdministeredTestSnapshotListResponseModel,
   AdministeredTestSnapshotModel,
@@ -642,6 +647,85 @@ export async function createQuestionsFromJson(
 
 export function getAssetFileUrl(path: string): string {
   return buildApiUrl(`/api/assets/file?path=${encodeURIComponent(path)}`);
+}
+
+/** Raw source of an SVG asset, placeholders and all, for the drawing window. */
+export async function fetchAssetText(path: string): Promise<string> {
+  const response = await fetch(getAssetFileUrl(path), { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`Could not load ${path}.`);
+  }
+  return response.text();
+}
+
+/** The teacher's "My Stamps" folder, shared by every bank. */
+export async function listStamps(): Promise<StampListResponseModel> {
+  return handleResponse(await fetch(buildApiUrl("/api/stamps"), { cache: "no-store" }));
+}
+
+export async function addStamps(files: File[]): Promise<AddStampsResponseModel> {
+  const formData = new FormData();
+  for (const file of files) formData.append("files", file);
+  return handleResponse(
+    await fetch(buildApiUrl("/api/stamps"), {
+      method: "POST",
+      body: formData,
+    }),
+  );
+}
+
+/** Sets stamps aside in the stamp folder's .removed/ (recoverable with restoreStamps). */
+export async function removeStamps(ids: string[]): Promise<{ removal_id: string; removed: number; missing: string[] }> {
+  return handleResponse(
+    await fetch(buildApiUrl("/api/stamps/remove"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    }),
+  );
+}
+
+export async function restoreStamps(removalId: string): Promise<{ removed: number }> {
+  return handleResponse(
+    await fetch(buildApiUrl("/api/stamps/restore"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ removal_id: removalId }),
+    }),
+  );
+}
+
+/** Reads SVGs and zip stamp packs into an import review; nothing is saved yet. */
+export async function previewStampImport(files: File[]): Promise<StampImportPreviewModel> {
+  const formData = new FormData();
+  for (const file of files) formData.append("files", file);
+  return handleResponse(await fetch(buildApiUrl("/api/stamps/import/preview"), { method: "POST", body: formData }));
+}
+
+/** A review for loose stamps added before collections, so they can be filed. */
+export async function previewUnfiledStamps(): Promise<StampImportPreviewModel> {
+  return handleResponse(await fetch(buildApiUrl("/api/stamps/import/unfiled"), { method: "POST" }));
+}
+
+export async function commitStampImport(token: string, rows: StampImportChoiceModel[]): Promise<StampImportResultModel> {
+  return handleResponse(
+    await fetch(buildApiUrl("/api/stamps/import/commit"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, rows }),
+    }),
+  );
+}
+
+/** Overwrite an existing SVG asset in place (drawing window Save). */
+export async function writeSvgAsset(path: string, content: string): Promise<AssetUploadResponseModel> {
+  return handleResponse(
+    await fetch(buildApiUrl("/api/assets/content"), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path, content }),
+    }),
+  );
 }
 
 // ---------------------------------------------------------------------------

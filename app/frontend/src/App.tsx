@@ -1,4 +1,4 @@
-import type { CSSProperties } from "react";
+import type { CSSProperties, DragEvent as ReactDragEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -55,6 +55,7 @@ import {
   openBankDialog,
   openGradebookWindow,
   setDocumentMenuState,
+  openDrawingWindow,
   openPaneWindow,
   resolveDefaultBankDirectory,
   saveBankDialog,
@@ -76,7 +77,10 @@ import { issuesForPath } from "./validationIssues";
 import { locateJsonPath } from "./jsonLocate";
 import { findJsonSyntaxError, type JsonSyntaxError } from "./jsonSyntaxCheck";
 import BankPropertiesDialog, { type BankPropertiesMode } from "./BankPropertiesDialog";
+import AssetBrowser, { ASSET_DRAG_TYPE } from "./AssetBrowser";
 import CoursesWorkspace from "./CoursesWorkspace";
+import DrawingWorkspace from "./DrawingWorkspace";
+import { swapAssetPath } from "./assetSwap";
 import QuestionImportWorkspace from "./QuestionImportWorkspace";
 import Settings from "./Settings";
 import {
@@ -124,7 +128,8 @@ type PaneKind =
   | "response-sheet-print"
   | "editor"
   | "tests"
-  | "import";
+  | "import"
+  | "drawing";
 type WorkspacePage = "questions" | "tests" | "standards" | "courses";
 
 // The top-level views, and the pop-out window each one opens.
@@ -160,7 +165,8 @@ interface AssetPaneSnapshot {
   search: string;
   assets: AssetListItemModel[];
   selectedQuestionId: string | null;
-  attachedAssetPaths: string[];
+  attachedAssets: AssetModel[];
+  questionTopic: string | null;
 }
 
 interface QuestionStandardsSnapshot {
@@ -181,6 +187,12 @@ type PaneMessage =
   | { type: "questions-delete" }
   | { type: "assets-search"; value: string }
   | { type: "assets-attach"; path: string }
+  // Sent by a drawing window after it saves, so asset lists pick up the new file.
+  | { type: "assets-changed" }
+  // A drawing saved as a copy for one question: whichever window is editing
+  // that question swaps the asset in its draft and acknowledges.
+  | { type: "drawing-asset-replaced"; requestId: string; questionId: string; oldPath: string; newPath: string }
+  | { type: "drawing-asset-replaced-ack"; requestId: string }
   | { type: "standards-data-changed" }
   | { type: "courses-data-changed" }
   | { type: "standard-id-changed"; oldStandardId: string; newStandardId: string }
@@ -357,11 +369,19 @@ const PANE_KINDS: PaneKind[] = [
   "editor",
   "tests",
   "import",
+  "drawing",
 ];
 
 function getPaneMode(): PaneKind | null {
   const pane = new URLSearchParams(window.location.search).get("pane");
   return PANE_KINDS.includes(pane as PaneKind) ? (pane as PaneKind) : null;
+}
+
+/** A question's attached figures plus its answer-choice images, with their variable values. */
+function attachedAssetsOf(question: QuestionModel | null): AssetModel[] {
+  if (!question) return [];
+  const choiceAssets = (question.answer as { choice_assets?: Record<string, AssetModel> } | null | undefined)?.choice_assets;
+  return [...question.assets, ...Object.values(choiceAssets ?? {})];
 }
 
 function PoppedOutPagePlaceholder({
@@ -447,23 +467,6 @@ function FilterSelectRow({ value, onChange, allOptionLabel, clearLabel, options 
   );
 }
 
-function filterAssets(items: AssetListItemModel[], searchTerm: string): AssetListItemModel[] {
-  const needle = searchTerm.trim().toLowerCase();
-  if (!needle) return items;
-
-  return items.filter((asset) => {
-    const haystack = [
-      asset.path,
-      asset.path.split("/").slice(-1)[0] ?? "",
-      asset.kind,
-      asset.referenced_by.join(" "),
-      asset.svg_placeholders.join(" "),
-    ]
-      .join(" ")
-      .toLowerCase();
-    return haystack.includes(needle);
-  });
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -888,13 +891,15 @@ interface AssetPaneProps {
   search: string;
   assets: AssetListItemModel[];
   selectedQuestionId: string | null;
-  attachedAssetPaths: string[];
+  attachedAssets: AssetModel[];
+  questionTopic: string | null;
   onOpen: () => void;
   onClose: () => void;
   onPopOut: () => void;
   onDock: () => void;
   onSearchChange: (value: string) => void;
   onAttach: (asset: AssetListItemModel) => void;
+  onOpenQuestion: (questionId: string) => void;
 }
 
 function AssetPane({
@@ -904,13 +909,15 @@ function AssetPane({
   search,
   assets,
   selectedQuestionId,
-  attachedAssetPaths,
+  attachedAssets,
+  questionTopic,
   onOpen,
   onClose,
   onPopOut,
   onDock,
   onSearchChange,
   onAttach,
+  onOpenQuestion,
 }: AssetPaneProps) {
   if (!open && !poppedOut) {
     return (
@@ -921,8 +928,6 @@ function AssetPane({
       </aside>
     );
   }
-
-  const filteredAssets = filterAssets(assets, search);
 
   return (
     <aside className={`dock-pane asset-pane ${poppedOut ? "popout" : "docked"}`}>
@@ -940,73 +945,17 @@ function AssetPane({
         </div>
       </div>
 
-      <div className="pane-content">
-        <div className="bank-assets-header">
-          <p>Search filenames, kind, labels, placeholders, and usage.</p>
-          <span className="bank-assets-count">
-            {filteredAssets.length}/{assets.length}
-          </span>
-        </div>
-
-        <input
-          value={search}
-          onChange={(event) => onSearchChange(event.target.value)}
-          placeholder="Search assets"
-        />
-
-        {hasBank ? (
-          filteredAssets.length === 0 ? (
-            <p className="asset-empty">No assets match this search.</p>
-          ) : (
-            <div className="bank-asset-list">
-              {filteredAssets.map((asset) => {
-                const attachedToCurrent = attachedAssetPaths.includes(asset.path);
-
-                return (
-                  <article key={asset.path} className="bank-asset-tile compact">
-                    <div className="bank-asset-card-top">
-                      <strong>{asset.path.split("/").slice(-1)[0] ?? asset.path}</strong>
-                      <div className="bank-asset-badges">
-                        <span className="asset-badge">{asset.kind}</span>
-                        {asset.kind === "svg" ? (
-                          <span className="asset-badge">{asset.svg_placeholders.length} vars</span>
-                        ) : null}
-                      </div>
-                    </div>
-                    <div className="bank-asset-thumb square">
-                      <img src={getAssetFileUrl(asset.path)} alt={asset.path} />
-                    </div>
-                    <div className="bank-asset-body compact">
-                      <span className="asset-badge">
-                        Used by {asset.referenced_by.length} question
-                        {asset.referenced_by.length === 1 ? "" : "s"}
-                      </span>
-                      <p className="bank-asset-refs">
-                        {asset.referenced_by.length > 0
-                          ? asset.referenced_by.join(", ")
-                          : "Unused"}
-                      </p>
-                      {selectedQuestionId ? (
-                        <button
-                          type="button"
-                          onClick={() => onAttach(asset)}
-                          disabled={attachedToCurrent}
-                        >
-                          {attachedToCurrent ? "Attached" : "Attach"}
-                        </button>
-                      ) : (
-                        <p className="asset-empty">Select a question to attach assets.</p>
-                      )}
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-          )
-        ) : (
-          <p className="asset-empty">Open a bank to browse assets.</p>
-        )}
-      </div>
+      <AssetBrowser
+        hasBank={hasBank}
+        assets={assets}
+        search={search}
+        onSearchChange={onSearchChange}
+        selectedQuestionId={selectedQuestionId}
+        attachedAssets={attachedAssets}
+        questionTopic={questionTopic}
+        onAttach={onAttach}
+        onOpenQuestion={onOpenQuestion}
+      />
     </aside>
   );
 }
@@ -1173,7 +1122,8 @@ function App() {
     search: "",
     assets: [],
     selectedQuestionId: null,
-    attachedAssetPaths: [],
+    attachedAssets: [],
+    questionTopic: null,
   });
 
   const saveTimerRef = useRef<number | null>(null);
@@ -2710,6 +2660,19 @@ function App() {
     markDraftDirty();
   }
 
+  /** Points the draft at a new copy of an asset in one update (see assetSwap.ts). */
+  function replaceAssetPathInDraft(oldPath: string, newPath: string) {
+    setDraftQuestion((current) => {
+      if (!current) return current;
+      const next = swapAssetPath(current, oldPath, newPath);
+      draftQuestionRef.current = next;
+      setRawJson(JSON.stringify(next, null, 2));
+      return next;
+    });
+    markDraftDirty();
+    setStatusMessage(`Now using ${newPath} (an edited copy of ${oldPath}).`);
+  }
+
   function updateAsset(index: number, updater: (asset: AssetModel) => AssetModel) {
     const current = draftQuestionRef.current;
     if (!current) return;
@@ -2729,6 +2692,24 @@ function App() {
       current.assets.filter((_, assetIndex) => assetIndex !== index),
     );
   }
+
+  /** Dropping a Bank Assets row onto the question's Assets area attaches it. */
+  const assetDropHandlers = {
+    onDragOver: (event: ReactDragEvent) => {
+      if (event.dataTransfer.types.includes(ASSET_DRAG_TYPE)) {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+      }
+    },
+    onDrop: (event: ReactDragEvent) => {
+      const path = event.dataTransfer.getData(ASSET_DRAG_TYPE);
+      const asset = bankAssets.find((item) => item.path === path);
+      if (asset) {
+        event.preventDefault();
+        handleAttachExistingAsset(asset);
+      }
+    },
+  };
 
   function handleAttachExistingAsset(asset: AssetListItemModel) {
     const current = draftQuestionRef.current;
@@ -3300,7 +3281,8 @@ function App() {
     search: assetSearch,
     assets: bankAssets,
     selectedQuestionId: selectedId,
-    attachedAssetPaths: draftQuestion?.assets.map((asset) => asset.path) ?? [],
+    attachedAssets: attachedAssetsOf(draftQuestion),
+    questionTopic: draftQuestion?.topic ?? null,
   };
   const questionStandardsSnapshot: QuestionStandardsSnapshot = {
     questionId: selectedId,
@@ -3317,7 +3299,20 @@ function App() {
     channel.onmessage = (event: MessageEvent<PaneMessage>) => {
       const message = event.data;
 
+      if (message.type === "drawing-asset-replaced") {
+        if (hostsBankState && draftQuestionRef.current?.id === message.questionId) {
+          replaceAssetPathInDraft(message.oldPath, message.newPath);
+          channel.postMessage({ type: "drawing-asset-replaced-ack", requestId: message.requestId });
+        }
+        if (isMainWindow) void refreshAssetList();
+        return;
+      }
+
       if (isMainWindow) {
+        if (message.type === "assets-changed") {
+          void refreshAssetList();
+          return;
+        }
         if (message.type === "request-state") {
           channel.postMessage(
             message.pane === "questions"
@@ -3653,7 +3648,9 @@ function App() {
           search={assetPaneSnapshot.search}
           assets={assetPaneSnapshot.assets}
           selectedQuestionId={assetPaneSnapshot.selectedQuestionId}
-          attachedAssetPaths={assetPaneSnapshot.attachedAssetPaths}
+          attachedAssets={assetPaneSnapshot.attachedAssets}
+          questionTopic={assetPaneSnapshot.questionTopic}
+          onOpenQuestion={(id) => paneChannelRef.current?.postMessage({ type: "questions-select", id })}
           onOpen={() => undefined}
           onClose={() => undefined}
           onPopOut={() => undefined}
@@ -3681,6 +3678,14 @@ function App() {
     return (
       <div className="pane-window-shell standards-window-shell">
         <CoursesWorkspace />
+      </div>
+    );
+  }
+
+  if (paneMode === "drawing") {
+    return (
+      <div className="pane-window-shell">
+        <DrawingWorkspace />
       </div>
     );
   }
@@ -4568,7 +4573,7 @@ function App() {
 
                   {!editingFieldsEnabled ? (
                     draftQuestion.assets.length > 0 ? (
-                      <section className="asset-section asset-preview-section">
+                      <section className="asset-section asset-preview-section" {...assetDropHandlers}>
                         <h2>Assets</h2>
                         <QuestionAssetPreviewList
                           assets={draftQuestion.assets}
@@ -4577,7 +4582,7 @@ function App() {
                       </section>
                     ) : null
                   ) : (
-                  <section className="asset-section">
+                  <section className="asset-section" {...assetDropHandlers}>
                     <input
                       ref={assetInputRef}
                       className="visually-hidden"
@@ -4630,9 +4635,19 @@ function App() {
                                   <strong>{asset.path.split("/").slice(-1)[0] ?? asset.path}</strong>
                                   <p>{asset.path}</p>
                                 </div>
-                                <button type="button" onClick={() => removeAsset(index)}>
-                                  Remove
-                                </button>
+                                <div className="asset-card-actions">
+                                  {asset.kind === "svg" ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => void openDrawingWindow(asset.path, draftQuestion.id)}
+                                    >
+                                      Edit drawing
+                                    </button>
+                                  ) : null}
+                                  <button type="button" onClick={() => removeAsset(index)}>
+                                    Remove
+                                  </button>
+                                </div>
                               </div>
 
                               <div className="asset-meta-row">
@@ -4829,6 +4844,16 @@ function App() {
                                             src={getAssetFileUrl(choiceAsset.path)}
                                             alt=""
                                           />
+                                          {choiceAsset.kind === "svg" ? (
+                                            <button
+                                              type="button"
+                                              onClick={() =>
+                                                void openDrawingWindow(choiceAsset.path, draftQuestion.id)
+                                              }
+                                            >
+                                              Edit drawing
+                                            </button>
+                                          ) : null}
                                           <button
                                             type="button"
                                             onClick={() => choiceAssetInputRefs.current[index]?.click()}
@@ -5143,7 +5168,9 @@ function App() {
             search={assetSearch}
             assets={bankAssets}
             selectedQuestionId={selectedId}
-            attachedAssetPaths={draftQuestion?.assets.map((asset) => asset.path) ?? []}
+            attachedAssets={attachedAssetsOf(draftQuestion)}
+            questionTopic={draftQuestion?.topic ?? null}
+            onOpenQuestion={(id) => void handleSelectQuestion(id)}
             onOpen={() => setAssetDrawerOpen(true)}
             onClose={() => setAssetDrawerOpen(false)}
             onPopOut={() => void handlePopOutPane("assets")}

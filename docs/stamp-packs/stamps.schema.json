@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexam.local/schemas/nexam-stamp-pack-1.json",
+  "title": "Nexam stamp pack manifest (stamps.json)",
+  "description": "See docs/stamp-packs/README.md. Read by app/backend/stamp_library.py.",
+  "type": "object",
+  "required": ["format", "pack", "defaults", "stamps"],
+  "properties": {
+    "format": { "const": "nexam-stamp-pack/1" },
+    "pack": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The batch's name. Recorded as provenance; never used as a heading."
+    },
+    "description": { "type": "string" },
+    "defaults": {
+      "type": "object",
+      "description": "Applies to each stamp that doesn't set the same field itself.",
+      "required": ["collection", "category"],
+      "properties": {
+        "collection": { "$ref": "#/$defs/heading" },
+        "category": { "$ref": "#/$defs/heading" },
+        "topics": { "$ref": "#/$defs/list" },
+        "tags": { "$ref": "#/$defs/list" }
+      }
+    },
+    "stamps": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 200,
+      "items": {
+        "type": "object",
+        "required": ["file"],
+        "properties": {
+          "file": {
+            "type": "string",
+            "pattern": "^[^/\\\\]+\\.svg$",
+            "description": "An SVG at the top level of the zip (or its single wrapper folder). Keep stable across batches."
+          },
+          "name": { "type": "string", "minLength": 1 },
+          "description": { "type": "string" },
+          "collection": { "$ref": "#/$defs/heading" },
+          "category": { "$ref": "#/$defs/heading" },
+          "topics": { "$ref": "#/$defs/list", "description": "Replaces defaults.topics (an empty list means none)." },
+          "tags": { "$ref": "#/$defs/list", "description": "Replaces defaults.tags (an empty list means none)." }
+        }
+      }
+    },
+    "conventions": { "type": "array", "items": { "type": "string" } }
+  },
+  "$defs": {
+    "heading": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "pattern": "^[^/\\\\:*?\"<>|]+$",
+      "description": "Also used as a folder name, so no / \\ : * ? \" < > |."
+    },
+    "list": {
+      "oneOf": [
+        { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        { "type": "string", "description": "Items separated by ; or ," }
+      ]
+    }
+  }
+}
