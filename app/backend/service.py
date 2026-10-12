@@ -2,6 +2,7 @@ from __future__ import annotations
 import ast
 import csv
 import json
+import math
 import shutil
 import tempfile
 import uuid
@@ -13,6 +14,7 @@ import re
 
 from pydantic import ValidationError
 
+from .asset_metadata import SvgSummary, SvgSummaryCache
 from .grading.answer_key import derive_answer_key
 from .models import (
     AssetInspectionBatchRequest,
@@ -101,6 +103,15 @@ class BankWorkspaceService:
     SVG_PLACEHOLDER_PATTERN = re.compile(r"{{\s*([a-zA-Z0-9_.-]+)\s*}}")
     SVG_CALC_PATTERN = re.compile(r"{{\s*calc:\s*([^{}]+?)\s*}}")
     SVG_EXPR_VARIABLE_PATTERN = re.compile(r"\b([A-Za-z_][A-Za-z0-9_.-]*)\b")
+    # Functions allowed in {{calc: ...}}; the drawing editor uses them to keep
+    # variable-length arrows between a minimum and maximum length.
+    # min/max take any number of arguments; sin/cos take one, in degrees.
+    SVG_EXPR_FUNCTIONS = {
+        "min": min,
+        "max": max,
+        "sin": lambda values: math.sin(math.radians(values[0])),
+        "cos": lambda values: math.cos(math.radians(values[0])),
+    }
     ALLOWED_ASSET_EXTENSIONS = {
         ".svg": "svg",
         ".png": "image",
@@ -111,6 +122,7 @@ class BankWorkspaceService:
     }
 
     def __init__(self) -> None:
+        self._svg_summaries = SvgSummaryCache()
         self._source_path: Path | None = None
         self._workspace_path: Path | None = None
 
@@ -1332,10 +1344,19 @@ class BankWorkspaceService:
     def list_assets(self) -> AssetListResponseModel:
         _, workspace_path = self.ensure_open()
         questions = self._load_questions()
-        referenced_by_path: dict[str, list[str]] = {}
+        referenced_by_path: dict[str, set[str]] = {}
         for question in questions:
             for asset in question.assets:
-                referenced_by_path.setdefault(asset.path, []).append(question.id)
+                referenced_by_path.setdefault(asset.path, set()).add(question.id)
+            # Answer-choice images count too: editing one of these drawings
+            # changes the question just as much as an attached figure does.
+            answer = question.answer if isinstance(question.answer, dict) else {}
+            choice_assets = answer.get("choice_assets") or {}
+            if isinstance(choice_assets, dict):
+                for choice_asset in choice_assets.values():
+                    path = choice_asset.get("path") if isinstance(choice_asset, dict) else None
+                    if isinstance(path, str):
+                        referenced_by_path.setdefault(path, set()).add(question.id)
 
         assets_dir = workspace_path / "assets"
         if not assets_dir.exists():
@@ -1346,15 +1367,22 @@ class BankWorkspaceService:
             relative_path = f"assets/{file_path.relative_to(assets_dir).as_posix()}"
             kind = self.ALLOWED_ASSET_EXTENSIONS.get(file_path.suffix.lower(), "file")
             svg_placeholders: list[str] = []
+            summary = SvgSummary()
             if kind == "svg":
                 svg_placeholders = self.extract_svg_placeholders(file_path.read_text())
+                summary = self._svg_summaries.get(file_path)
 
             items.append(
                 AssetListItemModel(
                     path=relative_path,
                     kind=kind,
-                    referenced_by=sorted(referenced_by_path.get(relative_path, [])),
+                    referenced_by=sorted(referenced_by_path.get(relative_path, set())),
                     svg_placeholders=svg_placeholders,
+                    search_terms=summary.search_terms,
+                    topics=summary.topics,
+                    tags=summary.tags,
+                    preview_values=summary.preview_values,
+                    modified=file_path.stat().st_mtime,
                 )
             )
 
@@ -1571,6 +1599,20 @@ class BankWorkspaceService:
         target_path.write_bytes(content)
 
         return AssetUploadResponseModel(path=f"assets/{target_name}", kind=kind)
+
+    def write_svg_asset(self, relative_path: str, content: str) -> AssetUploadResponseModel:
+        """Overwrite an existing SVG asset in place, so editing a drawing keeps
+        its path and every question that already attaches it. New drawings go
+        through upload_asset instead, which picks a non-clashing name."""
+        asset_path = self.resolve_asset_path(relative_path)
+        if asset_path.suffix.lower() != ".svg":
+            raise BankWorkspaceError("Only SVG assets can be edited as drawings.", status_code=400)
+        if "<svg" not in content:
+            raise BankWorkspaceError("Drawing content must be SVG markup.", status_code=400)
+        # As bytes, so the file is exactly what the editor sent: text mode would
+        # turn every "\n" into "\r\n" on Windows.
+        asset_path.write_bytes(content.encode("utf-8"))
+        return AssetUploadResponseModel(path=relative_path, kind="svg")
 
     def inspect_asset(self, payload: AssetInspectionRequest) -> AssetInspectionResponseModel:
         asset_path = self.resolve_asset_path(payload.path)
@@ -2919,7 +2961,11 @@ class BankWorkspaceService:
     def extract_svg_placeholders(self, source: str) -> list[str]:
         placeholders = set(self.SVG_PLACEHOLDER_PATTERN.findall(source))
         for expression in self.SVG_CALC_PATTERN.findall(source):
-            placeholders.update(self.SVG_EXPR_VARIABLE_PATTERN.findall(expression))
+            placeholders.update(
+                name
+                for name in self.SVG_EXPR_VARIABLE_PATTERN.findall(expression)
+                if name not in self.SVG_EXPR_FUNCTIONS
+            )
         return sorted(placeholders)
 
     def _evaluate_svg_expression(self, expression: str, variables: dict[str, str]) -> str:
@@ -2957,6 +3003,16 @@ class BankWorkspaceService:
 
         if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
             return float(node.value)
+
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in self.SVG_EXPR_FUNCTIONS
+            and node.args
+            and not node.keywords
+        ):
+            values = [self._eval_svg_ast(argument, variables) for argument in node.args]
+            return float(self.SVG_EXPR_FUNCTIONS[node.func.id](values))
 
         if isinstance(node, ast.Name):
             raw_value = variables.get(node.id, "0").strip()

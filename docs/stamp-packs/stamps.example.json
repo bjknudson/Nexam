@@ -1,0 +1,52 @@
+{
+  "format": "nexam-stamp-pack/1",
+  "pack": "Physics stamp batch 01",
+  "description": "Derived as reusable components from the supplied collision/top-view reference.",
+  "defaults": {
+    "collection": "Physics",
+    "category": "Mechanics",
+    "topics": ["Collisions", "Momentum"],
+    "tags": ["top-view"]
+  },
+  "stamps": [
+    { "file": "disk.svg", "name": "Disk", "description": "outline disk/circle", "tags": ["top-view", "outline"] },
+    {
+      "file": "disk-filled-light.svg",
+      "name": "Disk (light fill)",
+      "description": "lightly filled disk",
+      "tags": ["top-view", "filled"]
+    },
+    {
+      "file": "vector-arrow.svg",
+      "name": "Vector arrow",
+      "description": "generic editable arrow",
+      "category": "Vectors",
+      "topics": ["Vectors", "Collisions", "Momentum"],
+      "tags": []
+    },
+    { "file": "motion-lines.svg", "name": "Motion lines", "description": "generic motion streaks", "tags": ["motion"] },
+    {
+      "file": "dashed-guide.svg",
+      "name": "Dashed guide",
+      "description": "dashed path/trajectory/reference line",
+      "category": "Guides",
+      "topics": ["Collisions", "Projectile motion"],
+      "tags": ["dashed"]
+    },
+    {
+      "file": "axis-arrow.svg",
+      "name": "Axis arrow",
+      "description": "simple positive-direction axis arrow",
+      "category": "Graphs",
+      "topics": ["Vectors", "Kinematics"],
+      "tags": []
+    }
+  ],
+  "conventions": [
+    "Uses currentColor for stroke/fill where practical",
+    "No text embedded",
+    "No external dependencies",
+    "Simple SVG primitives",
+    "Minimal transforms/groups"
+  ]
+}

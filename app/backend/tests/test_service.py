@@ -1829,3 +1829,80 @@ def test_course_coverage_takes_the_largest_version_when_versions_differ(
     for coverage in covered.values():
         assert coverage.test_count == 1
         assert coverage.question_count <= 2
+
+
+def test_render_svg_handles_drawing_editor_control_expressions(
+    bank_service: BankWorkspaceService,
+) -> None:
+    # The forms app/frontend/src/drawing/controls.ts writes for variable arrows and bars.
+    source = (
+        '<line x2="{{calc: 160 + 0.7071 * arrow_length}}" y2="{{calc: 60 - arrow_length}}"/>'
+        '<rect x="{{calc: -arrow_length}}" width="{{calc: 2.5 * bar_length}}" height="{{calc: bar_length}}"/>'
+        '<text>{{force}}</text>'
+        '<g transform="rotate({{arrow_angle}} 100 120)">'
+        '<text transform="rotate({{calc: -arrow_angle}} {{calc: 116.6 + arrow_length}} 120)"/></g>'
+    )
+
+    rendered = bank_service.render_svg(
+        source, {"arrow_length": "40", "bar_length": "12", "force": "5 N", "arrow_angle": "-30"}
+    )
+
+    assert rendered == (
+        '<line x2="188.284" y2="20"/>'
+        '<rect x="-40" width="30" height="12"/>'
+        "<text>5 N</text>"
+        '<g transform="rotate(-30 100 120)">'
+        '<text transform="rotate(30 156.6 120)"/></g>'
+    )
+
+
+def test_render_svg_supports_min_and_max_for_clamped_lengths(
+    bank_service: BankWorkspaceService,
+) -> None:
+    source = (
+        '<line y2="{{calc: 60 - max(8, min(140, 0.1 * force))}}"/>'
+        '<line y2="{{calc: 60 - max(8, min(140, 0.1 * force))}}"/>'
+    )
+
+    small = bank_service.render_svg(source, {"force": "5"})
+    large = bank_service.render_svg(source, {"force": "5000"})
+    middle = bank_service.render_svg(source, {"force": "800"})
+
+    assert 'y2="52"' in small
+    assert 'y2="-80"' in large
+    assert 'y2="-20"' in middle
+    assert bank_service.extract_svg_placeholders(source) == ["force"]
+
+
+def test_render_svg_handles_variable_arc_expressions(bank_service: BankWorkspaceService) -> None:
+    # Forms app/frontend/src/drawing/arcs.ts writes: turning to where a
+    # negative sweep starts, |sweep| as a dash length, and the sweep's sign.
+    source = (
+        '<g transform="rotate({{calc: -(30 + min(arc_angle, 0))}} 100 100)"/>'
+        '<circle stroke-dasharray="{{calc: 0.6981 * max(arc_angle, -arc_angle)}} 251.33"/>'
+        '<g transform="scale(1 {{calc: arc_angle / max(0.0001, max(arc_angle, -arc_angle))}})"/>'
+        '<text transform="rotate({{calc: 30 + arc_angle / 2}} 140 100)"/>'
+    )
+
+    rendered = bank_service.render_svg(source, {"arc_angle": "-90"})
+
+    assert rendered == (
+        '<g transform="rotate(60 100 100)"/>'
+        '<circle stroke-dasharray="62.829 251.33"/>'
+        '<g transform="scale(1 -1)"/>'
+        '<text transform="rotate(-15 140 100)"/>'
+    )
+
+
+def test_render_svg_supports_sin_and_cos_in_degrees(bank_service: BankWorkspaceService) -> None:
+    # Forms arcs.ts writes for a dashed or wedge variable arc's <path>.
+    source = (
+        '<path d="M {{calc: 100 + 40 * cos(30 + min(arc_angle, 0))}} '
+        '{{calc: 100 - 40 * sin(30 + min(arc_angle, 0))}}"/>'
+        '<text x="{{calc: cos(90)}}" y="{{calc: sin(180)}}"/>'
+    )
+
+    rendered = bank_service.render_svg(source, {"arc_angle": "60"})
+
+    assert rendered == '<path d="M 134.641 80"/><text x="0" y="0"/>'
+    assert bank_service.extract_svg_placeholders(source) == ["arc_angle"]
