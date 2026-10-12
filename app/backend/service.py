@@ -1609,7 +1609,9 @@ class BankWorkspaceService:
             raise BankWorkspaceError("Only SVG assets can be edited as drawings.", status_code=400)
         if "<svg" not in content:
             raise BankWorkspaceError("Drawing content must be SVG markup.", status_code=400)
-        asset_path.write_text(content, encoding="utf-8")
+        # As bytes, so the file is exactly what the editor sent: text mode would
+        # turn every "\n" into "\r\n" on Windows.
+        asset_path.write_bytes(content.encode("utf-8"))
         return AssetUploadResponseModel(path=relative_path, kind="svg")
 
     def inspect_asset(self, payload: AssetInspectionRequest) -> AssetInspectionResponseModel:
