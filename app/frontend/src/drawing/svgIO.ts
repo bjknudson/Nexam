@@ -113,7 +113,9 @@ function writeElements(elements: SceneElement[], depth: number, lines: string[],
       const text = element.text ?? "";
       if (hasMath(text)) {
         const attrs = { ...element.attrs, "data-nexam-tex": text };
-        lines.push(`${indent}<text${key}${formatAttrs(attrs)}>${mathToSvg(text).markup}</text>`);
+        // Stacked fractions are placed in px from the text's size (14 when it inherits one).
+        const size = Number(element.attrs["font-size"]);
+        lines.push(`${indent}<text${key}${formatAttrs(attrs)}>${mathToSvg(text, Number.isFinite(size) && size > 0 ? size : 14).markup}</text>`);
       } else {
         lines.push(`${indent}<text${key}${formatAttrs(element.attrs)}>${escapeXml(text)}</text>`);
       }

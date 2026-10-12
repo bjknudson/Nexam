@@ -4,6 +4,13 @@
 // Unicode for symbols, italics for single-letter variables. {{placeholders}}
 // stay literal so the backend still fills them per question. The typed source
 // is kept on the <text> (data-nexam-tex) so it stays editable.
+//
+// \frac{a}{b} is stacked inside the same <text>: a bar (a dash stretched to
+// length with textLength), then the numerator and denominator at 80% size,
+// moved into place with dx/dy. Their widths can't be measured (a question's
+// {{value}} isn't known until it renders), so they're estimated from the
+// characters, which centres them closely enough for short fractions.
+// \sqrt{…} of more than one character draws an overline over its argument.
 // See "Text: symbols and math" in docs/svg-editor-plan.md.
 
 const MATH_FONT = "'STIX Two Math', 'Cambria Math', 'Times New Roman', serif";
@@ -41,7 +48,9 @@ type MathNode =
   | { kind: "text"; value: string; italic: boolean }
   | { kind: "placeholder"; value: string }
   | { kind: "script"; position: "sub" | "super"; children: MathNode[] }
-  | { kind: "bold"; children: MathNode[] };
+  | { kind: "bold"; children: MathNode[] }
+  | { kind: "frac"; numerator: MathNode[]; denominator: MathNode[] }
+  | { kind: "sqrt"; children: MathNode[] };
 
 export interface MathConversion {
   /** <tspan> markup for the inside of a <text>. */
@@ -79,26 +88,91 @@ export function splitSegments(text: string): { math: boolean; value: string }[] 
   return segments;
 }
 
-export function mathToSvg(text: string): MathConversion {
+/** `fontSize` (px) is the text's size, for placing stacked fractions. */
+export function mathToSvg(text: string, fontSize = 14): MathConversion {
   const unsupported: string[] = [];
   const parts = splitSegments(text).map((segment) => {
     if (!segment.math) return escapeXml(segment.value);
     const parser = new MathParser(segment.value, unsupported);
     const nodes = parser.parseSequence(null);
-    return `<tspan font-family="${MATH_FONT}">${renderNodes(nodes)}</tspan>`;
+    return `<tspan font-family="${MATH_FONT}">${renderNodes(nodes, fontSize)}</tspan>`;
   });
   return { markup: parts.join(""), unsupported: [...new Set(unsupported)] };
 }
 
-function renderNodes(nodes: MathNode[]): string {
+/** Size of a fraction's numerator and denominator, relative to the text. */
+const FRACTION_SCALE = 0.8;
+/** A zero-width character to carry a dx/dy move without drawing anything. */
+const ZERO_WIDTH = "\u200B";
+
+const px = (value: number) => String(Math.round(value * 100) / 100);
+
+function renderNodes(nodes: MathNode[], fontSize: number): string {
   return nodes
     .map((node) => {
       if (node.kind === "placeholder") return escapeXml(node.value);
       if (node.kind === "text") {
         return node.italic ? `<tspan font-style="italic">${escapeXml(node.value)}</tspan>` : escapeXml(node.value);
       }
-      if (node.kind === "bold") return `<tspan font-weight="bold">${renderNodes(node.children)}</tspan>`;
-      return `<tspan baseline-shift="${node.position}" font-size="70%">${renderNodes(node.children)}</tspan>`;
+      if (node.kind === "bold") return `<tspan font-weight="bold">${renderNodes(node.children, fontSize)}</tspan>`;
+      if (node.kind === "frac") return renderFraction(node.numerator, node.denominator, fontSize);
+      if (node.kind === "sqrt") {
+        const long = estimateEm(node.children) > 0.75;
+        const inside = renderNodes(node.children, fontSize);
+        return long ? `√<tspan text-decoration="overline">${inside}</tspan>` : `√${inside}`;
+      }
+      return `<tspan baseline-shift="${node.position}" font-size="70%">${renderNodes(node.children, fontSize * 0.7)}</tspan>`;
+    })
+    .join("");
+}
+
+/** A stacked fraction (see the note at the top). Positions are in px from
+ *  the baseline: the bar sits where a dash does (about the math axis), the
+ *  numerator's baseline half a line above, the denominator's just under the
+ *  bar. Afterwards the pen is back on the baseline at the fraction's end,
+ *  so the text's alignment (start, middle, end) still works. */
+function renderFraction(numerator: MathNode[], denominator: MathNode[], size: number): string {
+  const small = size * FRACTION_SCALE;
+  const wN = estimateEm(numerator) * small;
+  const wD = estimateEm(denominator) * small;
+  const width = Math.max(wN, wD) + 0.3 * size;
+  const part = (nodes: MathNode[], dx: number, dy: number) =>
+    `<tspan font-size="${FRACTION_SCALE * 100}%" dx="${px(dx)}" dy="${px(dy)}">${ZERO_WIDTH}${renderNodes(nodes, small)}</tspan>`;
+  return [
+    `<tspan textLength="${px(width)}" lengthAdjust="spacingAndGlyphs">—</tspan>`,
+    part(numerator, -(width + wN) / 2, -0.5 * size),
+    part(denominator, -(wN + wD) / 2, 0.95 * size),
+    `<tspan dx="${px((width - wD) / 2)}" dy="${px(-0.45 * size)}">${ZERO_WIDTH}</tspan>`,
+  ].join("");
+}
+
+/** Rough width in ems: enough to centre a fraction's parts. A {{value}} is
+ *  counted as a three-character number. */
+function estimateEm(nodes: MathNode[]): number {
+  let total = 0;
+  for (const node of nodes) {
+    if (node.kind === "placeholder") total += 1.5;
+    else if (node.kind === "text") {
+      for (const char of node.value) {
+        total += char === " " ? 0.25 : /[0-9]/.test(char) ? 0.5 : /[A-Z]/.test(char) ? 0.65 : /[a-z]/.test(char) ? 0.48 : /[.,:;'′]/.test(char) ? 0.25 : 0.6;
+      }
+    } else if (node.kind === "script") total += 0.7 * estimateEm(node.children);
+    else if (node.kind === "frac") total += FRACTION_SCALE * Math.max(estimateEm(node.numerator), estimateEm(node.denominator)) + 0.3;
+    else if (node.kind === "sqrt") total += 0.6 + estimateEm(node.children);
+    else total += estimateEm(node.children);
+  }
+  return total;
+}
+
+/** The same math as one line of plain text: a/b for fractions, √(…) for roots. */
+function plainNodes(nodes: MathNode[]): string {
+  const wrap = (inner: MathNode[]) => (inner.length > 1 || estimateEm(inner) > 0.75 ? `(${plainNodes(inner)})` : plainNodes(inner));
+  return nodes
+    .map((node) => {
+      if (node.kind === "placeholder" || node.kind === "text") return node.value;
+      if (node.kind === "frac") return `${wrap(node.numerator)}/${wrap(node.denominator)}`;
+      if (node.kind === "sqrt") return `√${wrap(node.children)}`;
+      return plainNodes(node.children);
     })
     .join("");
 }
@@ -195,22 +269,13 @@ class MathParser {
       this.literalDepth -= 1;
       return name === "mathbf" ? [{ kind: "bold", children: argument }] : argument;
     }
-    if (name === "frac") {
-      // Inline in drawings: a/b (stacked fractions may come later).
+    if (name === "frac" || name === "dfrac" || name === "tfrac") {
       const numerator = this.parseArgument();
       const denominator = this.parseArgument();
-      const wrap = (nodes: MathNode[]) =>
-        nodes.length > 1 ? [{ kind: "text" as const, value: "(", italic: false }, ...nodes, { kind: "text" as const, value: ")", italic: false }] : nodes;
-      return [...wrap(numerator), { kind: "text", value: "/", italic: false }, ...wrap(denominator)];
+      return [{ kind: "frac", numerator, denominator }];
     }
     if (name === "sqrt") {
-      const argument = this.parseArgument();
-      const wrap = argument.length > 1;
-      return [
-        { kind: "text", value: wrap ? "√(" : "√", italic: false },
-        ...argument,
-        ...(wrap ? [{ kind: "text" as const, value: ")", italic: false }] : []),
-      ];
+      return [{ kind: "sqrt", children: this.parseArgument() }];
     }
     if (name === "{" || name === "}" || name === "%" || name === "&" || name === "_" || name === "#") {
       return [{ kind: "text", value: name, italic: false }];
@@ -239,5 +304,7 @@ function escapeXml(value: string): string {
 
 /** Plain-text reading of the math, for places that can't show tspans (e.g. names in the Layers panel). */
 export function mathToPlainText(text: string): string {
-  return mathToSvg(text).markup.replace(/<[^>]+>/g, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  return splitSegments(text)
+    .map((segment) => (segment.math ? plainNodes(new MathParser(segment.value, []).parseSequence(null)) : segment.value))
+    .join("");
 }

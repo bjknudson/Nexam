@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
 
-import { arcEndPoint, arcPathData, arcStartPoint, dragArcEnd, dragArcStart, fixedArcToVariable, readArcSettings } from "./arcs";
+import {
+  arcEndPoint,
+  arcPathData,
+  arcStartPoint,
+  dragArcEnd,
+  dragArcStart,
+  fixedArcToVariable,
+  radiusReadout,
+  radiusTerm,
+  radiusValueFor,
+  readArcSettings,
+} from "./arcs";
 import { createControlFromDrag, setControlAttrs } from "./controls";
 import { evaluateExpression, previewElement } from "./preview";
 import type { SceneElement } from "./scene";
@@ -213,5 +224,32 @@ describe("dashed arcs and wedges (sin/cos)", () => {
     const wedge = setControlAttrs(arc.element, { "data-wedge": "true" });
     const svg = serializeSvg({ rootAttrs: { viewBox: "0 0 200 200" }, elements: [wedge] });
     expect(serializeSvg(parseSvg(svg).document)).toBe(svg);
+  });
+});
+
+describe("variable radius: formula and limits", () => {
+  const withRadius = (attrs: Record<string, string>) => setControlAttrs(arc.element, { "data-radius-variable": "r", ...attrs });
+
+  it("scales, takes a formula, and is held between min and max", () => {
+    const scaled = readArcSettings(withRadius({ "data-radius-scale": "2" }))!;
+    expect(radiusTerm(scaled)).toBe("2 * r");
+    const formula = readArcSettings(withRadius({ "data-radius-expression": "10 + r / 2", "data-radius-min": "15", "data-radius-max": "60" }))!;
+    expect(radiusTerm(formula)).toBe("max(15, min(60, (10 + r / 2)))");
+    expect(radiusReadout(formula, { r: "40" })).toEqual({ atPreview: 30, clamped: false });
+    expect(radiusReadout(formula, { r: "0" })).toEqual({ atPreview: 15, clamped: true });
+    expect(radiusReadout(formula, { r: "500" })).toEqual({ atPreview: 60, clamped: true });
+  });
+
+  it("ignores a formula in other names, and works out the value for a dragged radius", () => {
+    expect(readArcSettings(withRadius({ "data-radius-expression": "foo * 2" }))!.radiusExpression).toBeNull();
+    const formula = readArcSettings(withRadius({ "data-radius-expression": "10 + r / 2" }))!;
+    expect(radiusValueFor(formula, 30)).toBe(40);
+    expect(dragArcStart(formula, { x: 130, y: 100 }).preview).toEqual({ r: "40" });
+  });
+
+  it("draws the circle and the path with the clamped radius", () => {
+    const element = withRadius({ "data-radius-max": "50" });
+    const circle = children(children(previewElement(element, { [settings.sweep]: "90", r: "80" }))[0])[0];
+    expect(attrsOf(circle).r).toBe("50");
   });
 });

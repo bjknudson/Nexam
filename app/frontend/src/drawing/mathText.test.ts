@@ -75,3 +75,50 @@ describe("math text in saved drawings", () => {
     expect(preview.kind === "text" && preview.text).toBe("$F$ = 12 N");
   });
 });
+
+describe("stacked fractions and long roots", () => {
+  const moves = (markup: string) =>
+    [...markup.matchAll(/dx="(-?[\d.]+)" dy="(-?[\d.]+)"/g)].map((match) => [Number(match[1]), Number(match[2])]);
+
+  it("stacks a fraction over a bar stretched to fit, and ends back on the baseline", () => {
+    const { markup } = mathToSvg("$\\frac{F}{m}$", 20);
+    expect(markup).toContain('textLength="');
+    expect(markup).toContain('lengthAdjust="spacingAndGlyphs">—</tspan>');
+    expect(markup).toContain('font-size="80%"');
+    const steps = moves(markup);
+    expect(steps).toHaveLength(3);
+    // Up for the numerator, down past the bar for the denominator, back to the baseline.
+    expect(steps.reduce((sum, [, dy]) => sum + dy, 0)).toBeCloseTo(0);
+    expect(steps[0][1]).toBeLessThan(0);
+    expect(steps[1][1]).toBeGreaterThan(0);
+  });
+
+  it("returns the pen to the end of the bar, whatever the parts' widths", () => {
+    const { markup } = mathToSvg("$\\frac{a+b}{2}$", 14);
+    const bar = Number(markup.match(/textLength="([\d.]+)"/)![1]);
+    // Pen after the bar is at its end; the moves and the parts' widths must add back to it.
+    const [num, den, end] = moves(markup);
+    // Widths aren't in the markup, so check the closing move puts the pen right of the bar's start.
+    expect(num[0]).toBeLessThan(0);
+    expect(den[0]).toBeLessThan(0);
+    expect(end[0]).toBeGreaterThanOrEqual(0);
+    expect(bar).toBeGreaterThan(14 * 0.3);
+  });
+
+  it("scales placement with the text size, and keeps placeholders", () => {
+    const small = moves(mathToSvg("$\\frac{1}{2}$", 10).markup);
+    const large = moves(mathToSvg("$\\frac{1}{2}$", 20).markup);
+    expect(large[0][1]).toBeCloseTo(small[0][1] * 2);
+    expect(mathToSvg("$\\frac{{{force}}}{m}$").markup).toContain("{{force}}");
+  });
+
+  it("overlines a long root and leaves a single character plain", () => {
+    expect(mathToSvg("$\\sqrt{x+1}$").markup).toContain('√<tspan text-decoration="overline">');
+    expect(mathToSvg("$\\sqrt{2}$").markup).not.toContain("overline");
+  });
+
+  it("still reads as one line of plain text", () => {
+    expect(plain("$v = \\frac{d}{t}$")).toBe("v = d/t");
+    expect(plain("$\\sqrt{x+1}$")).toBe("√(x + 1)");
+  });
+});

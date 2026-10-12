@@ -24,7 +24,7 @@
 import { arrowHeadSize, formatCoefficient, formatNumber } from "./geometry";
 import { readLabelSettings, type LabelSettings } from "./labelLayout";
 import { lineTypeFromAttrs } from "./styles";
-import { evaluateExpression } from "./preview";
+import { evaluateExpression, expressionError } from "./preview";
 import { CALC_FUNCTIONS, literalNumber, newElementKey, type SceneElement } from "./scene";
 import { applyStrokeAttrs, type DrawingStyle } from "./styles";
 
@@ -50,6 +50,11 @@ export interface ArcSettings {
   radiusVariable: string | null;
   /** px per unit of the radius variable. */
   radiusScale: number;
+  /** A formula in the radius variable for the drawn radius, replacing the scale. */
+  radiusExpression: string | null;
+  /** Limits on the drawn radius (px), so an odd value stays visible and on the page. */
+  radiusMin: number | null;
+  radiusMax: number | null;
   heads: ArcHeads;
   /** Closed to the centre as a pie slice, so it can be filled. */
   wedge: boolean;
@@ -78,6 +83,9 @@ export function readArcSettings(element: SceneElement): ArcSettings | null {
     radius: Math.max(1, number("data-radius", 30)),
     radiusVariable: validName(radiusVariable) && radiusVariable !== sweep ? radiusVariable : null,
     radiusScale: number("data-radius-scale", 1),
+    radiusExpression: radiusExpressionOf(attrs, radiusVariable),
+    radiusMin: literalNumber(attrs["data-radius-min"]),
+    radiusMax: literalNumber(attrs["data-radius-max"]),
     heads: heads === "end" || heads === "start" || heads === "both" ? heads : "none",
     wedge: attrs["data-wedge"] === "true",
     label: attrs["data-label"] ?? "",
@@ -87,13 +95,48 @@ export function readArcSettings(element: SceneElement): ArcSettings | null {
   };
 }
 
+function radiusExpressionOf(attrs: Record<string, string>, variable: string | undefined): string | null {
+  const expression = attrs["data-radius-expression"]?.trim();
+  return expression && validName(variable) && expressionError(expression, [variable]) === null ? expression : null;
+}
+
+/** The drawn radius before min/max: the scale or the formula. */
+function unclampedRadius(s: ArcSettings): string {
+  if (!s.radiusVariable) return formatNumber(s.radius);
+  if (s.radiusExpression) return `(${s.radiusExpression})`;
+  return s.radiusScale === 1 ? s.radiusVariable : `${formatCoefficient(s.radiusScale)} * ${s.radiusVariable}`;
+}
+
+/** The drawn radius as an expression (a number when it's fixed). */
+export function radiusTerm(s: ArcSettings): string {
+  let r = unclampedRadius(s);
+  if (!s.radiusVariable) return r;
+  if (s.radiusMax !== null) r = `min(${formatNumber(s.radiusMax)}, ${r})`;
+  if (s.radiusMin !== null) r = `max(${formatNumber(s.radiusMin)}, ${r})`;
+  return r;
+}
+
+/** The radius variable's value that draws `radius` px, ignoring min/max (for
+ *  dragging). Null when the radius doesn't change with the value. */
+export function radiusValueFor(s: ArcSettings, radius: number): number | null {
+  if (!s.radiusVariable) return null;
+  const name = s.radiusVariable;
+  const at = (value: number) => evaluateExpression(unclampedRadius(s), { [name]: String(value) });
+  const slope = (at(10) - at(0)) / 10;
+  if (!Number.isFinite(slope) || Math.abs(slope) < 1e-9) return null;
+  return Math.round(((radius - at(0)) / slope) * 10) / 10;
+}
+
+/** "radius 30 draws as 45 px", for the inspector. */
+export function radiusReadout(s: ArcSettings, values: Record<string, string>): { atPreview: number; clamped: boolean } | null {
+  if (!s.radiusVariable) return null;
+  const atPreview = evaluateExpression(radiusTerm(s), values);
+  return { atPreview, clamped: Math.abs(atPreview - evaluateExpression(unclampedRadius(s), values)) > 1e-6 };
+}
+
 /** Expression pieces for the arc's moving parts. */
 function terms(s: ArcSettings) {
-  const r = s.radiusVariable
-    ? s.radiusScale === 1
-      ? s.radiusVariable
-      : `${formatCoefficient(s.radiusScale)} * ${s.radiusVariable}`
-    : formatNumber(s.radius);
+  const r = radiusTerm(s);
   const rotation = s.rotationVariable ?? formatNumber(s.rotation);
   const magnitude = `max(${s.sweep}, -${s.sweep})`;
   return {
@@ -301,7 +344,10 @@ export function dragArcStart(
   if (s.rotationVariable) preview[s.rotationVariable] = String(rotation);
   else attrs["data-rotation"] = String(rotation);
   const distance = Math.max(4, Math.hypot(to.x - s.x, to.y - s.y));
-  if (s.radiusVariable) preview[s.radiusVariable] = formatNumber(distance / (s.radiusScale || 1));
+  if (s.radiusVariable) {
+    const value = radiusValueFor(s, distance);
+    if (value !== null) preview[s.radiusVariable] = formatNumber(value);
+  }
   else attrs["data-radius"] = formatNumber(Math.round(distance));
   return { attrs, preview };
 }

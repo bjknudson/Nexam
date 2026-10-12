@@ -2,12 +2,17 @@ import { describe, expect, it } from "vitest";
 
 import { createControlFromDrag } from "./controls";
 import type { SceneDocument, SceneElement } from "./scene";
+import { readGroupTransform, writeGroupTransform } from "./transforms";
 import { buildArrow } from "./shapes";
 import { BUILT_IN_STAMPS, createStampElement } from "./stamps";
 import { defaultStyle } from "./styles";
 import { parseSvg, serializeSvg } from "./svgIO";
 import {
   canEnterGroup,
+  carryInto,
+  lockedKeys,
+  moveBetweenGroups,
+  toggleLock,
   describeElement,
   groupElements,
   moveInFrontOf,
@@ -18,6 +23,9 @@ import {
   ungroupElement,
   validScope,
 } from "./tree";
+
+const attrsOf = (element: SceneElement) => (element.kind === "passthrough" ? {} : element.attrs);
+const children = (element: SceneElement) => (element.kind === "group" ? element.children : []);
 
 const rect = (key: string, x = 0): SceneElement => ({
   key,
@@ -127,5 +135,68 @@ describe("scopes", () => {
     expect(describeElement(stamp)).toBe("Pulley");
     expect(describeElement(arrow)).toBe("Arrow");
     expect(describeElement({ key: "t", kind: "text", attrs: {}, text: "F = {{force}} N" })).toBe("Text “F = {{force}} N”");
+  });
+});
+
+describe("moving between groups", () => {
+  const box = (key: string, x: number): SceneElement => ({ key, kind: "rect", attrs: { x: String(x), y: "0", width: "10", height: "10" } });
+  const groupAt = (key: string, transform: string | null, children: SceneElement[]): SceneElement => ({
+    key,
+    kind: "group",
+    attrs: { "data-nexam-group": "true", ...(transform ? { transform } : {}) },
+    children,
+  });
+  const identity = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+
+  it("moves a shape into a shifted group without moving it on the canvas", () => {
+    // The group is drawn 50 px right, so its coordinates are 50 less.
+    const doc: SceneDocument = { rootAttrs: {}, elements: [groupAt("g", "translate(50 0)", [box("a", 0)]), box("b", 80)] };
+    const result = moveBetweenGroups(doc, "b", [], ["g"], "a", { ...identity, e: -50 })!;
+    expect(result.document.elements.map((element) => element.key)).toEqual(["g"]);
+    expect(children(result.document.elements[0]).map((element) => [element.key, attrsOf(element).x])).toEqual([
+      ["a", "0"],
+      ["b", "30"],
+    ]);
+  });
+
+  it("moves a shape out to the top of the drawing, and never into itself", () => {
+    const doc: SceneDocument = { rootAttrs: {}, elements: [groupAt("g", "translate(50 0)", [box("a", 0)]), box("b", 80)] };
+    const out = moveBetweenGroups(doc, "a", ["g"], [], null, { ...identity, e: 50 })!;
+    expect(out.document.elements.map((element) => element.key)).toEqual(["g", "b", "a"]);
+    expect(attrsOf(out.document.elements[2]).x).toBe("50");
+    expect(moveBetweenGroups(doc, "g", [], ["g"], null, identity)).toBeNull();
+  });
+
+  it("re-places a stamp inside a turned group so it's drawn where it was", () => {
+    const stamp = writeGroupTransform(
+      { key: "s", kind: "group", attrs: { "data-nexam-stamp": "Block" }, children: [box("r", 0)] },
+      { cx: 100, cy: 50, rotation: 30, scale: 2, ox: 5, oy: 5, width: 10, height: 10 },
+    );
+    // Into a group turned 90° about the origin: its coordinates are the canvas turned back by 90°.
+    const back = { a: 0, b: -1, c: 1, d: 0, e: 0, f: 0 };
+    const carried = carryInto(stamp, back);
+    const tf = readGroupTransform(carried)!;
+    expect(tf.cx).toBeCloseTo(50);
+    expect(tf.cy).toBeCloseTo(-100);
+    expect(tf.rotation).toBeCloseTo(-60);
+    expect(tf.scale).toBeCloseTo(2);
+    expect(carried.key).toBe("s");
+  });
+
+  it("wraps anything else in a group carrying the turn", () => {
+    const carried = carryInto(box("a", 0), { a: 0, b: -1, c: 1, d: 0, e: 3, f: 4 });
+    expect(carried.kind).toBe("group");
+    expect(attrsOf(carried).transform).toBe("matrix(0 -1 1 0 3 4)");
+    expect(children(carried)[0].key).toBe("a");
+  });
+});
+
+describe("locking", () => {
+  it("is saved on the element and toggles off again", () => {
+    const doc: SceneDocument = { rootAttrs: {}, elements: [{ key: "a", kind: "rect", attrs: { x: "0" } }] };
+    const locked = toggleLock(doc, "a");
+    expect(attrsOf(locked.elements[0])["data-nexam-locked"]).toBe("true");
+    expect(lockedKeys(locked)).toEqual(new Set(["a"]));
+    expect(attrsOf(toggleLock(locked, "a").elements[0])["data-nexam-locked"]).toBeUndefined();
   });
 });

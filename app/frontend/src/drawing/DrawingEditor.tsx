@@ -4,6 +4,7 @@
 
 import {
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -24,6 +25,8 @@ import {
   controlScaleGroup,
   controlUsesCcw,
   controlVariable,
+  SHARED_SCALE_ATTRS,
+  sharedScale,
   convertToCcw,
   createControlFromDrag,
   dragControlEnd,
@@ -31,6 +34,7 @@ import {
   fitToRange,
   isValidVariableName,
   lengthReadout,
+  type LengthReadout,
   rebuildControl,
   setControlAttrs,
   uniqueVariableName,
@@ -39,6 +43,7 @@ import {
   type RangeFit,
 } from "./controls";
 import { alignDeltas, distributeDeltas, type AlignEdge, type Box, type Delta } from "./align";
+import { directionsFrom, nearestSnap, segmentsOf, snapPoints, type Segment, type SnapPoint } from "./snapping";
 import { formatCoefficient } from "./geometry";
 import {
   boxCorners,
@@ -54,9 +59,19 @@ import {
   topMiddle,
   writeGroupTransform,
   type GroupTransform,
+  type Matrix,
 } from "./transforms";
 import "./drawing.css";
-import { arcStartPoint, dragArcStart, fixedArcToVariable, isFixedArc, readArcSettings, readFixedArc, type ArcHeads } from "./arcs";
+import {
+  arcStartPoint,
+  dragArcStart,
+  fixedArcToVariable,
+  isFixedArc,
+  radiusReadout,
+  readArcSettings,
+  readFixedArc,
+  type ArcHeads,
+} from "./arcs";
 import {
   anchorCandidates,
   anchorPointsFor,
@@ -130,7 +145,9 @@ import {
   describeElement,
   groupElements,
   mapDeep,
-  moveInFrontOf,
+  lockedKeys,
+  moveBetweenGroups,
+  toggleLock,
   reorderElements,
   replaceInScope,
   scopeElements,
@@ -209,6 +226,8 @@ const HISTORY_LIMIT = 100;
 /** Dragging a loose text shows anchor points this close (screen px), and snaps within ANCHOR_SNAP. */
 const ANCHOR_REACH = 60;
 const ANCHOR_SNAP = 14;
+/** An arc's centre snaps to line ends and crossings this close (screen px). */
+const CENTRE_SNAP = 10;
 
 type DragState =
   | { mode: "create"; start: Point }
@@ -265,16 +284,6 @@ interface Bounds {
   height: number;
 }
 
-/** Maps a point in the entered group's coordinates to canvas coordinates. */
-interface Matrix {
-  a: number;
-  b: number;
-  c: number;
-  d: number;
-  e: number;
-  f: number;
-}
-
 export default function DrawingEditor({
   initialSource,
   onSave,
@@ -298,7 +307,8 @@ export default function DrawingEditor({
   const [scopeState, setScope] = useState<Scope>([]);
   // Editor-only: never saved.
   const [hidden, setHidden] = useState<Set<string>>(() => new Set());
-  const [locked, setLocked] = useState<Set<string>>(() => new Set());
+  // Locks are saved with the drawing (data-nexam-locked), so they come from it.
+  const locked = useMemo(() => lockedKeys(doc), [doc]);
   const [tool, setTool] = useState<DrawingTool>("select");
   const [arrowHeads, setArrowHeads] = useState<ArrowHeads>("end");
   const [style, setStyle] = useState<DrawingStyle>(() => defaultStyle(initialPreset));
@@ -317,6 +327,9 @@ export default function DrawingEditor({
   const [hoverPoint, setHoverPoint] = useState<Point | null>(null);
   const [marquee, setMarquee] = useState<Bounds | null>(null);
   const [anchorSpots, setAnchorSpots] = useState<AnchorSpot[]>([]);
+  /** Where an arc's centre has snapped to, shown while placing it. */
+  const [centreSnap, setCentreSnap] = useState<SnapPoint | null>(null);
+  useEffect(() => setCentreSnap(null), [tool]);
   const [selectionBoxes, setSelectionBoxes] = useState<Bounds[]>([]);
   const [scopeBox, setScopeBox] = useState<Bounds | null>(null);
   const [scopeMatrix, setScopeMatrix] = useState<Matrix | null>(null);
@@ -403,15 +416,23 @@ export default function DrawingEditor({
         (element) => element.key !== next.key && isControl(element) && controlScaleGroup(element) === group,
       );
       if (joined && others[0]?.kind === "group") {
-        next = setControlAttrs(next, sharedScale(others[0]).attrs, sharedScale(others[0]).remove);
+        const adopted = sharedScale(others[0], next);
+        next = setControlAttrs(next, adopted.attrs, adopted.remove);
         nextDoc = replaceInScope(doc, scope, next.key, next);
       } else {
         nextDoc = replaceInScope(doc, scope, next.key, next);
-        const shared = sharedScale(next);
         const changedShared = SHARED_SCALE_ATTRS.some((name) => previous.attrs[name] !== (next as typeof previous).attrs[name]);
         if (changedShared && others.length > 0) {
           const keys = new Set(others.map((element) => element.key));
-          nextDoc = { ...nextDoc, elements: mapDeep(nextDoc.elements, (element) => (keys.has(element.key) ? setControlAttrs(element, shared.attrs, shared.remove) : element)) };
+          const source = next;
+          nextDoc = {
+            ...nextDoc,
+            elements: mapDeep(nextDoc.elements, (element) => {
+              if (!keys.has(element.key)) return element;
+              const shared = sharedScale(source, element);
+              return setControlAttrs(element, shared.attrs, shared.remove);
+            }),
+          };
           setNotice(`Updated the scale of ${others.length} other control${others.length === 1 ? "" : "s"} in “${group}”.`);
         }
       }
@@ -485,6 +506,13 @@ export default function DrawingEditor({
     if (!scopeMatrix) return point;
     const { a, b, c, d, e, f } = scopeMatrix;
     return { x: a * point.x + c * point.y + e, y: b * point.x + d * point.y + f };
+  }
+
+  /** An arc's centre near a line end or crossing goes onto it (Alt: freely). */
+  function snapCentre(point: Point, skipKey: string | null, free: boolean): Point {
+    const found = free ? null : nearestSnap(snapPoints(segmentsOf(scopeList, previewValues), skipKey ?? undefined), point, CENTRE_SNAP / zoom);
+    setCentreSnap(found);
+    return found ? { x: round2(found.x), y: round2(found.y) } : point;
   }
 
   function snapPoint(point: Point): Point {
@@ -696,7 +724,8 @@ export default function DrawingEditor({
       return;
     }
 
-    dragRef.current = { mode: "create", start: point };
+    const isArcTool = tool === "arc" || tool === "variable-arc";
+    dragRef.current = { mode: "create", start: isArcTool ? snapCentre(local, null, event.altKey) : point };
     capture();
   }
 
@@ -705,6 +734,8 @@ export default function DrawingEditor({
 
     if (!drag) {
       if (POINT_BY_POINT_TOOLS.includes(tool) && polyPoints.length > 0) setHoverPoint(snapPoint(toLocalPoint(event)));
+      // Show where a new arc's centre would snap before pressing.
+      if (tool === "arc" || tool === "variable-arc") snapCentre(toLocalPoint(event), null, event.altKey);
       return;
     }
 
@@ -779,8 +810,18 @@ export default function DrawingEditor({
     }
 
     if (drag.mode === "move") {
-      const dx = snapDelta(local.x - drag.start.x);
-      const dy = snapDelta(local.y - drag.start.y);
+      let dx = snapDelta(local.x - drag.start.x);
+      let dy = snapDelta(local.y - drag.start.y);
+      // A single arc moved by its body: its centre snaps to line ends and crossings.
+      const centre = drag.originals.length === 1 ? arcCentre(drag.originals[0]) : null;
+      if (centre) {
+        const unsnapped = { x: centre.x + dx, y: centre.y + dy };
+        const target = snapCentre(unsnapped, drag.originals[0].key, event.altKey);
+        if (target !== unsnapped) {
+          dx = round2(target.x - centre.x);
+          dy = round2(target.y - centre.y);
+        }
+      }
       if (dx === 0 && dy === 0 && !drag.changed) return;
       const moved = new Map<string, SceneElement>();
       const movingIds = idsOf(drag.originals);
@@ -848,7 +889,8 @@ export default function DrawingEditor({
         return;
       }
       const anchor = controlAnchor(drag.original);
-      const moved = anchor ? translateElement(drag.original, point.x - anchor.x, point.y - anchor.y) : null;
+      const to = arc ? snapCentre(local, drag.key, event.altKey) : point;
+      const moved = anchor ? translateElement(drag.original, to.x - anchor.x, to.y - anchor.y) : null;
       if (!moved) return;
       if (!drag.changed) {
         snapshot(drag.before);
@@ -910,6 +952,7 @@ export default function DrawingEditor({
   function handlePointerUp() {
     const drag = dragRef.current;
     dragRef.current = null;
+    if (tool !== "arc" && tool !== "variable-arc") setCentreSnap(null);
     if (drag?.mode === "move" && !drag.changed && drag.clickedKey) {
       setSelection([drag.clickedKey]);
       return;
@@ -1047,6 +1090,32 @@ export default function DrawingEditor({
         elements.map((element) => (element.key === target.key ? result.target : element.key === selected.key ? result.text : element)),
       ),
     );
+  }
+
+  /** The matrix from a scope's own coordinates to the canvas, as drawn. */
+  function scopeFrame(path: Scope): Matrix {
+    const identity = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+    const svg = svgRef.current;
+    const node = path.length > 0 ? nodeFor(path[path.length - 1]) : null;
+    if (!svg || !node) return identity;
+    const m = svg.getScreenCTM()?.inverse().multiply(node.getScreenCTM() ?? new DOMMatrix());
+    return m ? { a: m.a, b: m.b, c: m.c, d: m.d, e: m.e, f: m.f } : identity;
+  }
+
+  /** A Layers row dropped onto another: restack, or move into or out of a
+   *  group, keeping it where it's drawn. The moved row is then selected. */
+  function moveLayer(from: Scope, key: string, to: Scope, targetKey: string) {
+    const toDom = ({ a, b, c, d, e, f }: Matrix) => new DOMMatrix([a, b, c, d, e, f]);
+    const source = toDom(scopeFrame(from));
+    const target = toDom(scopeFrame(to));
+    const m = target.inverse().multiply(source);
+    const result = moveBetweenGroups(doc, key, from, to, targetKey, { a: m.a, b: m.b, c: m.c, d: m.d, e: m.e, f: m.f });
+    if (!result) return;
+    commit(result.document);
+    if (from.join("/") !== to.join("/")) {
+      setScope(to);
+      setSelection([result.key]);
+    }
   }
 
   /** Resizes every selected stamp or group by `factor`: about the centre of
@@ -1402,6 +1471,11 @@ export default function DrawingEditor({
           { id: "rotate", ...rotationHandle(groupFrame, 20 / zoom) },
         ]
       : [];
+  const angleVariables = collectAngleVariables(doc);
+  const lineChoices: LineChoice[] = segmentsOf(scopeList, previewValues).map((segment) => {
+    const element = scopeList.find((item) => item.key === segment.key)!;
+    return { ...segment, label: describeElement(element), angleVariable: controlAngleVariable(element) };
+  });
   const multiBox = multiFrames && tool === "select" ? framesBox(multiFrames) : null;
   const handles =
     selected && tool === "select"
@@ -1719,6 +1793,15 @@ export default function DrawingEditor({
               {marquee ? (
                 <rect className="drawing-marquee" x={marquee.x} y={marquee.y} width={marquee.width} height={marquee.height} pointerEvents="none" />
               ) : null}
+              {centreSnap ? (
+                <circle
+                  className="drawing-anchor-spot snapped"
+                  cx={toCanvas(centreSnap).x}
+                  cy={toCanvas(centreSnap).y}
+                  r={5 * pixel}
+                  pointerEvents="none"
+                />
+              ) : null}
               {anchorSpots.map((spot, index) => {
                 const at = toCanvas(spot);
                 const snapped = index === 0 && spot.distance <= ANCHOR_SNAP / zoom;
@@ -1784,6 +1867,8 @@ export default function DrawingEditor({
               style={canvasStyle}
               previewValues={previewValues}
               usedNames={variables}
+              angleVariables={angleVariables}
+              lines={lineChoices}
               onStyle={changeStyle}
               onPreviewValues={(patch) => setPreviewValues((values) => ({ ...values, ...patch }))}
               onChange={(next) => updateSelected(next, true)}
@@ -1802,6 +1887,7 @@ export default function DrawingEditor({
               style={canvasStyle}
               previewValues={previewValues}
               usedNames={variables}
+              angleVariables={angleVariables}
               scaleGroups={scaleGroups.map((group) => group.name)}
               onStyle={changeStyle}
               onPreviewValues={(patch) => setPreviewValues((values) => ({ ...values, ...patch }))}
@@ -1830,6 +1916,7 @@ export default function DrawingEditor({
                 setSelection([]);
               } : undefined}
               siblings={scopeList}
+              lines={lineChoices}
               onAttach={attachSelectedText}
               onDetach={() => updateSelected(detachText(selected, previewValues), true)}
               groupFrame={groupFrame}
@@ -1953,8 +2040,8 @@ export default function DrawingEditor({
                     );
                   }}
                   onToggleHidden={(key) => setHidden((current) => toggleInSet(current, key))}
-                  onToggleLocked={(key) => setLocked((current) => toggleInSet(current, key))}
-                  onMove={(path, key, targetKey) => commit(updateScope(doc, path, (elements) => moveInFrontOf(elements, key, targetKey)))}
+                  onToggleLocked={(key) => commit(toggleLock(doc, key))}
+                  onMove={moveLayer}
                 />
               </div>
             ) : null}
@@ -1979,6 +2066,7 @@ function SelectionInspector({
   onChange,
   onEnter,
   siblings,
+  lines,
   onAttach,
   onDetach,
   onMakeVariable,
@@ -1996,6 +2084,8 @@ function SelectionInspector({
   onEnter?: () => void;
   /** Other elements at the same level, which a text can be attached to. */
   siblings: SceneElement[];
+  /** Lines and arrows at the same level, for lining up an arc's start. */
+  lines: LineChoice[];
   onAttach: (targetKey: string, point: AnchorPoint) => void;
   onDetach: () => void;
   /** For a fixed arc: turn it into a variable arc. */
@@ -2159,7 +2249,7 @@ function SelectionInspector({
         <p className="drawing-muted">Drag a corner to resize (Alt: from the centre), or the round handle above to rotate (Shift: freely).</p>
       </>
     ) : fixedArc ? (
-      <FixedArcPlace element={fixedArc} onChange={onChange} />
+      <FixedArcPlace element={fixedArc} lines={lines.filter((line) => !line.angleVariable)} onChange={onChange} />
     ) : fields.length > 0 || isText ? (
       <>
         {fields.length > 0 && element.kind !== "passthrough" ? (
@@ -2490,6 +2580,7 @@ function ControlInspector({
   style,
   previewValues,
   usedNames,
+  angleVariables,
   scaleGroups,
   onStyle,
   onPreviewValues,
@@ -2502,6 +2593,7 @@ function ControlInspector({
   style: DrawingStyle;
   previewValues: PreviewValues;
   usedNames: string[];
+  angleVariables: string[];
   /** Scale groups already used in the drawing, for suggestions. */
   scaleGroups: string[];
   onStyle: (patch: Partial<DrawingStyle>) => void;
@@ -2673,6 +2765,7 @@ function ControlInspector({
                 variable={angleVariable}
                 usedNames={usedNames}
                 reserved={variable}
+                suggestions={angleVariables}
                 onRename={(to) => onRename(setControlAttrs(element, { "data-angle-variable": to }), angleVariable, to)}
               />
               <SliderField
@@ -2715,7 +2808,7 @@ function ControlInspector({
       label={label}
       place={place}
       placeTitle={isArrowControl ? "Position, length and angle" : "Position, length and direction"}
-      more={<LengthSettings element={element} variable={variable} preview={length} scaleGroups={scaleGroups} set={set} />}
+      more={<LengthSettings element={element} variable={variable} preview={length} scaleGroups={scaleGroups} set={set} values={previewValues} />}
       moreTitle="Length scaling"
       actions={actions}
       note={
@@ -2735,35 +2828,87 @@ function ControlInspector({
   );
 }
 
-/** How a control's value becomes a drawn length: a scale factor or a formula,
- *  optional minimum/maximum, a range-fitting helper, and a shared scale group. */
+/** Where a scaled size's settings are saved: an arrow's or bar's length, or
+ *  a variable arc's radius (whose attribute names predate the shared editor). */
+interface ScaledSizeAttrs {
+  scale: string;
+  expression: string;
+  min: string;
+  max: string;
+  /** Scale groups are for lengths only. */
+  group: string | null;
+  noun: "length" | "radius";
+}
+
+const LENGTH_ATTRS: ScaledSizeAttrs = {
+  scale: "data-scale",
+  expression: "data-length-expression",
+  min: "data-min-length",
+  max: "data-max-length",
+  group: "data-scale-group",
+  noun: "length",
+};
+
+const RADIUS_ATTRS: ScaledSizeAttrs = {
+  scale: "data-radius-scale",
+  expression: "data-radius-expression",
+  min: "data-radius-min",
+  max: "data-radius-max",
+  group: null,
+  noun: "radius",
+};
+
+/** How a variable becomes a drawn size: a scale factor or a formula,
+ *  optional minimum/maximum, a range-fitting helper, and (for lengths) a
+ *  shared scale group. */
 function LengthSettings({
   element,
   variable,
   preview,
-  scaleGroups,
+  scaleGroups = [],
   set,
+  names = LENGTH_ATTRS,
+  readout,
+  values = {},
 }: {
   element: SceneElement & { kind: "group" };
   variable: string;
   preview: number;
-  scaleGroups: string[];
+  scaleGroups?: string[];
   set: (next: Record<string, string>, remove?: string[]) => void;
+  names?: ScaledSizeAttrs;
+  /** What the preview value draws as; worked out from the control when not given. */
+  readout?: LengthReadout | null;
+  /** All preview values (a question-set scale is one of them). */
+  values?: PreviewValues;
 }) {
   const attrs = element.attrs;
-  const formula = attrs["data-length-expression"];
+  const formula = attrs[names.expression];
   const usingFormula = formula !== undefined;
   const [fitOpen, setFitOpen] = useState(false);
   const [fitNote, setFitNote] = useState<string | null>(null);
-  const readout = lengthReadout(element, preview);
-  const group = attrs["data-scale-group"] ?? "";
+  const shown = readout === undefined ? lengthReadout(element, preview, values) : readout;
+  const scaleVariable = names.noun === "length" ? attrs["data-scale-variable"] ?? null : null;
+  const group = names.group ? attrs[names.group] ?? "" : "";
+  const Noun = names.noun === "length" ? "Length" : "Radius";
+  // Range fits are written for lengths; rename their keys for a radius.
+  const renamed = (fit: RangeFit): RangeFit => ({
+    ...fit,
+    attrs: Object.fromEntries(
+      Object.entries(fit.attrs).map(([name, value]) => [
+        name === "data-scale" ? names.scale : name === "data-length-expression" ? names.expression : name,
+        value,
+      ]),
+    ),
+    remove: fit.remove.map((name) => (name === "data-length-expression" ? names.expression : name)),
+  });
 
   return (
     <div className="drawing-length-settings">
       <div className="drawing-stack">
-        Drawn length
-        <div className="drawing-segmented" role="group" aria-label="Length mode">
-          <button type="button" className={usingFormula ? "" : "active"} onClick={() => usingFormula && set({}, ["data-length-expression"])}>
+        Drawn {names.noun}
+        <div className="drawing-segmented" role="group" aria-label={`${Noun} mode`}>
+          <button type="button" className={usingFormula ? "" : "active"} onClick={() => usingFormula && set({}, [names.expression])}>
             Scale
           </button>
           <button
@@ -2771,7 +2916,7 @@ function LengthSettings({
             className={usingFormula ? "active" : ""}
             onClick={() =>
               !usingFormula &&
-              set({ "data-length-expression": `${variable} * ${formatCoefficient(literalNumber(attrs["data-scale"]) ?? 1)}` })
+              set({ [names.expression]: `${variable} * ${formatCoefficient(literalNumber(attrs[names.scale]) ?? 1)}` })
             }
           >
             Formula
@@ -2780,32 +2925,73 @@ function LengthSettings({
       </div>
 
       {usingFormula ? (
-        <FormulaField variable={variable} value={formula} onCommit={(next) => set({ "data-length-expression": next })} />
+        <FormulaField label={`${Noun} formula (px)`} variable={variable} value={formula} onCommit={(next) => set({ [names.expression]: next })} />
       ) : (
-        <ScaleField value={literalNumber(attrs["data-scale"]) ?? 1} onCommit={(scale) => set({ "data-scale": formatCoefficient(scale) })} />
+        <>
+          <ScaleField value={literalNumber(attrs[names.scale]) ?? 1} onCommit={(scale) => set({ [names.scale]: formatCoefficient(scale) })} />
+          {names.noun === "length" ? (
+            <label className="drawing-check-row">
+              <input
+                type="checkbox"
+                checked={scaleVariable !== null}
+                onChange={(event) =>
+                  event.target.checked ? set({ "data-scale-variable": `${variable}_scale` }) : set({}, ["data-scale-variable"])
+                }
+              />
+              Let a question set the scale
+            </label>
+          ) : null}
+          {scaleVariable ? (
+            <>
+              <VariableNameField
+                label="Scale variable"
+                variable={scaleVariable}
+                usedNames={[]}
+                reserved={variable}
+                onRename={(to) => set({ "data-scale-variable": to })}
+              />
+              <span className="drawing-muted">
+                A question that sets <code>{scaleVariable}</code> draws at that scale; one that leaves it blank uses the scale above.
+                This puts a drawing decision in question data, so use it only for unusual values.
+              </span>
+            </>
+          ) : null}
+        </>
       )}
 
-      {readout ? (
+      {shown ? (
         <p className="drawing-muted drawing-readout">
-          {readout.perUnit !== null ? `1 unit draws as ${formatNumber(readout.perUnit)} px · ` : ""}
-          {formatNumber(preview)} draws as {formatNumber(readout.atPreview)} px
-          {readout.clamped ? " (held at the limit)" : ""}
+          {shown.perUnit !== null ? `1 unit draws as ${formatNumber(shown.perUnit)} px · ` : ""}
+          {formatNumber(preview)} draws as {formatNumber(shown.atPreview)} px
+          {shown.clamped ? " (held at the limit)" : ""}
         </p>
       ) : null}
 
       <div className="drawing-field-grid">
         <OptionalNumberField
-          label="Min length (px)"
-          value={literalNumber(attrs["data-min-length"])}
-          onCommit={(next) => (next === null ? set({}, ["data-min-length"]) : set({ "data-min-length": formatNumber(next) }))}
+          label={`Min ${names.noun} (px)`}
+          value={literalNumber(attrs[names.min])}
+          onCommit={(next) => (next === null ? set({}, [names.min]) : set({ [names.min]: formatNumber(next) }))}
         />
         <OptionalNumberField
-          label="Max length (px)"
-          value={literalNumber(attrs["data-max-length"])}
-          onCommit={(next) => (next === null ? set({}, ["data-max-length"]) : set({ "data-max-length": formatNumber(next) }))}
+          label={`Max ${names.noun} (px)`}
+          value={literalNumber(attrs[names.max])}
+          onCommit={(next) => (next === null ? set({}, [names.max]) : set({ [names.max]: formatNumber(next) }))}
         />
       </div>
 
+      {names.noun === "length" && (attrs[names.min] !== undefined || attrs[names.max] !== undefined) ? (
+        <label className="drawing-check-row">
+          <input
+            type="checkbox"
+            checked={attrs["data-clamp-mark"] !== "none"}
+            onChange={(event) => (event.target.checked ? set({}, ["data-clamp-mark"]) : set({ "data-clamp-mark": "none" }))}
+          />
+          Mark a length held at its limit (//), so it isn't read as true to scale
+        </label>
+      ) : null}
+
+      {names.group ? (
       <label className="drawing-stack">
         Scale group
         <input
@@ -2828,8 +3014,9 @@ function LengthSettings({
             <option key={name} value={name} />
           ))}
         </datalist>
-        <span className="drawing-muted">Arrows and bars in one group share a scale, so their lengths compare honestly.</span>
+        <span className="drawing-muted">Arrows and bars in one group share their scale, formula and limits, so their lengths compare honestly.</span>
       </label>
+      ) : null}
 
       <button type="button" className="drawing-link-button" aria-expanded={fitOpen} onClick={() => setFitOpen((open) => !open)}>
         {fitOpen ? "▾" : "▸"} Fit to a range…
@@ -2838,8 +3025,9 @@ function LengthSettings({
         <RangeFitForm
           variable={variable}
           onApply={(fit) => {
-            set(fit.attrs, fit.remove);
-            setFitNote(fit.warning);
+            const applied = renamed(fit);
+            set(applied.attrs, applied.remove);
+            setFitNote(applied.warning);
           }}
         />
       ) : null}
@@ -2881,10 +3069,12 @@ function ScaleField({ value, onCommit }: { value: number; onCommit: (value: numb
 
 /** A length formula in the control's variable, checked as you type. */
 function FormulaField({
+  label = "Length formula (px)",
   variable,
   value,
   onCommit,
 }: {
+  label?: string;
   variable: string;
   value: string;
   onCommit: (value: string) => void;
@@ -2897,7 +3087,7 @@ function FormulaField({
   };
   return (
     <label className="drawing-stack">
-      Length formula (px)
+      {label}
       <input
         className="drawing-formula"
         value={text}
@@ -2998,14 +3188,19 @@ function VariableNameField({
   variable,
   usedNames,
   reserved,
+  suggestions = [],
   onRename,
 }: {
   label: string;
   variable: string;
   usedNames: string[];
   reserved: string | null;
+  /** Existing variables offered in a menu (e.g. the drawing's angles), to link to. */
+  suggestions?: string[];
   onRename: (to: string) => void;
 }) {
+  const listId = useId();
+  const offered = suggestions.filter((name) => name !== variable && name !== reserved);
   const [text, setText] = useState(variable);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -3033,12 +3228,20 @@ function VariableNameField({
       {label}
       <input
         value={text}
+        list={offered.length > 0 ? listId : undefined}
         onChange={(event) => setText(event.target.value)}
         onBlur={commit}
         onKeyDown={(event) => {
           if (event.key === "Enter") commit();
         }}
       />
+      {offered.length > 0 ? (
+        <datalist id={listId}>
+          {offered.map((name) => (
+            <option key={name} value={name} />
+          ))}
+        </datalist>
+      ) : null}
       {error ? (
         <span className="drawing-error">{error}</span>
       ) : text.trim() !== variable && usedNames.includes(text.trim()) ? (
@@ -3192,7 +3395,15 @@ function ArcLabelOptions({
   );
 }
 
-function FixedArcPlace({ element, onChange }: { element: SceneElement & { kind: "group" }; onChange: (next: SceneElement) => void }) {
+function FixedArcPlace({
+  element,
+  lines,
+  onChange,
+}: {
+  element: SceneElement & { kind: "group" };
+  lines: LineChoice[];
+  onChange: (next: SceneElement) => void;
+}) {
   const { arc, set } = fixedArcEditor(element, onChange);
   if (!arc) return null;
   return (
@@ -3209,6 +3420,12 @@ function FixedArcPlace({ element, onChange }: { element: SceneElement & { kind: 
         />
       </div>
       <p className="drawing-muted">Angles count counterclockwise from the positive x-axis; a negative sweep runs clockwise.</p>
+      <LineUpField
+        lines={lines}
+        centre={{ x: arc.x, y: arc.y }}
+        onDirection={(degrees) => set({ "data-rotation": formatNumber(degrees) })}
+        onAngleVariable={() => undefined}
+      />
     </>
   );
 }
@@ -3220,6 +3437,8 @@ function ArcInspector({
   style,
   previewValues,
   usedNames,
+  angleVariables,
+  lines,
   onStyle,
   onPreviewValues,
   onChange,
@@ -3230,6 +3449,9 @@ function ArcInspector({
   style: DrawingStyle;
   previewValues: PreviewValues;
   usedNames: string[];
+  angleVariables: string[];
+  /** Lines and arrows beside it, to line its start up with. */
+  lines: LineChoice[];
   onStyle: (patch: Partial<DrawingStyle>) => void;
   onPreviewValues: (patch: PreviewValues) => void;
   onChange: (next: SceneElement) => void;
@@ -3241,6 +3463,7 @@ function ArcInspector({
   const attrs = element.attrs;
   const set = (next: Record<string, string>, remove: string[] = []) => onChange(setControlAttrs(element, next, remove));
   const reserved = [arc.sweep, arc.rotationVariable, arc.radiusVariable].filter(Boolean) as string[];
+  const radiusPreview = arc.radiusVariable ? Number(previewValues[arc.radiusVariable]) || 0 : arc.radius;
 
   const look = (
     <>
@@ -3261,8 +3484,15 @@ function ArcInspector({
         variable={arc.radiusVariable}
         onFixed={() => {
           if (!arc.radiusVariable) return;
-          const value = Number(previewValues[arc.radiusVariable]) * arc.radiusScale;
-          set({ "data-radius": formatNumber(Number.isFinite(value) && value > 0 ? value : arc.radius) }, ["data-radius-variable", "data-radius-scale"]);
+          // Keep the radius it draws at now, formula and limits included.
+          const value = radiusReadout(arc, previewValues)?.atPreview ?? Number.NaN;
+          set({ "data-radius": formatNumber(Number.isFinite(value) && value > 0 ? value : arc.radius) }, [
+            "data-radius-variable",
+            "data-radius-scale",
+            "data-radius-expression",
+            "data-radius-min",
+            "data-radius-max",
+          ]);
         }}
         onVariable={() => {
           const name = uniqueVariableName("arc_radius", [...usedNames, ...reserved]);
@@ -3279,20 +3509,13 @@ function ArcInspector({
             reserved={arc.sweep}
             onRename={(to) => onRename(setControlAttrs(element, { "data-radius-variable": to }), arc.radiusVariable as string, to)}
           />
-          <div className="drawing-field-grid">
-            <label>
-              Preview radius
-              <input
-                value={previewValues[arc.radiusVariable] ?? ""}
-                onChange={(event) => onPreviewValues({ [arc.radiusVariable as string]: event.target.value })}
-              />
-            </label>
-            <NumberField
-              label="px per unit"
-              value={arc.radiusScale}
-              onCommit={(value) => value > 0 && set({ "data-radius-scale": formatCoefficient(value) })}
-            />
-          </div>
+          <SliderField
+            label="Preview radius"
+            min={0}
+            max={Math.max(100, Math.ceil((radiusPreview * 1.5) / 10) * 10)}
+            text={previewValues[arc.radiusVariable] ?? ""}
+            onChange={(value) => onPreviewValues({ [arc.radiusVariable as string]: value })}
+          />
         </>
       ) : (
         <div className="drawing-field-grid">
@@ -3321,6 +3544,7 @@ function ArcInspector({
             variable={arc.rotationVariable}
             usedNames={usedNames}
             reserved={arc.sweep}
+            suggestions={angleVariables}
             onRename={(to) => onRename(setControlAttrs(element, { "data-rotation-variable": to }), arc.rotationVariable as string, to)}
           />
           <SliderField
@@ -3337,6 +3561,12 @@ function ArcInspector({
           <NumberField label="Rotation (°)" value={arc.rotation} onCommit={(value) => set({ "data-rotation": formatNumber(value) })} />
         </div>
       )}
+      <LineUpField
+        lines={lines}
+        centre={{ x: arc.x, y: arc.y }}
+        onDirection={(degrees) => set({ "data-rotation": formatNumber(degrees) }, ["data-rotation-variable"])}
+        onAngleVariable={(name) => set({ "data-rotation-variable": name })}
+      />
 
       <div className="drawing-stack">
         Sweep
@@ -3347,6 +3577,7 @@ function ArcInspector({
         variable={arc.sweep}
         usedNames={usedNames}
         reserved={arc.rotationVariable ?? arc.radiusVariable}
+        suggestions={angleVariables}
         onRename={(to) => onRename(setControlAttrs(element, { "data-variable": to }), arc.sweep, to)}
       />
       <SliderField
@@ -3360,6 +3591,7 @@ function ArcInspector({
     </>
   );
 
+  const radiusRead = radiusReadout(arc, previewValues);
   return (
     <InspectorLayout
       title="Variable arc"
@@ -3367,6 +3599,19 @@ function ArcInspector({
       label={<ArcLabelOptions attrs={attrs} set={set} />}
       place={place}
       placeTitle="Position, size and angle"
+      more={
+        arc.radiusVariable ? (
+          <LengthSettings
+            element={element}
+            variable={arc.radiusVariable}
+            preview={radiusPreview}
+            set={set}
+            names={RADIUS_ATTRS}
+            readout={radiusRead ? { perUnit: arc.radiusExpression ? null : arc.radiusScale, ...radiusRead } : null}
+          />
+        ) : null
+      }
+      moreTitle="Radius scaling"
       actions={actions}
       note={
         <p className="drawing-muted">
@@ -3377,6 +3622,50 @@ function ArcInspector({
         </p>
       }
     />
+  );
+}
+
+/** "Start along…": turns an arc's start to a line or arrow, pointing away
+ *  from the arc's centre, so the arc measures the angle from it. A
+ *  variable-angle arrow links its angle variable instead of a number. */
+function LineUpField({
+  lines,
+  centre,
+  onDirection,
+  onAngleVariable,
+}: {
+  lines: LineChoice[];
+  centre: Point;
+  onDirection: (degrees: number) => void;
+  onAngleVariable: (name: string) => void;
+}) {
+  if (lines.length === 0) return null;
+  const choices: { value: string; label: string; line: LineChoice; degrees: number | null }[] = lines.flatMap((line, index) =>
+    line.angleVariable
+      ? [{ value: `${index}:var`, label: `${line.label} (links ${line.angleVariable})`, line, degrees: null as number | null }]
+      : directionsFrom(line, centre).map((degrees) => ({ value: `${index}:${degrees}`, label: `${line.label} → ${formatNumber(degrees)}°`, line, degrees: degrees as number | null })),
+  );
+  return (
+    <label className="drawing-stack">
+      Start along a line
+      <select
+        value=""
+        onChange={(event) => {
+          const choice = choices.find((item) => item.value === event.target.value);
+          if (!choice) return;
+          if (choice.degrees === null && choice.line.angleVariable) onAngleVariable(choice.line.angleVariable);
+          else if (choice.degrees !== null) onDirection(choice.degrees);
+        }}
+      >
+        <option value="">Choose a line or arrow…</option>
+        {choices.map((choice) => (
+          <option key={choice.value} value={choice.value}>
+            {choice.label}
+          </option>
+        ))}
+      </select>
+      <span className="drawing-muted">Points the start along it, away from the centre, so the arc measures the angle from that line.</span>
+    </label>
   );
 }
 
@@ -4038,18 +4327,30 @@ function CanvasMenu({
   );
 }
 
-const SHARED_SCALE_ATTRS = ["data-scale", "data-min-length", "data-max-length"];
 
 /** The scale settings a scale group shares (formulas stay per control). */
-function sharedScale(element: SceneElement): { attrs: Record<string, string>; remove: string[] } {
-  const attrs: Record<string, string> = {};
-  const remove: string[] = [];
-  if (element.kind !== "group") return { attrs, remove };
-  for (const name of SHARED_SCALE_ATTRS) {
-    if (element.attrs[name] !== undefined) attrs[name] = element.attrs[name];
-    else remove.push(name);
+
+/** Variables the drawing uses as angles (arrow directions, arc sweeps and
+ *  starts), offered when naming another angle so they can be linked. */
+function collectAngleVariables(document: SceneDocument): string[] {
+  const names = new Set<string>();
+  for (const element of allElements(document.elements)) {
+    const angle = controlAngleVariable(element);
+    if (angle) names.add(angle);
+    const arc = readArcSettings(element);
+    if (arc) {
+      names.add(arc.sweep);
+      if (arc.rotationVariable) names.add(arc.rotationVariable);
+    }
   }
-  return { attrs, remove };
+  return [...names].sort();
+}
+
+/** A line or arrow an arc's start can be lined up with. */
+interface LineChoice extends Segment {
+  label: string;
+  /** Set for a variable-angle arrow: the arc then links to that variable. */
+  angleVariable: string | null;
 }
 
 function collectScaleGroups(document: SceneDocument): { name: string; scale: string; count: number }[] {
@@ -4380,6 +4681,12 @@ function constrain(tool: DrawingTool, start: Point, end: Point, shift: boolean):
   }
   const size = Math.max(Math.abs(dx), Math.abs(dy));
   return { x: start.x + Math.sign(dx || 1) * size, y: start.y + Math.sign(dy || 1) * size };
+}
+
+/** The centre of a fixed or variable arc, or null for anything else. */
+function arcCentre(element: SceneElement): Point | null {
+  const arc = readArcSettings(element) ?? readFixedArc(element);
+  return arc ? { x: arc.x, y: arc.y } : null;
 }
 
 function withCurrent(options: number[], current: number): number[] {

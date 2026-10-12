@@ -72,6 +72,10 @@ interface ControlSettings {
   minLength: number | null;
   maxLength: number | null;
   scaleGroup: string | null;
+  /** A variable a question may set to override `scale` (blank or 0 keeps `scale`). */
+  scaleVariable: string | null;
+  /** Draw a break mark (//) when the length is held at its min or max. On unless data-clamp-mark="none". */
+  clampMark: boolean;
   // variable-arrow
   angle: number;
   /** Set when the direction is a variable too; `angle` is then its preview default. */
@@ -107,6 +111,11 @@ function readSettings(element: SceneElement): ControlSettings | null {
     minLength: optional("data-min-length"),
     maxLength: optional("data-max-length"),
     scaleGroup: attrs["data-scale-group"]?.trim() || null,
+    clampMark: attrs["data-clamp-mark"] !== "none",
+    scaleVariable:
+      attrs["data-scale-variable"] && isValidVariableName(attrs["data-scale-variable"]) && attrs["data-scale-variable"] !== variable
+        ? attrs["data-scale-variable"]
+        : null,
     angle: number("data-angle", 0),
     angleVariable:
       angleVariable && isValidVariableName(angleVariable) && angleVariable !== variable ? angleVariable : null,
@@ -124,36 +133,93 @@ function readSettings(element: SceneElement): ControlSettings | null {
 // Length
 // ---------------------------------------------------------------------------
 
+/** The scale factor as an expression. With a scale variable, a question's
+ *  value replaces the drawing's scale, and a blank (0) keeps it:
+ *  v + (1 - min(1, 1000 * |v|)) * scale, since {{calc:}} has no "if". */
+function scaleText(s: ControlSettings): string {
+  if (!s.scaleVariable) return formatCoefficient(s.scale);
+  const v = s.scaleVariable;
+  return `(${v} + (1 - min(1, 1000 * max(${v}, -${v}))) * ${formatCoefficient(s.scale)})`;
+}
+
+/** The length before min/max, as an expression. */
+function unclampedText(s: ControlSettings): string {
+  if (s.lengthExpression) return `(${s.lengthExpression})`;
+  if (!s.scaleVariable && s.scale === 1) return s.variable;
+  return `${scaleText(s)} * ${s.variable}`;
+}
+
 /** The drawn length as either a plain multiple of the variable (which folds
  *  into each coordinate's coefficient) or a formula to wrap in parentheses. */
 type LengthTerm = { scaled: number } | { text: string };
 
 function lengthTerm(s: ControlSettings): LengthTerm {
-  if (!s.lengthExpression && s.minLength === null && s.maxLength === null) return { scaled: s.scale };
-  let text = s.lengthExpression
-    ? `(${s.lengthExpression})`
-    : s.scale === 1
-      ? s.variable
-      : `${formatCoefficient(s.scale)} * ${s.variable}`;
+  if (!s.lengthExpression && !s.scaleVariable && s.minLength === null && s.maxLength === null) return { scaled: s.scale };
+  let text = unclampedText(s);
   if (s.maxLength !== null) text = `min(${formatNumber(s.maxLength)}, ${text})`;
   if (s.minLength !== null) text = `max(${formatNumber(s.minLength)}, ${text})`;
   return { text };
 }
 
+/** A break mark (two short slashes across the shaft, halfway along) that
+ *  shows only when the length is held at its min or max, so a capped length
+ *  doesn't pass for a true one. {{calc:}} has no conditionals, so its
+ *  opacity is min(1, 1000 * |unclamped - drawn|): 0 normally, 1 when held.
+ *  `along` is the direction of the shaft and `reach` how far each slash
+ *  extends to either side of it. */
+function clampMark(
+  s: ControlSettings,
+  start: { x: number; y: number },
+  along: { x: number; y: number },
+  reach: number,
+  color: string,
+  weight: number,
+): SceneElement | null {
+  const term = lengthTerm(s);
+  if (!s.clampMark || "scaled" in term) return null;
+  const unclamped = unclampedText(s);
+  const normal = { x: -along.y, y: along.x };
+  // Each slash leans 30° off the perpendicular, the usual "broken" mark.
+  const slash = { x: normal.x * 0.866 + along.x * 0.5, y: normal.y * 0.866 + along.y * 0.5 };
+  const at = (offset: number, side: number, axis: "x" | "y"): string =>
+    coordinate({ a: start[axis] + along[axis] * offset + slash[axis] * reach * side, b: along[axis] * 0.5 }, term, s.variable);
+  const line = (offset: number): SceneElement => ({
+    key: newElementKey(),
+    kind: "line",
+    attrs: { x1: at(offset, -1, "x"), y1: at(offset, -1, "y"), x2: at(offset, 1, "x"), y2: at(offset, 1, "y") },
+  });
+  return {
+    key: newElementKey(),
+    kind: "group",
+    attrs: {
+      "data-nexam-clamp-mark": "true",
+      opacity: `{{calc: min(1, 1000 * max(${unclamped} - ${term.text}, ${term.text} - ${unclamped}))}}`,
+      stroke: color,
+      "stroke-width": formatNumber(weight),
+      "stroke-dasharray": "none",
+      fill: "none",
+    },
+    children: [line(-2), line(2)],
+  };
+}
+
 /** How long the control draws for a value of its variable. */
-function lengthAt(s: ControlSettings, value: number): number {
+function lengthAt(s: ControlSettings, value: number, values: Record<string, string> = {}): number {
   const term = lengthTerm(s);
   if ("scaled" in term) return term.scaled * value;
-  return evaluateExpression(term.text, { [s.variable]: String(value) });
+  return evaluateExpression(term.text, { ...values, [s.variable]: String(value) });
+}
+
+/** The length before min/max for a value (other variables from `values`). */
+function unclampedAt(s: ControlSettings, value: number, values: Record<string, string> = {}): number {
+  return evaluateExpression(unclampedText(s), { ...values, [s.variable]: String(value) });
 }
 
 /** The value that draws `length` long, ignoring min/max (used when dragging
  *  a tip). Null when the length doesn't change with the value. */
-function valueForLength(s: ControlSettings, length: number): number | null {
-  const unclamped = (value: number) =>
-    s.lengthExpression ? evaluateExpression(s.lengthExpression, { [s.variable]: String(value) }) : s.scale * value;
-  const atZero = unclamped(0);
-  const slope = (unclamped(10) - atZero) / 10;
+function valueForLength(s: ControlSettings, length: number, values: Record<string, string> = {}): number | null {
+  const atZero = unclampedAt(s, 0, values);
+  const slope = (unclampedAt(s, 10, values) - atZero) / 10;
   if (!Number.isFinite(slope) || Math.abs(slope) < 1e-9) return null;
   return Math.round(((length - atZero) / slope) * 10) / 10;
 }
@@ -167,13 +233,13 @@ export interface LengthReadout {
 }
 
 /** "1 unit draws as 0.1 px · 800 draws as 80 px", for the inspector. */
-export function lengthReadout(element: SceneElement, value: number): LengthReadout | null {
+export function lengthReadout(element: SceneElement, value: number, values: Record<string, string> = {}): LengthReadout | null {
   const s = readSettings(element);
   if (!s) return null;
-  const unclamped = s.lengthExpression ? evaluateExpression(s.lengthExpression, { [s.variable]: String(value) }) : s.scale * value;
-  const atPreview = lengthAt(s, value);
+  const unclamped = unclampedAt(s, value, values);
+  const atPreview = lengthAt(s, value, values);
   return {
-    perUnit: s.lengthExpression ? null : s.scale,
+    perUnit: s.lengthExpression ? null : evaluateExpression(scaleText(s), values),
     atPreview,
     clamped: Math.abs(atPreview - unclamped) > 1e-6,
   };
@@ -320,7 +386,7 @@ export function rebuildControl(element: SceneElement): SceneElement {
   }
   const settings = readSettings(element);
   if (!kind || !settings || element.kind !== "group") return element;
-  const children = kind === "variable-arrow" ? arrowChildren(element, settings) : barChildren(settings);
+  const children = kind === "variable-arrow" ? arrowChildren(element, settings) : barChildren(element, settings);
   return { ...element, children };
 }
 
@@ -389,6 +455,9 @@ function arrowChildren(element: SceneElement & { kind: "group" }, s: ControlSett
       attrs: { points: headPoints(fixed(s.x), fixed(s.y), -1), fill: color, stroke: "none" },
     });
   }
+
+  const mark = clampMark(s, { x: s.x, y: s.y }, { x: ux, y: uy }, 5, color, weight);
+  if (mark) children.push(mark);
 
   if (s.label.trim() !== "") {
     // At the tail, middle or tip of the arrow: t * L along it.
@@ -462,6 +531,8 @@ function rotatedArrowChildren(
       },
     });
   }
+  const mark = clampMark(s, { x: s.x, y: s.y }, { x: 1, y: 0 }, 5, color, weight);
+  if (mark) rotated.push(mark);
   if (s.label.trim() !== "") {
     // Placed along the unrotated arrow (pointing right). Upright labels are
     // turned back by the opposite rotation; "along" labels turn with the
@@ -512,7 +583,7 @@ function labelText(
   return { key: newElementKey(), kind: "text", attrs, text: s.label };
 }
 
-function barChildren(s: ControlSettings): SceneElement[] {
+function barChildren(element: SceneElement & { kind: "group" }, s: ControlSettings): SceneElement[] {
   const half = s.thickness / 2;
   const term = lengthTerm(s);
   const at = (a: number, b: number) => coordinate({ a, b }, term, s.variable);
@@ -527,6 +598,9 @@ function barChildren(s: ControlSettings): SceneElement[] {
           : { x: at(s.x, -1), y: formatNumber(s.y - half), width: at(0, 1), height: thickness };
   // Fill and stroke are inherited from the group.
   const children: SceneElement[] = [{ key: newElementKey(), kind: "rect", attrs }];
+  const outline = element.attrs.stroke && element.attrs.stroke !== "none" ? element.attrs.stroke : "#000000";
+  const mark = clampMark(s, { x: s.x, y: s.y }, barDirectionVector(s.direction), half / 0.866 + 3, outline, literalNumber(element.attrs["stroke-width"]) ?? 1.5);
+  if (mark) children.push(mark);
   if (s.label.trim() !== "") {
     const u = barDirectionVector(s.direction);
     const t = labelFraction(s.labelSettings.at);
@@ -705,7 +779,7 @@ export function controlEnd(element: SceneElement, values: Record<string, string>
   const s = readSettings(element);
   const kind = controlKind(element);
   if (!s || !kind) return null;
-  const length = lengthAt(s, Number(values[s.variable]) || 0);
+  const length = lengthAt(s, Number(values[s.variable]) || 0, values);
   if (kind === "variable-arrow") {
     const radians = (screenAngle(s, currentAngle(s, values)) * Math.PI) / 180;
     return { x: s.x + Math.cos(radians) * length, y: s.y + Math.sin(radians) * length };
@@ -745,13 +819,47 @@ export function dragControlEnd(
   const dy = to.y - s.y;
   if (kind === "variable-arrow") {
     const angle = dragAngle(dx, dy, s.ccw);
-    const value = valueForLength(s, Math.hypot(dx, dy));
+    const value = valueForLength(s, Math.hypot(dx, dy), values);
     const turned = setControlAttrs(element, { "data-angle": String(angle) });
     const preview: Record<string, string> = value === null ? {} : { [s.variable]: String(value) };
     if (s.angleVariable) preview[s.angleVariable] = String(angle);
     return { element: turned, preview };
   }
   const along = s.direction === "up" ? -dy : s.direction === "down" ? dy : s.direction === "left" ? -dx : dx;
-  const value = valueForLength(s, Math.max(0, along));
+  const value = valueForLength(s, Math.max(0, along), values);
   return { element, preview: value === null ? {} : { [s.variable]: String(Math.max(0, value)) } };
+}
+
+// ---------------------------------------------------------------------------
+// Scale groups
+// ---------------------------------------------------------------------------
+
+/** Settings every control in a scale group shares. */
+export const SHARED_SCALE_ATTRS = [
+  "data-scale",
+  "data-scale-variable",
+  "data-length-expression",
+  "data-min-length",
+  "data-max-length",
+  "data-clamp-mark",
+];
+
+/** The scale settings `target` takes from `source` in a scale group. A
+ *  length formula is shared with each control's own variable put in place
+ *  of the source's, so "force / 10" becomes "weight / 10". */
+export function sharedScale(source: SceneElement, target: SceneElement): { attrs: Record<string, string>; remove: string[] } {
+  const attrs: Record<string, string> = {};
+  const remove: string[] = [];
+  if (source.kind !== "group") return { attrs, remove };
+  for (const name of SHARED_SCALE_ATTRS) {
+    if (source.attrs[name] !== undefined) attrs[name] = source.attrs[name];
+    else remove.push(name);
+  }
+  const formula = attrs["data-length-expression"];
+  const from = controlVariable(source);
+  const to = controlVariable(target);
+  if (formula && from && to && from !== to) {
+    attrs["data-length-expression"] = formula.replace(new RegExp(`\\b${from}\\b`, "g"), to);
+  }
+  return { attrs, remove };
 }

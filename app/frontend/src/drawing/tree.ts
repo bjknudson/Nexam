@@ -10,6 +10,7 @@ import { controlKind, controlVariable, isControl } from "./controls";
 import { mathToPlainText } from "./mathText";
 import { literalNumber, newElementKey, type SceneDocument, type SceneElement } from "./scene";
 import { isArrow, isLabeledLine, translateElement } from "./shapes";
+import { canonicalize, readGroupTransform, writeGroupTransform, type Matrix } from "./transforms";
 
 export type Scope = string[];
 export type LayerMove = "front" | "forward" | "backward" | "back";
@@ -133,6 +134,119 @@ export function moveInFrontOf(elements: SceneElement[], key: string, targetKey: 
   if (targetIndex < 0) return elements;
   rest.splice(targetIndex + 1, 0, moving);
   return rest;
+}
+
+// ---------------------------------------------------------------------------
+// Moving between groups (Layers panel)
+// ---------------------------------------------------------------------------
+
+/** True when `scope` is `key` or lies inside it (a group can't go into itself). */
+export function isInside(scope: Scope, key: string): boolean {
+  return scope.includes(key);
+}
+
+function multiply(m: Matrix, n: Matrix): Matrix {
+  return {
+    a: m.a * n.a + m.c * n.b,
+    b: m.b * n.a + m.d * n.b,
+    c: m.a * n.c + m.c * n.d,
+    d: m.b * n.c + m.d * n.d,
+    e: m.a * n.e + m.c * n.f + m.e,
+    f: m.b * n.e + m.d * n.f + m.f,
+  };
+}
+
+const round = (value: number) => Math.round(value * 10000) / 10000;
+
+/** `element` re-expressed in another group's coordinates, drawn in the same
+ *  place. `matrix` maps the old group's coordinates to the new one's. A pure
+ *  shift moves the coordinates; a placed stamp or group gets its placement
+ *  recomputed; anything else is wrapped in a group carrying the matrix. */
+export function carryInto(element: SceneElement, matrix: Matrix): SceneElement {
+  const m = { a: round(matrix.a), b: round(matrix.b), c: round(matrix.c), d: round(matrix.d), e: matrix.e, f: matrix.f };
+  const shiftOnly = m.a === 1 && m.b === 0 && m.c === 0 && m.d === 1;
+  if (shiftOnly) {
+    if (Math.abs(m.e) < 0.005 && Math.abs(m.f) < 0.005) return element;
+    const moved = translateElement(element, Math.round(m.e * 100) / 100, Math.round(m.f * 100) / 100);
+    if (moved) return moved;
+  }
+  const placed = readGroupTransform(element);
+  if (placed) {
+    // Its own transform as a matrix, then the new one in front of it.
+    const radians = (placed.rotation * Math.PI) / 180;
+    const sx = placed.flipX ? -placed.scale : placed.scale;
+    const sy = placed.flipY ? -placed.scale : placed.scale;
+    const own: Matrix = {
+      a: Math.cos(radians) * sx,
+      b: Math.sin(radians) * sx,
+      c: -Math.sin(radians) * sy,
+      d: Math.cos(radians) * sy,
+      e: 0,
+      f: 0,
+    };
+    own.e = placed.cx - (own.a * placed.ox + own.c * placed.oy);
+    own.f = placed.cy - (own.b * placed.ox + own.d * placed.oy);
+    const next = canonicalize(
+      { x: placed.ox - placed.width / 2, y: placed.oy - placed.height / 2, width: placed.width, height: placed.height },
+      multiply(m, own),
+    );
+    // canonicalize reads a mirror as a left-right flip; keep an upside-down flip as it was.
+    return writeGroupTransform(element, placed.flipY && !placed.flipX ? { ...next, flipX: false, flipY: true, rotation: next.rotation + 180 } : next);
+  }
+  const transform = `matrix(${[m.a, m.b, m.c, m.d, Math.round(m.e * 100) / 100, Math.round(m.f * 100) / 100].join(" ")})`;
+  return { key: newElementKey(), kind: "group", attrs: { "data-nexam-group": "true", transform }, children: [element] };
+}
+
+/** Moves `key` from the group at `from` to the group at `to`, just in front
+ *  of `targetKey` there (or on top when null), keeping where it's drawn.
+ *  `matrix` maps `from`'s coordinates to `to`'s. Returns the moved element's
+ *  key (a new one if it had to be wrapped), or null if nothing moved. */
+export function moveBetweenGroups(
+  document: SceneDocument,
+  key: string,
+  from: Scope,
+  to: Scope,
+  targetKey: string | null,
+  matrix: Matrix,
+): { document: SceneDocument; key: string } | null {
+  if (isInside(to, key)) return null;
+  const moving = scopeElements(document, from).find((element) => element.key === key);
+  if (!moving) return null;
+  if (from.join("/") === to.join("/")) {
+    if (!targetKey) return { document: updateScope(document, from, (list) => [...list.filter((element) => element.key !== key), moving]), key };
+    return { document: updateScope(document, from, (list) => moveInFrontOf(list, key, targetKey)), key };
+  }
+  const carried = carryInto(moving, matrix);
+  let next = updateScope(document, from, (list) => list.filter((element) => element.key !== key));
+  next = updateScope(next, to, (list) => {
+    const index = targetKey ? list.findIndex((element) => element.key === targetKey) : -1;
+    if (index < 0) return [...list, carried];
+    return [...list.slice(0, index + 1), carried, ...list.slice(index + 1)];
+  });
+  return { document: next, key: carried.key };
+}
+
+// ---------------------------------------------------------------------------
+// Locking (saved as data-nexam-locked, so a finished background stays put)
+// ---------------------------------------------------------------------------
+
+export function isLocked(element: SceneElement): boolean {
+  return element.kind !== "passthrough" && element.attrs["data-nexam-locked"] === "true";
+}
+
+export function lockedKeys(document: SceneDocument): Set<string> {
+  return new Set(allElements(document.elements).filter(isLocked).map((element) => element.key));
+}
+
+export function toggleLock(document: SceneDocument, key: string): SceneDocument {
+  return {
+    ...document,
+    elements: mapDeep(document.elements, (element) => {
+      if (element.key !== key || element.kind === "passthrough") return element;
+      const { "data-nexam-locked": _locked, ...rest } = element.attrs;
+      return { ...element, attrs: isLocked(element) ? rest : { ...element.attrs, "data-nexam-locked": "true" } } as SceneElement;
+    }),
+  };
 }
 
 // ---------------------------------------------------------------------------

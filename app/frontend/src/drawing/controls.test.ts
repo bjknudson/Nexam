@@ -10,6 +10,7 @@ import {
   fitToRange,
   lengthReadout,
   setControlAttrs,
+  sharedScale,
   uniqueVariableName,
 } from "./controls";
 import { previewElement } from "./preview";
@@ -249,5 +250,93 @@ describe("uniqueVariableName", () => {
   it("numbers repeats", () => {
     expect(uniqueVariableName("arrow_length", [])).toBe("arrow_length");
     expect(uniqueVariableName("arrow_length", ["arrow_length", "arrow_length_2"])).toBe("arrow_length_3");
+  });
+});
+
+describe("a length held at its limit is marked", () => {
+  const arrow = createControlFromDrag("variable-arrow", { x: 100, y: 150 }, { x: 100, y: 100 }, style, [], 20)!.element;
+  const markOf = (element: SceneElement, values: Record<string, string>) => {
+    const find = (list: SceneElement[]): SceneElement | undefined =>
+      list.flatMap((child) => (attrsOf(child)["data-nexam-clamp-mark"] ? [child] : find(children(child)) ? [find(children(child))!] : []))[0];
+    return find(children(previewElement(element, values)));
+  };
+
+  it("only when there is a limit, and shows only while held", () => {
+    expect(markOf(arrow, { arrow_length: "50" })).toBeUndefined();
+    const clamped = setControlAttrs(arrow, { "data-scale": "0.1", "data-min-length": "8", "data-max-length": "140" });
+    expect(attrsOf(markOf(clamped, { arrow_length: "800" })!).opacity).toBe("0");
+    expect(attrsOf(markOf(clamped, { arrow_length: "5000" })!).opacity).toBe("1");
+    expect(attrsOf(markOf(clamped, { arrow_length: "5" })!).opacity).toBe("1");
+  });
+
+  it("sits halfway along the drawn length, across the shaft", () => {
+    const clamped = setControlAttrs(arrow, { "data-max-length": "40" });
+    const mark = markOf(clamped, { arrow_length: "100" })!;
+    // Pointing up from (100, 150), held at 40 px: halfway is (100, 130).
+    const ys = children(mark).flatMap((line) => [Number(attrsOf(line).y1), Number(attrsOf(line).y2)]);
+    expect((Math.min(...ys) + Math.max(...ys)) / 2).toBeCloseTo(130);
+    expect(children(mark)).toHaveLength(2);
+  });
+
+  it("works on variable-angle arrows and bars, and can be turned off", () => {
+    const turned = setControlAttrs(arrow, { "data-angle-variable": "arrow_angle", "data-max-length": "40" });
+    expect(attrsOf(markOf(turned, { arrow_length: "100", arrow_angle: "30" })!).opacity).toBe("1");
+    const bar = createControlFromDrag("variable-bar", { x: 50, y: 150 }, { x: 50, y: 100 }, style, [], 20)!.element;
+    const barClamped = setControlAttrs(bar, { "data-min-length": "10" });
+    expect(attrsOf(markOf(barClamped, { bar_length: "2" })!).opacity).toBe("1");
+    expect(markOf(setControlAttrs(barClamped, { "data-clamp-mark": "none" }), { bar_length: "2" })).toBeUndefined();
+  });
+});
+
+describe("a question can set the scale", () => {
+  const arrow = createControlFromDrag("variable-arrow", { x: 100, y: 150 }, { x: 100, y: 100 }, style, [], 20)!.element;
+  const scaled = setControlAttrs(arrow, { "data-scale": "0.1", "data-scale-variable": "force_scale" });
+  const tipY = (values: Record<string, string>) => controlEnd(scaled, values)!.y;
+
+  it("uses the drawing's scale when the question leaves it blank, and the question's when set", () => {
+    expect(tipY({ arrow_length: "800" })).toBeCloseTo(70);
+    expect(tipY({ arrow_length: "800", force_scale: "" })).toBeCloseTo(70);
+    expect(tipY({ arrow_length: "800", force_scale: "0.05" })).toBeCloseTo(110);
+    expect(lengthReadout(scaled, 800, { force_scale: "0.05" })).toMatchObject({ perUnit: 0.05, atPreview: 40 });
+  });
+
+  it("is written into the saved expressions, so the renderer applies it", () => {
+    const line = attrsOf(children(scaled)[0]);
+    expect(line.y2).toContain("force_scale");
+    const rendered = attrsOf(children(previewElement(scaled, { arrow_length: "800", force_scale: "0.05" }))[1]).points;
+    expect(rendered.split(" ")[0]).toBe("100,110");
+  });
+
+  it("is ignored when it repeats the length variable", () => {
+    const bad = setControlAttrs(arrow, { "data-scale-variable": "arrow_length" });
+    expect(attrsOf(children(bad)[0]).y2).not.toContain("1000");
+  });
+});
+
+describe("scale groups share formulas", () => {
+  const force = setControlAttrs(createControlFromDrag("variable-arrow", { x: 100, y: 150 }, { x: 100, y: 100 }, style, [], 20)!.element, {
+    "data-variable": "force",
+    "data-length-expression": "force / 10 + 5",
+    "data-max-length": "140",
+    "data-scale-variable": "forces_scale",
+  });
+  const weight = setControlAttrs(createControlFromDrag("variable-arrow", { x: 50, y: 150 }, { x: 50, y: 100 }, style, [], 20)!.element, {
+    "data-variable": "weight",
+    "data-min-length": "4",
+  });
+
+  it("puts each control's own variable into the shared formula", () => {
+    const shared = sharedScale(force, weight);
+    expect(shared.attrs).toMatchObject({
+      "data-length-expression": "weight / 10 + 5",
+      "data-max-length": "140",
+      "data-scale-variable": "forces_scale",
+    });
+    expect(shared.remove).toContain("data-min-length");
+  });
+
+  it("only replaces whole names", () => {
+    const tricky = setControlAttrs(force, { "data-length-expression": "force + force_extra" });
+    expect(sharedScale(tricky, weight).attrs["data-length-expression"]).toBe("weight + force_extra");
   });
 });

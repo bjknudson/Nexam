@@ -138,11 +138,14 @@ What changes:
 
 ### Scaling variable lengths
 
-Added and built 2026-10-11: the scale factor (decimal or %), the length formula, Fit to a range, minimum and maximum lengths, and scale groups. Not built yet:
+Added and built 2026-10-11: the scale factor (decimal or %), the length formula, Fit to a range, minimum and maximum lengths, and scale groups. The rest was built 2026-10-11 too (`controls.ts`):
 
-- a distinct look for a length held at its minimum or maximum (still to be decided)
-- letting a question set the scale (deferred, as planned)
-- sharing formulas within a scale group (groups share only the scale factor and limits)
+- **A length held at its minimum or maximum is marked** with a break mark (two short slashes across the shaft, halfway along), on arrows, variable-angle arrows and bars.
+  - `{{calc:}}` has no conditionals, so the mark's opacity is `min(1, 1000 * |unclamped − drawn|)`: 0 normally and 1 when held, in every question version.
+  - It's on by default whenever there's a limit. A checkbox under the limits turns it off (`data-clamp-mark="none"`).
+- **A question can set the scale** (off by default): **Let a question set the scale** adds `data-scale-variable` (e.g. `arrow_length_scale`).
+  - A blank or 0 value would make the arrow vanish, so the scale is written as `v + (1 − min(1, 1000·|v|)) × scale`. That's the question's value when set, and the drawing's own scale when blank.
+- **Scale groups share formulas,** with each control's own variable put in place (`force / 10` becomes `weight / 10`). Groups now share the scale, scale variable, formula, limits and the clamp mark (`sharedScale`).
 
 Controls saved without their shapes are rebuilt from their settings when opened. Saved shapes are otherwise kept exactly as written.
 
@@ -175,12 +178,19 @@ Controls saved without their shapes are rebuilt from their settings when opened.
 
 Added 2026-10-11 and built the same day in `drawing/arcs.ts` (with the tool, handles and an `ArcInspector` in the editor).
 
-Not built yet:
+Built 2026-10-11 as well:
 
-- formulas and min/max for a variable radius (it has a scale only)
-- snapping the centre to line ends and intersections
-- lining up the start with a selected line
-- a menu of the drawing's angle variables (typing an existing name already links)
+- **A variable radius has the same Scale / Formula, min/max and Fit to a range as lengths.** The inspector's Settings section is titled **Radius scaling**.
+  - It's stored as `data-radius-scale` (as before), `data-radius-expression`, `data-radius-min` and `data-radius-max`.
+- **The centre snaps to line ends and crossings** (`snapping.ts`): those of lines, arrows and variable arrows/bars, within about 10 screen px.
+  - It works when drawing an arc (the snap point shows before you press), dragging its centre handle, or moving it. Alt places it freely.
+- **Start along a line:** a menu of the lines and arrows beside the arc turns its start to point along one, away from the centre.
+  - A line through the centre offers both of its arms.
+  - A variable-angle arrow links its angle variable instead of a number.
+- **Angle variables menu:** the sweep, start and arrow-angle variable fields suggest the drawing's existing angle variables, so they're easy to link.
+
+Earlier items:
+
 - ~~dashed arcs and filled sectors, which wait for phase two (sin/cos in `{{calc:}}`)~~ Built 2026-10-11:
   - `sin()` and `cos()`, in degrees, work in `{{calc:}}` in both the backend renderer and the editor's preview.
   - A variable arc that is **dashed or dotted**, or **closed as a wedge**, is drawn as a `<path>` whose points use them. It always runs counterclockwise from `rotation + min(sweep, 0)` through the middle to `rotation + max(sweep, 0)`, so each half is at most 180° and the SVG arc flags stay fixed numbers.
@@ -259,7 +269,14 @@ Differences from the plan as written:
 - **Spacing follows TeX:** typed spaces in math are ignored, and relations and operators (=, +, −, ×, ·, ≤, →) get spaces automatically.
 - **Search** indexes the cleaned math source as one phrase.
 
-Not built yet: stacked fractions, and overlines for long square roots.
+Built 2026-10-11: stacked fractions, and overlines for long square roots (`mathText.ts`).
+
+- **`\frac{a}{b}`** (also `\dfrac`, `\tfrac`) is stacked inside the same `<text>`:
+  - a bar, which is a dash stretched to length with `textLength`
+  - the numerator and denominator at 80% size, placed with `dx`/`dy` in px from the text's size
+  - the pen ends back on the baseline at the fraction's end, so text alignment still works
+- **Widths are estimated,** because a question's `{{value}}` isn't known until it renders, so long or mixed fractions may sit slightly off centre. Plain-text readings (Layers names, search) still show `a/b`.
+- **`\sqrt{…}`** of more than one character draws an overline over its argument instead of brackets.
 
 The original plan follows.
  This applies to every text the drawing tool writes: Text-tool labels, arrow and variable-control labels (`data-label`), and text inside stamps.
@@ -398,8 +415,11 @@ Besides the named points, a text can be attached **Here (keeps its place)**: whe
 
 Added to the plan 2026-10-11 and built the same day, in `drawing/tree.ts`, `drawing/LayersPanel.tsx` and the editor. Not built yet:
 
-- moving rows into or out of groups in the Layers panel (rows only restack within their own group; use Group/Ungroup instead)
-- saving lock state as `data-nexam-locked`
+- ~~moving rows into or out of groups in the Layers panel~~ Built 2026-10-11 (`moveBetweenGroups`, `carryInto` in `tree.ts`):
+  - Dropping a row onto any other row puts it just above that row, in that row's group. To move something into a group, open the group and drop onto one of its rows; to move it out, drop onto an outer row.
+  - It stays where it's drawn: a plain shift moves its coordinates, a stamp or group gets its placement recomputed, and anything else is wrapped in a group carrying the matrix (e.g. into a rotated stamp).
+  - A group can't be dropped into itself.
+- ~~saving lock state as `data-nexam-locked`~~ Built 2026-10-11: locks are saved with the drawing and can be undone. Hiding stays editor-only.
 - ~~alignment and distribution tools for a multi-selection~~ Built 2026-10-11 (`drawing/align.ts`):
   - **Align** left, centre, right, top, middle or bottom: several selected shapes line up with their combined bounds, and a single shape aligns **on the canvas**.
   - **Space ↔ / ↕** (three or more selected) leaves equal gaps and keeps the outermost shapes in place.

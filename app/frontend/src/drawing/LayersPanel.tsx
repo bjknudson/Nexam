@@ -1,7 +1,8 @@
-// The Layers tab of the drawing editor's left rail: every element, top of the
-// stack first, with groups expandable. Click to select (Shift/⌘/Ctrl to add),
-// drag a row onto another row to restack it, and hide or lock rows while
-// editing. Hiding and locking are editor-only and never saved.
+// The Layers section of the drawing editor's sidebar: every element, top of
+// the stack first, with groups expandable. Click to select (Shift/⌘/Ctrl to
+// add); drag a row onto another row to put it just above that one, in that
+// row's group, so rows move into and out of groups as well as restack.
+// Hiding is editor-only; locking is saved (data-nexam-locked).
 
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 
@@ -17,8 +18,8 @@ export interface LayersPanelProps {
   onSelect: (scope: Scope, key: string, additive: boolean) => void;
   onToggleHidden: (key: string) => void;
   onToggleLocked: (key: string) => void;
-  /** Drop `key` just in front of `targetKey`; both live in `scope`. */
-  onMove: (scope: Scope, key: string, targetKey: string) => void;
+  /** Drop `key` (in the group at `from`) just in front of `targetKey`, in the group at `to`. */
+  onMove: (from: Scope, key: string, to: Scope, targetKey: string) => void;
 }
 
 export default function LayersPanel(props: LayersPanelProps) {
@@ -42,8 +43,12 @@ export default function LayersPanel(props: LayersPanelProps) {
       if (!drag.moved && Math.hypot(event.clientX - drag.x, event.clientY - drag.y) > 4) drag.moved = true;
       if (!drag.moved) return;
       const row = rowUnder(event);
-      // Restacking stays within one group; moving into or out of groups is Group/Ungroup's job.
-      setDropTarget(row && row.dataset.layerParent === drag.parent && row.dataset.layerKey !== drag.key ? row.dataset.layerKey ?? null : null);
+      setDropTarget(row && canDrop(drag.key, row) ? row.dataset.layerKey ?? null : null);
+    }
+    /** Any other row, as long as it isn't inside the row being dragged. */
+    function canDrop(key: string, row: HTMLElement): boolean {
+      const parent = row.dataset.layerParent ? row.dataset.layerParent.split("/") : [];
+      return row.dataset.layerKey !== key && !parent.includes(key);
     }
     function onPointerUp(event: PointerEvent) {
       const drag = dragRef.current;
@@ -52,8 +57,9 @@ export default function LayersPanel(props: LayersPanelProps) {
       if (!drag?.moved) return;
       const row = rowUnder(event);
       const targetKey = row?.dataset.layerKey;
-      if (row && targetKey && row.dataset.layerParent === drag.parent && targetKey !== drag.key) {
-        props.onMove(drag.parent ? drag.parent.split("/") : [], drag.key, targetKey);
+      if (row && targetKey && canDrop(drag.key, row)) {
+        const path = (id: string | undefined) => (id ? id.split("/") : []);
+        props.onMove(path(drag.parent), drag.key, path(row.dataset.layerParent), targetKey);
       }
     }
     window.addEventListener("pointermove", onPointerMove);
@@ -124,7 +130,7 @@ export default function LayersPanel(props: LayersPanelProps) {
             <button
               type="button"
               className={`drawing-layer-flag ${locked ? "on" : ""}`}
-              title={locked ? "Unlock" : "Lock so it can't be clicked or moved"}
+              title={locked ? "Unlock" : "Lock so it can't be clicked or moved (saved with the drawing)"}
               aria-pressed={locked}
               onClick={() => props.onToggleLocked(element.key)}
             >
@@ -145,7 +151,10 @@ export default function LayersPanel(props: LayersPanelProps) {
       ) : (
         <ul className="drawing-layer-list">{renderList(elements, [], 0)}</ul>
       )}
-      <p className="drawing-muted">Top of the list is drawn on top. Drag a row to restack it.</p>
+      <p className="drawing-muted">
+        Top of the list is drawn on top. Drag a row onto another to put it just above it; open a group and drop onto one of its
+        rows to move something into the group, or onto an outer row to move it out.
+      </p>
     </div>
   );
 }
