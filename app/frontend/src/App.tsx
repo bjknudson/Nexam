@@ -92,6 +92,8 @@ import {
 } from "./appSettings";
 import DocumentSwitcherDialog from "./DocumentSwitcherDialog";
 import AiPromptDialog from "./AiPromptDialog";
+import { setFeedbackArea } from "./feedback/area";
+import { openFeedback } from "./feedback/FeedbackHost";
 import QuestionVariablesSection from "./QuestionVariablesSection";
 import { resolveAssetVariables, withSeededVariables } from "./questionVariables";
 import StandardsWorkspace from "./StandardsWorkspace";
@@ -1065,6 +1067,10 @@ function App() {
           ? "courses"
           : workspacePage;
   const activePageIsPoppedOut = isMainWindow && poppedOutPages[activeWorkspacePage];
+  // The feedback form starts on the page the tester is using.
+  useEffect(() => {
+    if (isMainWindow) setFeedbackArea(activeWorkspacePage);
+  }, [isMainWindow, activeWorkspacePage]);
   const [testDrafts, setTestDrafts] = useState<TestDraftDetailModel[]>([]);
   const [selectedTestId, setSelectedTestId] = useState<string | null>(null);
   const [openTestIds, setOpenTestIds] = useState<string[]>([]);
@@ -4101,6 +4107,14 @@ function App() {
               Return to Main Window
             </button>
           )}
+          <button
+            type="button"
+            className="feedback-topbar-button"
+            onClick={openFeedback}
+            title="Report a bug, suggest a feature, or tell us anything (also in the Help menu)"
+          >
+            Feedback
+          </button>
           {!desktopMode ? (
             <>
               <button onClick={handleOpenBankPropertiesDialog} disabled={loading || !bank}>
