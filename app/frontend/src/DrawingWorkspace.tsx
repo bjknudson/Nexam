@@ -15,6 +15,7 @@ import {
   uploadAsset,
   writeSvgAsset,
 } from "./api";
+import { drawingInputSamples, resolveAssetVariables, withSeededVariables } from "./questionVariables";
 import { assetUsesIn, swapAssetPath } from "./assetSwap";
 import { isDesktopShell, saveBytesDialog } from "./desktop";
 import DrawingEditor from "./drawing/DrawingEditor";
@@ -47,6 +48,8 @@ export default function DrawingWorkspace() {
   const [stampFolder, setStampFolder] = useState<string | null>(null);
   const [stampError, setStampError] = useState<string | null>(null);
   const [saveChoice, setSaveChoice] = useState<SaveChoiceRequest | null>(null);
+  /** Shown after a save added the drawing's new inputs to its question. */
+  const [seedNote, setSeedNote] = useState<string | null>(null);
   const [topicSuggestions, setTopicSuggestions] = useState<{ bank: string[]; fromQuestions: string[] }>({
     bank: [],
     fromQuestions: [],
@@ -99,7 +102,10 @@ export default function DrawingWorkspace() {
     // so the drawing looks the way it does in the question.
     const values = questionId
       ? getQuestion(questionId)
-          .then((detail) => assetUsesIn(detail.question, assetPath)[0]?.svg_variables)
+          .then((detail) => {
+            const use = assetUsesIn(detail.question, assetPath)[0];
+            return use ? resolveAssetVariables(detail.question.variables, use.svg_variables) : detail.question.variables;
+          })
           .catch(() => undefined)
       : Promise.resolve(undefined);
     Promise.all([fetchAssetText(assetPath), values])
@@ -124,6 +130,17 @@ export default function DrawingWorkspace() {
     window.history.replaceState(null, "", url);
   }
 
+  /** Opened from a question: give it this drawing's new inputs. Never blocks a save. */
+  async function seedQuestion(path: string, svg: string): Promise<void> {
+    if (!questionId) return;
+    try {
+      const added = await addNewInputsToQuestion(questionId, path, svg);
+      if (added > 0) setSeedNote(`Added ${added} new variable${added === 1 ? "" : "s"} to ${questionId}, with this drawing's sample values.`);
+    } catch {
+      // The drawing is saved; the question just doesn't get the new inputs yet.
+    }
+  }
+
   async function handleSave(svg: string): Promise<void | "cancelled"> {
     if (!assetPath) {
       const uploaded = await uploadAsset(svgFile(svg, normalizeFileName(fileName)));
@@ -136,6 +153,7 @@ export default function DrawingWorkspace() {
     const others = usedBy.filter((id) => id !== questionId);
     if (others.length === 0) {
       await writeSvgAsset(assetPath, svg);
+      await seedQuestion(assetPath, svg);
       announceAssetsChanged();
       return;
     }
@@ -149,6 +167,7 @@ export default function DrawingWorkspace() {
 
     if (choice === "update-all") {
       await writeSvgAsset(assetPath, svg);
+      await seedQuestion(assetPath, svg);
       announceAssetsChanged();
       return;
     }
@@ -158,6 +177,7 @@ export default function DrawingWorkspace() {
     const uploaded = await uploadAsset(svgFile(svg, original.split("/").pop() ?? "drawing.svg"));
     if (questionId && usedBy.includes(questionId)) {
       await pointQuestionAtCopy(questionId, original, uploaded.path);
+      await seedQuestion(uploaded.path, svg);
     }
     switchToAsset(uploaded.path);
     announceAssetsChanged();
@@ -218,7 +238,7 @@ export default function DrawingWorkspace() {
               </label>
             )}
             <span className="drawing-file-note">
-              {questionId ? `For ${questionId}. ` : ""}Saves into the open bank's assets. Save the bank to keep it.
+              {seedNote ?? `${questionId ? `For ${questionId}. ` : ""}Saves into the open bank's assets. Save the bank to keep it.`}
             </span>
           </div>
         }
@@ -333,9 +353,13 @@ async function variableWarnings(svg: string, assetPath: string, usedBy: string[]
 /** Ask the window editing `questionId` (if any) to swap in the copy, so its
  *  unsaved draft isn't overwritten; if nobody answers, nobody is editing
  *  that question and it is safe to update it directly. */
-async function pointQuestionAtCopy(questionId: string, oldPath: string, newPath: string): Promise<void> {
+/** Sends `message` to the main window and waits briefly for its ack. The
+ *  main window applies the change to its open draft (so its autosave doesn't
+ *  overwrite it); false means no window took it, so the caller writes it
+ *  through the API instead. */
+function askMainWindow(message: Record<string, unknown>, ackType: string): Promise<boolean> {
   const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  const acknowledged = await new Promise<boolean>((resolve) => {
+  return new Promise<boolean>((resolve) => {
     let channel: BroadcastChannel;
     try {
       channel = new BroadcastChannel("nexam-pane-sync");
@@ -348,17 +372,35 @@ async function pointQuestionAtCopy(questionId: string, oldPath: string, newPath:
       resolve(false);
     }, 1200);
     channel.onmessage = (event: MessageEvent<{ type?: string; requestId?: string }>) => {
-      if (event.data?.type === "drawing-asset-replaced-ack" && event.data.requestId === requestId) {
+      if (event.data?.type === ackType && event.data.requestId === requestId) {
         window.clearTimeout(timer);
         channel.close();
         resolve(true);
       }
     };
-    channel.postMessage({ type: "drawing-asset-replaced", requestId, questionId, oldPath, newPath });
+    channel.postMessage({ ...message, requestId });
   });
-  if (acknowledged) return;
+}
+
+/** Points the question at a saved copy, through its open window if it has one. */
+async function pointQuestionAtCopy(questionId: string, oldPath: string, newPath: string): Promise<void> {
+  if (await askMainWindow({ type: "drawing-asset-replaced", questionId, oldPath, newPath }, "drawing-asset-replaced-ack")) return;
   const { question } = await getQuestion(questionId);
   await updateQuestion(questionId, swapAssetPath(question, oldPath, newPath));
+}
+
+/** A drawing saved from a question gives that question any new inputs (with
+ *  their samples), so a value added while editing shows up there ready to set. */
+async function addNewInputsToQuestion(questionId: string, assetPath: string, svg: string): Promise<number> {
+  const samples = drawingInputSamples(parseSvg(svg).document);
+  if (Object.keys(samples).length === 0) return 0;
+  const { question } = await getQuestion(questionId);
+  const seeded = withSeededVariables(question, assetPath, samples);
+  if (!seeded) return 0;
+  const added = Object.keys(seeded.variables ?? {}).length - Object.keys(question.variables ?? {}).length;
+  if (await askMainWindow({ type: "question-variables-seed", questionId, assetPath, samples }, "question-variables-seed-ack")) return added;
+  await updateQuestion(questionId, seeded);
+  return added;
 }
 
 /** A native Save dialog in the desktop app; a download in a browser. */

@@ -197,6 +197,28 @@ Support static and parameterized SVG metadata:
 
 `svg_variables` keys map to token placeholders like `{{label}}` in source SVG templates.
 Numeric geometry can also use simple expressions such as `{{calc: 60 - arrow_length}}`, referencing values from the same `svg_variables` map.
+Expressions support `+ - * /`, parentheses, `min`, `max`, `sin` and `cos` (degrees), `round(x, places)` and `sig(x, figures)`.
+
+### Question variables (optional)
+
+A question may carry its own values, which its attached drawings take by name (ADR-006):
+
+```json
+{
+  "id": "q_fr_0007",
+  "variables": { "force": "40", "angle": "30" },
+  "assets": [
+    { "path": "assets/incline.svg", "kind": "svg", "svg_variables": {} },
+    { "path": "assets/components.svg", "kind": "svg", "svg_variables": { "arrow_length": "{{force}}" } }
+  ]
+}
+```
+
+- A drawing input takes the question's value of the same name.
+- An attachment's `svg_variables` entry wins over it; blank means "use the question's". It may refer to the question's variables: `"{{force}}"`, `"{{calc: 2 * force}}"`.
+- `variables` is optional; questions without it behave as before.
+
+A drawing can declare its inputs (label, units, sample value) and derived variables (`Fx = force * cos(angle)`, optionally shown to N decimals or significant figures) in an SVG `<metadata id="nexam-variables">` block holding `{"variables": [...]}`. Derived variables are worked out when the drawing renders; a question never sets them.
 
 Questions may attach more than one asset by adding multiple entries to the `assets` array.
 

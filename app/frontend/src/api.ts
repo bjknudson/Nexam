@@ -611,18 +611,24 @@ export async function uploadAsset(file: File): Promise<AssetUploadResponseModel>
   );
 }
 
-export async function inspectAsset(asset: AssetModel): Promise<AssetInspectionResponseModel> {
+/** Renders an asset. `questionVariables` are the question's own values: a
+ *  drawing input takes the one of the same name, unless the attachment's
+ *  svg_variables set it (possibly as "{{force}}" or "{{calc: …}}"). */
+export async function inspectAsset(
+  asset: AssetModel,
+  questionVariables: Record<string, string> = {},
+): Promise<AssetInspectionResponseModel> {
   return handleResponse(
     await fetch(buildApiUrl("/api/assets/inspect"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(asset),
+      body: JSON.stringify({ ...asset, question_variables: questionVariables }),
     }),
   );
 }
 
 export async function inspectAssets(
-  assets: AssetModel[],
+  assets: (AssetModel & { question_variables?: Record<string, string> })[],
 ): Promise<AssetInspectionBatchResponseModel> {
   return handleResponse(
     await fetch(buildApiUrl("/api/assets/inspect-batch"), {

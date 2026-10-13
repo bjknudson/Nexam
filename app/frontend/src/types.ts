@@ -85,10 +85,20 @@ export interface AddStampsResponseModel {
   errors: string[];
 }
 
+/** A value a drawing needs from its question (app/backend/models.py SvgInputModel). */
+export interface SvgInputModel {
+  name: string;
+  label?: string | null;
+  units?: string | null;
+  sample?: string | null;
+}
+
 export interface AssetInspectionResponseModel {
   path: string;
   kind: string;
   svg_placeholders: string[];
+  /** The drawing's inputs with their declared label, units and sample value. */
+  svg_inputs?: SvgInputModel[];
   rendered_svg?: string | null;
 }
 
@@ -309,6 +319,8 @@ export interface QuestionModel {
   sample_solution?: string | null;
   exemplar_answer?: string | null;
   assets: AssetModel[];
+  /** Values that drive the question's drawings by name. Optional in older banks. */
+  variables?: Record<string, string>;
 }
 
 export interface QuestionDetailModel {

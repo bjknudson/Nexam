@@ -1,7 +1,9 @@
 // Fills {{placeholders}} with preview values so the canvas can draw a
 // variable diagram live. Mirrors BankWorkspaceService.render_svg in
-// app/backend/service.py: {{calc: ...}} supports + - * /, parentheses and
-// min()/max() and sin()/cos() in degrees; unknown or non-numeric variables count as 0, and a bad
+// app/backend/service.py: {{calc: ...}} supports + - * /, parentheses,
+// min()/max(), sin()/cos() in degrees, and round(x, places) / sig(x,
+// figures), which round half away from zero and, as the whole expression,
+// keep trailing zeros ("30.0"); unknown or non-numeric variables count as 0, and a bad
 // expression gives 0.
 // The saved file always keeps the placeholders; this is only for display.
 
@@ -16,7 +18,7 @@ const PLACEHOLDER_PATTERN = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g;
  *  author can see where the variable sits; attribute ones fall back to 0. */
 export function fillPlaceholders(value: string, values: PreviewValues, keepUnknown: boolean): string {
   return value
-    .replace(CALC_PATTERN, (_match, expression: string) => formatResult(evaluateExpression(expression, values)))
+    .replace(CALC_PATTERN, (_match, expression: string) => evaluateToText(expression, values))
     .replace(PLACEHOLDER_PATTERN, (match, name: string) => {
       const filled = values[name];
       if (filled !== undefined && filled !== "") return filled;
@@ -69,6 +71,76 @@ export function evaluateExpression(expression: string, values: PreviewValues): n
   } catch {
     return 0;
   }
+}
+
+/** An expression's value as the renderer writes it: round()/sig() as the
+ *  whole expression (or a derived variable's "show as") fix the digits. */
+export function evaluateToText(expression: string, values: PreviewValues, show?: RoundShow | null): string {
+  const value = evaluateExpression(expression, values);
+  const format = show ?? outerRounding(expression, values);
+  return format ? formatRounded(value, format.kind, format.places) : formatResult(value);
+}
+
+export interface RoundShow {
+  kind: "decimals" | "sig";
+  places: number;
+}
+
+/** round(…, n) or sig(…, n) wrapping the whole expression, or null. */
+function outerRounding(expression: string, values: PreviewValues): RoundShow | null {
+  const match = expression.trim().match(/^(round|sig)\s*\(([\s\S]*)\)$/);
+  if (!match) return null;
+  // The parentheses must enclose everything (not "round(a) + round(b)").
+  const inside = match[2];
+  let depth = 0;
+  let lastComma = -1;
+  for (let index = 0; index < inside.length; index += 1) {
+    const char = inside[index];
+    if (char === "(") depth += 1;
+    else if (char === ")") {
+      depth -= 1;
+      if (depth < 0) return null;
+    } else if (char === "," && depth === 0) lastComma = index;
+  }
+  const kind = match[1] === "round" ? "decimals" : "sig";
+  const places = lastComma >= 0 ? Math.trunc(evaluateExpression(inside.slice(lastComma + 1), values)) : kind === "sig" ? 3 : 0;
+  return { kind, places };
+}
+
+/** Half away from zero (2.5 -> 3, -2.5 -> -3), as people round by hand. */
+export function roundTo(value: number, places: number): number {
+  const decimals = Math.max(0, Math.min(10, Math.trunc(places)));
+  const shifted = Number(`${Math.abs(value)}e${decimals}`);
+  return Math.sign(value) * Number(`${Math.round(shifted)}e-${decimals}`);
+}
+
+function sigDecimals(value: number, figures: number): number {
+  if (value === 0 || !Number.isFinite(value)) return figures - 1;
+  return figures - 1 - Math.floor(Math.log10(Math.abs(value)));
+}
+
+export function roundSig(value: number, figures: number): number {
+  const count = Math.max(1, Math.trunc(figures));
+  const decimals = sigDecimals(value, count);
+  if (decimals >= 0) return roundTo(value, decimals);
+  const step = 10 ** -decimals;
+  return Math.sign(value) * Math.round(Math.abs(value) / step) * step;
+}
+
+/** Fixed decimals, or significant figures, keeping trailing zeros. */
+export function formatRounded(value: number, kind: "decimals" | "sig", places: number): string {
+  let decimals: number;
+  let rounded: number;
+  if (kind === "sig") {
+    const figures = Math.max(1, Math.trunc(places));
+    rounded = roundSig(value, figures);
+    decimals = Math.max(0, sigDecimals(rounded, figures));
+  } else {
+    decimals = Math.max(0, Math.min(10, Math.trunc(places)));
+    rounded = roundTo(value, decimals);
+  }
+  const text = rounded.toFixed(Math.min(decimals, 20));
+  return Number(text) === 0 ? text.replace(/^-/, "") : text;
 }
 
 function formatResult(value: number): string {
@@ -136,6 +208,8 @@ class ExpressionParser {
         args.push(this.parseSum());
       }
       if (this.next() !== ")") throw new Error("missing )");
+      if (token === "round") return roundTo(args[0], args[1] ?? 0);
+      if (token === "sig") return roundSig(args[0], args[1] ?? 3);
       if (token === "sin" || token === "cos") {
         // Degrees; values within rounding of zero snap to it, so sin(180) draws as 0.
         const radians = (args[0] * Math.PI) / 180;

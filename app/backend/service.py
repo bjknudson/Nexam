@@ -14,9 +14,11 @@ import re
 
 from pydantic import ValidationError
 
-from .asset_metadata import SvgSummary, SvgSummaryCache
+from .asset_metadata import SvgSummary, SvgSummaryCache, summarize_svg
+from .svg_variables import derived_variables, format_rounded, read_declarations, round_sig, round_to
 from .grading.answer_key import derive_answer_key
 from .models import (
+    SvgInputModel,
     AssetInspectionBatchRequest,
     AssetInspectionBatchResponseModel,
     AssetInspectionRequest,
@@ -105,12 +107,16 @@ class BankWorkspaceService:
     SVG_EXPR_VARIABLE_PATTERN = re.compile(r"\b([A-Za-z_][A-Za-z0-9_.-]*)\b")
     # Functions allowed in {{calc: ...}}; the drawing editor uses them to keep
     # variable-length arrows between a minimum and maximum length.
-    # min/max take any number of arguments; sin/cos take one, in degrees.
+    # min/max take any number of arguments; sin/cos take one, in degrees;
+    # round(x, places) and sig(x, figures) round half away from zero. As the
+    # whole expression, round/sig also keep trailing zeros ("30.0").
     SVG_EXPR_FUNCTIONS = {
         "min": min,
         "max": max,
         "sin": lambda values: math.sin(math.radians(values[0])),
         "cos": lambda values: math.cos(math.radians(values[0])),
+        "round": lambda values: round_to(values[0], int(values[1]) if len(values) > 1 else 0),
+        "sig": lambda values: round_sig(values[0], int(values[1]) if len(values) > 1 else 3),
     }
     ALLOWED_ASSET_EXTENSIONS = {
         ".svg": "svg",
@@ -1369,7 +1375,7 @@ class BankWorkspaceService:
             svg_placeholders: list[str] = []
             summary = SvgSummary()
             if kind == "svg":
-                svg_placeholders = self.extract_svg_placeholders(file_path.read_text())
+                svg_placeholders = self.extract_svg_placeholders(file_path.read_text(encoding="utf-8"))
                 summary = self._svg_summaries.get(file_path)
 
             items.append(
@@ -1619,15 +1625,51 @@ class BankWorkspaceService:
         if payload.kind != "svg":
             return AssetInspectionResponseModel(path=payload.path, kind=payload.kind)
 
-        source = asset_path.read_text()
+        source = asset_path.read_text(encoding="utf-8")
         placeholders = self.extract_svg_placeholders(source)
-        rendered_svg = self.render_svg(source, payload.svg_variables)
+        values = self.resolve_asset_variables(payload.question_variables, payload.svg_variables)
+        rendered_svg = self.render_svg(source, values)
         return AssetInspectionResponseModel(
             path=payload.path,
             kind=payload.kind,
             svg_placeholders=placeholders,
+            svg_inputs=self.svg_inputs(source, placeholders),
             rendered_svg=rendered_svg,
         )
+
+    def resolve_asset_variables(self, question_variables: dict[str, str], svg_variables: dict[str, str]) -> dict[str, str]:
+        """The values one attached drawing renders with: the question's
+        variables by name, then the attachment's own values, which win and
+        may refer to the question's ("{{force}}", "{{calc: 2 * force}}").
+        A blank attachment value means "use the question's"."""
+        values = dict(question_variables)
+        for name, value in svg_variables.items():
+            if value.strip() == "":
+                continue
+            values[name] = self.render_svg(value, question_variables) if "{{" in value else value
+        return values
+
+    def svg_inputs(self, source: str, placeholders: list[str]) -> list[SvgInputModel]:
+        """The drawing's inputs in order (declared ones first), with their
+        label, units and sample (the declared sample, else the preview the
+        drawing was saved showing)."""
+        declared = {str(item["name"]): item for item in read_declarations(source) if not item.get("formula")}
+        preview = summarize_svg(source).preview_values
+        names = [name for name in declared if name in placeholders] + [name for name in placeholders if name not in declared]
+
+        def text(name: str, key: str) -> str | None:
+            value = declared.get(name, {}).get(key)
+            return value.strip() if isinstance(value, str) and value.strip() else None
+
+        return [
+            SvgInputModel(
+                name=name,
+                label=text(name, "label"),
+                units=text(name, "units"),
+                sample=text(name, "sample") or preview.get(name),
+            )
+            for name in names
+        ]
 
     def inspect_assets(
         self,
@@ -2947,6 +2989,7 @@ class BankWorkspaceService:
         return [part for part in (item.strip() for item in parts) if part]
 
     def render_svg(self, source: str, variables: dict[str, str]) -> str:
+        variables = self.with_derived_variables(source, variables)
         source = self.SVG_CALC_PATTERN.sub(
             lambda match: self._evaluate_svg_expression(match.group(1), variables),
             source,
@@ -2958,22 +3001,63 @@ class BankWorkspaceService:
 
         return self.SVG_PLACEHOLDER_PATTERN.sub(replace, source)
 
+    def with_derived_variables(self, source: str, variables: dict[str, str]) -> dict[str, str]:
+        """`variables` plus the drawing's derived ones, worked out in order
+        (each may use the inputs and earlier derived variables)."""
+        derived = derived_variables(source)
+        if not derived:
+            return variables
+        values = dict(variables)
+        for item in derived:
+            values[item.name] = self._evaluate_svg_expression(item.formula, values, item.show_kind, item.places)
+        return values
+
     def extract_svg_placeholders(self, source: str) -> list[str]:
+        """The values a question supplies: placeholders, the inputs the drawing
+        declares, and names its derived formulas use -- less the derived
+        variables themselves, which the drawing works out."""
+        derived_items = derived_variables(source)
+        derived = {item.name for item in derived_items}
         placeholders = set(self.SVG_PLACEHOLDER_PATTERN.findall(source))
+        placeholders.update(str(item["name"]) for item in read_declarations(source) if not item.get("formula"))
+        for item in derived_items:
+            placeholders.update(
+                name for name in self.SVG_EXPR_VARIABLE_PATTERN.findall(item.formula) if name not in self.SVG_EXPR_FUNCTIONS
+            )
         for expression in self.SVG_CALC_PATTERN.findall(source):
             placeholders.update(
                 name
                 for name in self.SVG_EXPR_VARIABLE_PATTERN.findall(expression)
                 if name not in self.SVG_EXPR_FUNCTIONS
             )
-        return sorted(placeholders)
+        return sorted(placeholders - derived)
 
-    def _evaluate_svg_expression(self, expression: str, variables: dict[str, str]) -> str:
+    def _evaluate_svg_expression(
+        self,
+        expression: str,
+        variables: dict[str, str],
+        show_kind: str | None = None,
+        places: int = 0,
+    ) -> str:
         try:
             parsed = ast.parse(expression, mode="eval")
             value = self._eval_svg_ast(parsed.body, variables)
+            # round()/sig() as the whole expression decide how it's written.
+            body = parsed.body
+            if (
+                show_kind is None
+                and isinstance(body, ast.Call)
+                and isinstance(body.func, ast.Name)
+                and body.func.id in ("round", "sig")
+            ):
+                show_kind = "decimals" if body.func.id == "round" else "sig"
+                default = 0 if show_kind == "decimals" else 3
+                places = int(self._eval_svg_ast(body.args[1], variables)) if len(body.args) > 1 else default
         except Exception:
             return "0"
+
+        if show_kind in ("decimals", "sig") and math.isfinite(value):
+            return format_rounded(value, show_kind, places)
 
         if float(value).is_integer():
             return str(int(value))

@@ -1906,3 +1906,90 @@ def test_render_svg_supports_sin_and_cos_in_degrees(bank_service: BankWorkspaceS
 
     assert rendered == '<path d="M 134.641 80"/><text x="0" y="0"/>'
     assert bank_service.extract_svg_placeholders(source) == ["arc_angle"]
+
+
+DERIVED_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg">'
+    '<metadata id="nexam-variables">{"variables": ['
+    '{"name": "force", "units": "N", "sample": "40"},'
+    '{"name": "angle", "sample": "30"},'
+    '{"name": "Fx", "formula": "force * cos(angle)", "show": {"kind": "decimals", "places": 1}},'
+    '{"name": "Fx2", "formula": "2 * Fx"}'
+    "]}</metadata>"
+    '<line x2="{{calc: 10 + Fx}}"/><text>{{Fx}} N, {{Fx2}}</text>'
+    "</svg>"
+)
+
+
+def test_render_svg_works_out_derived_variables_in_order(bank_service: BankWorkspaceService) -> None:
+    rendered = bank_service.render_svg(DERIVED_SVG, {"force": "40", "angle": "30"})
+
+    assert '<line x2="44.6"/>' in rendered
+    assert "<text>34.6 N, 69.2</text>" in rendered
+    # A question supplies only the inputs.
+    assert bank_service.extract_svg_placeholders(DERIVED_SVG) == ["angle", "force"]
+
+
+def test_render_svg_round_and_sig_keep_trailing_zeros(bank_service: BankWorkspaceService) -> None:
+    source = (
+        "<a>{{calc: round(x, 2)}}</a><b>{{calc: sig(x, 3)}}</b><c>{{calc: sig(y, 2)}}</c>"
+        "<d>{{calc: round(2.5)}}</d><e>{{calc: 1 + round(x, 1)}}</e>"
+    )
+
+    rendered = bank_service.render_svg(source, {"x": "30", "y": "12345"})
+
+    assert rendered == "<a>30.00</a><b>30.0</b><c>12000</c><d>3</d><e>31</e>"
+
+
+def test_render_svg_ignores_an_unreadable_variables_block(bank_service: BankWorkspaceService) -> None:
+    source = '<metadata id="nexam-variables">{not json</metadata><text>{{force}}</text>'
+
+    assert bank_service.render_svg(source, {"force": "5"}).endswith("<text>5</text>")
+
+
+def test_question_variables_are_optional_and_round_trip(bank_service: BankWorkspaceService, demo_bok: Path) -> None:
+    bank_service.open_bank(str(demo_bok))
+    question = bank_service.get_question("q_mc_0001")
+    assert question.variables == {}
+
+    bank_service.update_question("q_mc_0001", question.model_copy(update={"variables": {"force": "40", "angle": "30"}}))
+
+    assert bank_service.get_question("q_mc_0001").variables == {"force": "40", "angle": "30"}
+
+
+def test_attached_drawings_take_question_variables_by_name(bank_service: BankWorkspaceService) -> None:
+    question = {"force": "40", "angle": "30"}
+
+    # By name, with attachment values winning and able to refer to the question's.
+    assert bank_service.resolve_asset_variables(question, {}) == question
+    assert bank_service.resolve_asset_variables(question, {"angle": "45"})["angle"] == "45"
+    assert bank_service.resolve_asset_variables(question, {"angle": ""})["angle"] == "30"
+    mapped = bank_service.resolve_asset_variables(question, {"arrow_length": "{{force}}", "double": "{{calc: 2 * force}}"})
+    assert mapped["arrow_length"] == "40"
+    assert mapped["double"] == "80"
+
+
+def test_inspect_asset_uses_question_variables_and_lists_inputs(
+    bank_service: BankWorkspaceService, demo_bok: Path
+) -> None:
+    bank_service.open_bank(str(demo_bok))
+    drawing = (
+        '<svg xmlns="http://www.w3.org/2000/svg" data-nexam-preview="angle=30">'
+        '<metadata id="nexam-variables">{"variables": ['
+        '{"name": "force", "label": "Applied force", "units": "N", "sample": "40"},'
+        '{"name": "Fx", "formula": "force * cos(angle)", "show": {"kind": "decimals", "places": 1}}'
+        "]}</metadata>"
+        "<text>{{Fx}} N at {{angle}}°</text></svg>"
+    )
+    path = "assets/sample-svg-template.svg"
+    bank_service.write_svg_asset(path, drawing)
+
+    result = bank_service.inspect_asset(
+        AssetInspectionRequest(path=path, kind="svg", question_variables={"force": "40", "angle": "60"})
+    )
+
+    assert "<text>20.0 N at 60°</text>" in (result.rendered_svg or "")
+    assert [(item.name, item.units, item.sample, item.label) for item in result.svg_inputs] == [
+        ("force", "N", "40", "Applied force"),
+        ("angle", None, "30", None),
+    ]

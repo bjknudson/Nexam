@@ -1557,3 +1557,90 @@
   padding-top: 0.6rem;
   border-top: 1px solid #e2e8f0;
 }
+
+/* Variables panel: inputs set by each question, derived variables worked out from them */
+.drawing-variables {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.drawing-variables h4 {
+  margin: 0.3rem 0 0;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.drawing-variable-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.drawing-variable-rows > li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px dashed #e2e8f0;
+}
+
+.drawing-variable-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.drawing-variable-row > code {
+  flex: 0 0 auto;
+  max-width: 6.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.drawing-variable-row > input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.drawing-variable-row > .drawing-variable-units {
+  flex: 0 0 3.6rem;
+}
+
+.drawing-variable-label {
+  font-size: 0.78rem;
+}
+
+.drawing-variable-show select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.drawing-variable-places {
+  flex: 0 0 3.2rem !important;
+}
+
+.drawing-derived-value {
+  flex: 0 0 auto;
+  font-size: 0.82rem;
+  color: #334155;
+  white-space: nowrap;
+}
+
+.drawing-variable-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.drawing-variable-add input {
+  flex: 1 1 7rem;
+  min-width: 0;
+}

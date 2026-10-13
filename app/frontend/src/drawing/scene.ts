@@ -9,6 +9,7 @@
 // Use literalNumber() to get a draggable number, and leave a value alone when
 // it is a placeholder.
 
+import type { DeclaredVariable } from "./variables";
 export type ShapeKind =
   | "line"
   | "rect"
@@ -47,6 +48,8 @@ export interface SceneDocument {
   /** Root <svg> attributes other than xmlns, in source order (width, height, viewBox, ...). */
   rootAttrs: Record<string, string>;
   elements: SceneElement[];
+  /** Declared inputs and derived variables (see variables.ts); saved as a <metadata> block. */
+  variables?: DeclaredVariable[];
 }
 
 export const SHAPE_KINDS: readonly ShapeKind[] = [
@@ -62,8 +65,8 @@ export const SHAPE_KINDS: readonly ShapeKind[] = [
 const PLACEHOLDER_PATTERN = /\{\{\s*([^}]+?)\s*\}\}/g;
 
 /** Function names allowed inside {{calc: ...}}; never variables. */
-/** Functions {{calc:}} understands: min/max, and sin/cos in degrees. */
-export const CALC_FUNCTIONS = ["min", "max", "sin", "cos"];
+/** Functions {{calc:}} understands: min/max, sin/cos in degrees, round/sig. */
+export const CALC_FUNCTIONS = ["min", "max", "sin", "cos", "round", "sig"];
 
 let keyCounter = 0;
 

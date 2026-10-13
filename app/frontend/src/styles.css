@@ -5839,3 +5839,105 @@ textarea {
     box-shadow: none;
   }
 }
+
+/* Question variables: the values its drawings take by name */
+.question-variables {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.question-variables .question-section-header p {
+  margin: 0.15rem 0 0;
+  font-size: 0.85rem;
+  color: #64748b;
+}
+
+.question-variable-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.question-variable-list > li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.15rem 0.6rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.question-variable-list > li.has-issue {
+  border-color: #f59e0b;
+  background: #fffbeb;
+}
+
+.question-variable-list label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.question-variable-name {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  min-width: 7rem;
+}
+
+.question-variable-name span {
+  font-size: 0.82rem;
+  color: #475569;
+}
+
+.question-variable-value {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.question-variable-value input {
+  width: 8rem;
+}
+
+.question-variable-units {
+  color: #475569;
+}
+
+.question-variable-use {
+  grid-column: 1 / -1;
+  font-size: 0.8rem;
+  color: #64748b;
+}
+
+.question-variable-list > li.has-issue .question-variable-use {
+  color: #b45309;
+}
+
+.question-variable-list > li > button {
+  grid-row: 1;
+  grid-column: 2;
+}
+
+.question-variable-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.question-variable-error {
+  color: #b91c1c;
+  font-size: 0.82rem;
+}
+
+.question-variable-set-in {
+  font-size: 0.85rem;
+  color: #334155;
+}

@@ -92,6 +92,8 @@ import {
 } from "./appSettings";
 import DocumentSwitcherDialog from "./DocumentSwitcherDialog";
 import AiPromptDialog from "./AiPromptDialog";
+import QuestionVariablesSection from "./QuestionVariablesSection";
+import { resolveAssetVariables, withSeededVariables } from "./questionVariables";
 import StandardsWorkspace from "./StandardsWorkspace";
 import TestBuilderPane from "./TestBuilderPane";
 import TestPrintPreview from "./TestPrintPreview";
@@ -193,6 +195,8 @@ type PaneMessage =
   // that question swaps the asset in its draft and acknowledges.
   | { type: "drawing-asset-replaced"; requestId: string; questionId: string; oldPath: string; newPath: string }
   | { type: "drawing-asset-replaced-ack"; requestId: string }
+  | { type: "question-variables-seed"; requestId: string; questionId: string; assetPath: string; samples: Record<string, string> }
+  | { type: "question-variables-seed-ack"; requestId: string }
   | { type: "standards-data-changed" }
   | { type: "courses-data-changed" }
   | { type: "standard-id-changed"; oldStandardId: string; newStandardId: string }
@@ -378,10 +382,15 @@ function getPaneMode(): PaneKind | null {
 }
 
 /** A question's attached figures plus its answer-choice images, with their variable values. */
+/** The question's attached assets (figures and choice images), each with
+ *  the values it renders with: the question's variables by name, then its own. */
 function attachedAssetsOf(question: QuestionModel | null): AssetModel[] {
   if (!question) return [];
   const choiceAssets = (question.answer as { choice_assets?: Record<string, AssetModel> } | null | undefined)?.choice_assets;
-  return [...question.assets, ...Object.values(choiceAssets ?? {})];
+  return [...question.assets, ...Object.values(choiceAssets ?? {})].map((asset) => ({
+    ...asset,
+    svg_variables: resolveAssetVariables(question.variables, asset.svg_variables),
+  }));
 }
 
 function PoppedOutPagePlaceholder({
@@ -1138,6 +1147,10 @@ function App() {
   const isHydratingRef = useRef(false);
   const persistInFlightRef = useRef<Promise<boolean> | null>(null);
   const assetInspectionRequestRef = useRef(0);
+  /** Assets just attached: once inspected, their inputs are added to the
+   *  question's variables (with the drawing's samples). Only then, so opening
+   *  an older question never changes it. */
+  const seedVariablesFromRef = useRef<Set<string>>(new Set());
   const paneChannelRef = useRef<BroadcastChannel | null>(null);
   const questionCloseWatchRef = useRef<(() => void) | null>(null);
   const assetCloseWatchRef = useRef<(() => void) | null>(null);
@@ -1430,7 +1443,7 @@ function App() {
       const inspections = await Promise.all(
         assets.map(async (asset) => {
           try {
-            return await inspectAsset(asset);
+            return await inspectAsset(asset, draftQuestion.variables ?? {});
           } catch (error) {
             setErrorMessage((error as Error).message);
             return {
@@ -1445,6 +1458,7 @@ function App() {
 
       if (assetInspectionRequestRef.current === requestId) {
         setAssetInspections(inspections);
+        seedQuestionVariables(assets, inspections);
       }
     })();
   }, [draftQuestion, hostsBankState]);
@@ -2711,6 +2725,28 @@ function App() {
     },
   };
 
+  /** Adds the inputs of newly attached drawings to the question's variables,
+   *  using each drawing's sample, unless the question or the attachment
+   *  already sets them. */
+  function seedQuestionVariables(assets: AssetModel[], inspections: AssetInspectionResponseModel[]) {
+    const pending = seedVariablesFromRef.current;
+    if (pending.size === 0) return;
+    const current = draftQuestionRef.current;
+    if (!current) return;
+    const variables = { ...(current.variables ?? {}) };
+    let added = 0;
+    assets.forEach((asset, index) => {
+      if (!pending.has(asset.path)) return;
+      pending.delete(asset.path);
+      for (const input of inspections[index]?.svg_inputs ?? []) {
+        if (variables[input.name] !== undefined || (asset.svg_variables[input.name] ?? "").trim() !== "") continue;
+        variables[input.name] = input.sample ?? "";
+        added += 1;
+      }
+    });
+    if (added > 0) updateDraft("variables", variables);
+  }
+
   function handleAttachExistingAsset(asset: AssetListItemModel) {
     const current = draftQuestionRef.current;
     if (!current) return;
@@ -2719,6 +2755,7 @@ function App() {
       return;
     }
 
+    if (asset.kind === "svg") seedVariablesFromRef.current.add(asset.path);
     updateDraft("assets", [
       ...current.assets,
       {
@@ -2748,6 +2785,7 @@ function App() {
 
       const current = draftQuestionRef.current;
       if (!current) return;
+      for (const uploaded of uploadedAssets) if (uploaded.kind === "svg") seedVariablesFromRef.current.add(uploaded.path);
       updateDraft("assets", [...current.assets, ...uploadedAssets]);
       await refreshAssetList();
       setErrorMessage("");
@@ -3298,6 +3336,17 @@ function App() {
     const channel = paneChannelRef.current;
     channel.onmessage = (event: MessageEvent<PaneMessage>) => {
       const message = event.data;
+
+      if (message.type === "question-variables-seed") {
+        // A drawing saved from the open question: add its new inputs to the draft.
+        const current = draftQuestionRef.current;
+        if (hostsBankState && current?.id === message.questionId) {
+          const seeded = withSeededVariables(current, message.assetPath, message.samples);
+          if (seeded) updateDraft("variables", seeded.variables ?? {});
+          channel.postMessage({ type: "question-variables-seed-ack", requestId: message.requestId });
+        }
+        return;
+      }
 
       if (message.type === "drawing-asset-replaced") {
         if (hostsBankState && draftQuestionRef.current?.id === message.questionId) {
@@ -4571,6 +4620,26 @@ function App() {
                     />
                   </MathPreviewField>
 
+                  <QuestionVariablesSection
+                    variables={draftQuestion.variables ?? {}}
+                    assets={draftQuestion.assets}
+                    inspections={assetInspections}
+                    editing={editingFieldsEnabled}
+                    onChange={(next) => updateDraft("variables", next)}
+                    onPromote={(name, value) => {
+                      updateDraft("variables", { ...(draftQuestion.variables ?? {}), [name]: value });
+                      // Drawings that set the same value now take the question's.
+                      updateDraft(
+                        "assets",
+                        draftQuestion.assets.map((asset) => {
+                          if ((asset.svg_variables[name] ?? "").trim() !== value) return asset;
+                          const { [name]: _moved, ...rest } = asset.svg_variables;
+                          return { ...asset, svg_variables: rest };
+                        }),
+                      );
+                    }}
+                  />
+
                   {!editingFieldsEnabled ? (
                     draftQuestion.assets.length > 0 ? (
                       <section className="asset-section asset-preview-section" {...assetDropHandlers}>
@@ -4675,6 +4744,12 @@ function App() {
                                           {placeholder}
                                           <input
                                             value={asset.svg_variables[placeholder] ?? ""}
+                                            placeholder={
+                                              draftQuestion.variables?.[placeholder] !== undefined
+                                                ? `from question: ${draftQuestion.variables[placeholder] || "(blank)"}`
+                                                : "not set"
+                                            }
+                                            title="Leave blank to use the question's variable of the same name. A value here applies to this drawing only, and may refer to the question's variables, e.g. {{force}} or {{calc: 2 * force}}."
                                             onChange={(event) =>
                                               updateAsset(index, (currentAsset) => ({
                                                 ...currentAsset,

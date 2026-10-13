@@ -44,6 +44,8 @@ import {
 } from "./controls";
 import { alignDeltas, distributeDeltas, type AlignEdge, type Box, type Delta } from "./align";
 import { directionsFrom, nearestSnap, segmentsOf, snapPoints, type Segment, type SnapPoint } from "./snapping";
+import { DrawingVariablesContext, useDrawingVariables } from "./variableContext";
+import { declarationOf, derivedFormulaError, derivedNames, isDerived, isReservedName, setDeclaration, withDerived, type DeclaredVariable } from "./variables";
 import { formatCoefficient } from "./geometry";
 import {
   boxCorners,
@@ -316,7 +318,9 @@ export default function DrawingEditor({
   const [showGrid, setShowGrid] = useState(true);
   const [snap, setSnap] = useState(true);
   const [zoom, setZoom] = useState(initialPreset.zoom);
-  const [previewValues, setPreviewValues] = useState<PreviewValues>(() => ({
+  // The inputs' preview values; derived variables are worked out from them
+  // (and the drawing) below, so everything that draws sees both.
+  const [inputValues, setPreviewValues] = useState<PreviewValues>(() => ({
     ...defaultPreviewValues(initial.document),
     ...initialPreviewValues,
   }));
@@ -363,7 +367,17 @@ export default function DrawingEditor({
   const selectedElements = scopeList.filter((element) => selection.includes(element.key));
   const selected = selectedElements.length === 1 ? selectedElements[0] : null;
   const selectedKeys = new Set(selectedElements.map((element) => element.key));
-  const variables = listVariables(doc);
+  const previewValues = useMemo(() => withDerived(doc, inputValues), [doc, inputValues]);
+  const derivedList = derivedNames(doc);
+  const variables = [...new Set([...listVariables(doc), ...(doc.variables ?? []).map((variable) => variable.name)])];
+  const drawingVariables = useMemo(
+    () => ({
+      names: [...variables.filter((name) => !derivedList.includes(name)), ...derivedList],
+      derived: Object.fromEntries((doc.variables ?? []).filter(isDerived).map((variable) => [variable.name, variable.formula ?? ""])),
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [variables.join("|"), doc.variables],
+  );
   const scaleGroups = collectScaleGroups(doc);
   const currentSource = serializeSvg(doc);
   const dirty = currentSource !== savedSource;
@@ -1288,9 +1302,11 @@ export default function DrawingEditor({
     try {
       // Variable-angle arrows remember the preview direction in data-angle,
       // so the file reopens pointing the way it was last shown.
+      // Only the inputs' values are saved; derived ones are worked out again.
+      const inputsOnly = Object.fromEntries(Object.entries(inputValues).filter(([name]) => !derivedList.includes(name)));
       const synced = withSavedPreview(
-        { ...doc, elements: doc.elements.map((element) => rememberPreviewAngle(element, previewValues)) },
-        previewValues,
+        withSamples({ ...doc, elements: doc.elements.map((element) => rememberPreviewAngle(element, previewValues)) }, inputsOnly),
+        inputsOnly,
       );
       const svg = serializeSvg(synced);
       if ((await onSave(svg)) === "cancelled") {
@@ -1507,6 +1523,7 @@ export default function DrawingEditor({
   };
 
   return (
+    <DrawingVariablesContext.Provider value={drawingVariables}>
     <div className={`drawing-editor ${draggingStamp ? "dragging-stamp" : ""}`}>
       <header className="drawing-toolbar">
         <div className="drawing-toolbar-group drawing-toolbar-title">{headerStart}</div>
@@ -1947,29 +1964,13 @@ export default function DrawingEditor({
             open={sidebar.variablesOpen}
             onToggle={() => updateSidebar({ variablesOpen: !sidebar.variablesOpen })}
           >
-            {variables.length === 0 ? (
-              <p className="drawing-muted">
-                No variables yet. Type <code>{"{{name}}"}</code> in a text label, e.g. <code>{"{{mass}} kg"}</code>.
-              </p>
-            ) : (
-              <>
-                <div className="drawing-variable-list">
-                  {variables.map((name) => (
-                    <label key={name}>
-                      <code>{name}</code>
-                      <input
-                        value={previewValues[name] ?? ""}
-                        placeholder="preview value"
-                        onChange={(event) => setPreviewValues((values) => ({ ...values, [name]: event.target.value }))}
-                      />
-                    </label>
-                  ))}
-                </div>
-                <p className="drawing-muted">
-                  Preview values only. Each question sets its own values for these variables.
-                </p>
-              </>
-            )}
+            <VariablesPanel
+              document={doc}
+              names={variables}
+              values={previewValues}
+              onValue={(name, value) => setPreviewValues((current) => ({ ...current, [name]: value }))}
+              onDeclare={(name, next) => commit(setDeclaration(doc, name, next))}
+            />
             {scaleGroups.length > 0 ? (
               <div className="drawing-scale-groups">
                 <h4>Scale groups</h4>
@@ -2049,6 +2050,7 @@ export default function DrawingEditor({
         </aside>
       </div>
     </div>
+    </DrawingVariablesContext.Provider>
   );
 }
 
@@ -2736,7 +2738,7 @@ function ControlInspector({
         reserved={angleVariable}
         onRename={(to) => onRename(setControlAttrs(element, { "data-variable": to }), variable, to)}
       />
-      <SliderField label="Preview value" min={0} max={lengthMax} text={lengthText} onChange={(value) => onPreviewValues({ [variable]: value })} />
+      <SliderField label="Preview value" min={0} max={lengthMax} text={lengthText} variable={variable} onChange={(value) => onPreviewValues({ [variable]: value })} />
       {!isArrowControl ? (
         <div className="drawing-field-grid">
           <NumberField
@@ -2757,7 +2759,17 @@ function ControlInspector({
               </button>
             </div>
           ) : null}
-          <FixedOrVariable label="Angle" variable={angleVariable} onFixed={makeAngleFixed} onVariable={makeAngleVariable} />
+          <FixedOrVariable
+            label="Angle"
+            variable={angleVariable}
+            exclude={[variable]}
+            onFixed={makeAngleFixed}
+            onVariable={makeAngleVariable}
+            onPick={(name) => {
+              set({ "data-angle-variable": name });
+              if (previewValues[name] === undefined) onPreviewValues({ [name]: formatNumber(angle) });
+            }}
+          />
           {angleVariable ? (
             <>
               <VariableNameField
@@ -2774,6 +2786,7 @@ function ControlInspector({
                 max={ccw ? 360 : 180}
                 step={15}
                 text={angleText}
+                variable={angleVariable}
                 onChange={(value) => onPreviewValues({ [angleVariable]: value })}
               />
             </>
@@ -3200,7 +3213,8 @@ function VariableNameField({
   onRename: (to: string) => void;
 }) {
   const listId = useId();
-  const offered = suggestions.filter((name) => name !== variable && name !== reserved);
+  const { names } = useDrawingVariables();
+  const offered = [...new Set([...suggestions, ...names])].filter((name) => name !== variable && name !== reserved);
   const [text, setText] = useState(variable);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -3242,6 +3256,27 @@ function VariableNameField({
           ))}
         </datalist>
       ) : null}
+      {offered.length > 0 ? (
+        <select
+          className="drawing-variable-use"
+          aria-label={`${label}: use one of the drawing's variables`}
+          value=""
+          onChange={(event) => {
+            const name = event.target.value;
+            if (!name) return;
+            setText(name);
+            setError(null);
+            onRename(name);
+          }}
+        >
+          <option value="">Use one of the drawing's variables…</option>
+          {offered.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+      ) : null}
       {error ? (
         <span className="drawing-error">{error}</span>
       ) : text.trim() !== variable && usedNames.includes(text.trim()) ? (
@@ -3257,6 +3292,7 @@ function SliderField({
   max,
   step = 1,
   text,
+  variable,
   onChange,
 }: {
   label: string;
@@ -3264,8 +3300,23 @@ function SliderField({
   max: number;
   step?: number;
   text: string;
+  /** The variable it previews: a derived one shows its formula instead of a slider. */
+  variable?: string;
   onChange: (value: string) => void;
 }) {
+  const { derived } = useDrawingVariables();
+  const formula = variable ? derived[variable] : undefined;
+  if (formula !== undefined) {
+    return (
+      <div className="drawing-stack">
+        {label}
+        <span className="drawing-derived-value">
+          <strong>{text || "0"}</strong> = <code>{formula}</code>
+        </span>
+        <span className="drawing-muted">Worked out from the drawing's other variables (see Variables).</span>
+      </div>
+    );
+  }
   return (
     <label className="drawing-stack">
       {label}
@@ -3482,6 +3533,11 @@ function ArcInspector({
       <FixedOrVariable
         label="Radius"
         variable={arc.radiusVariable}
+        exclude={[arc.sweep, arc.rotationVariable]}
+        onPick={(name) => {
+          set({ "data-radius-variable": name });
+          if (previewValues[name] === undefined) onPreviewValues({ [name]: formatNumber(arc.radius) });
+        }}
         onFixed={() => {
           if (!arc.radiusVariable) return;
           // Keep the radius it draws at now, formula and limits included.
@@ -3514,6 +3570,7 @@ function ArcInspector({
             min={0}
             max={Math.max(100, Math.ceil((radiusPreview * 1.5) / 10) * 10)}
             text={previewValues[arc.radiusVariable] ?? ""}
+            variable={arc.radiusVariable}
             onChange={(value) => onPreviewValues({ [arc.radiusVariable as string]: value })}
           />
         </>
@@ -3526,6 +3583,11 @@ function ArcInspector({
       <FixedOrVariable
         label="Start (rotation)"
         variable={arc.rotationVariable}
+        exclude={[arc.sweep, arc.radiusVariable]}
+        onPick={(name) => {
+          set({ "data-rotation-variable": name });
+          if (previewValues[name] === undefined) onPreviewValues({ [name]: formatNumber(arc.rotation) });
+        }}
         onFixed={() => {
           if (!arc.rotationVariable) return;
           const value = Number(previewValues[arc.rotationVariable]);
@@ -3553,6 +3615,7 @@ function ArcInspector({
             max={360}
             step={15}
             text={previewValues[arc.rotationVariable] ?? ""}
+            variable={arc.rotationVariable}
             onChange={(value) => onPreviewValues({ [arc.rotationVariable as string]: value })}
           />
         </>
@@ -3586,6 +3649,7 @@ function ArcInspector({
         max={360}
         step={5}
         text={previewValues[arc.sweep] ?? ""}
+        variable={arc.sweep}
         onChange={(value) => onPreviewValues({ [arc.sweep]: value })}
       />
     </>
@@ -3669,30 +3733,59 @@ function LineUpField({
   );
 }
 
-/** "Fixed | Variable" for a setting that can be a number or a variable. */
+const FIXED_CHOICE = "\u0000fixed";
+const NEW_CHOICE = "\u0000new";
+
+/** A setting that can be a number or a variable, in one menu: a fixed
+ *  number, any of the drawing's variables (linking it in one step, e.g. an
+ *  arc's sweep to an arrow's angle), or a new variable. */
 function FixedOrVariable({
   label,
   variable,
+  exclude = [],
   onFixed,
   onVariable,
+  onPick,
 }: {
   label: string;
   variable: string | null;
+  /** Variables this setting can't share (e.g. the arrow's own length). */
+  exclude?: (string | null)[];
   onFixed: () => void;
+  /** A new variable with a generated name. */
   onVariable: () => void;
+  /** An existing variable of the drawing. */
+  onPick: (name: string) => void;
 }) {
+  const { names } = useDrawingVariables();
+  const offered = names.filter((name) => !exclude.includes(name) || name === variable);
+  if (variable && !offered.includes(variable)) offered.unshift(variable);
   return (
-    <div className="drawing-stack">
+    <label className="drawing-stack">
       {label}
-      <div className="drawing-segmented" role="group" aria-label={`${label} mode`}>
-        <button type="button" className={variable ? "" : "active"} onClick={() => variable && onFixed()}>
-          Fixed
-        </button>
-        <button type="button" className={variable ? "active" : ""} onClick={() => !variable && onVariable()}>
-          Variable
-        </button>
-      </div>
-    </div>
+      <select
+        aria-label={`${label} mode`}
+        value={variable ?? FIXED_CHOICE}
+        onChange={(event) => {
+          const choice = event.target.value;
+          if (choice === FIXED_CHOICE) onFixed();
+          else if (choice === NEW_CHOICE) onVariable();
+          else if (choice !== variable) onPick(choice);
+        }}
+      >
+        <option value={FIXED_CHOICE}>Fixed number</option>
+        {offered.length > 0 ? (
+          <optgroup label="The drawing's variables">
+            {offered.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </optgroup>
+        ) : null}
+        <option value={NEW_CHOICE}>New variable…</option>
+      </select>
+    </label>
   );
 }
 
@@ -4168,6 +4261,10 @@ function defaultPreviewValues(document: SceneDocument): PreviewValues {
   for (const element of document.elements) {
     if (isControl(element)) Object.assign(values, controlPreviewDefaults(element));
   }
+  // Declared inputs' samples.
+  for (const variable of document.variables ?? []) {
+    if (!isDerived(variable) && variable.sample) values[variable.name] = variable.sample;
+  }
   // What the drawing was last saved showing.
   for (const part of (document.rootAttrs["data-nexam-preview"] ?? "").split(";")) {
     const [name, ...rest] = part.split("=");
@@ -4232,6 +4329,244 @@ function writeSidebarPrefs(prefs: SidebarPrefs) {
   } catch {
     // Only a convenience.
   }
+}
+
+/** The drawing's variables: inputs a question sets (with a preview value,
+ *  units and an optional label) and derived variables worked out from them,
+ *  with an optional "show as" rounding. See variables.ts. */
+function VariablesPanel({
+  document,
+  names,
+  values,
+  onValue,
+  onDeclare,
+}: {
+  document: SceneDocument;
+  /** Every variable the drawing uses or declares. */
+  names: string[];
+  values: PreviewValues;
+  onValue: (name: string, value: string) => void;
+  onDeclare: (name: string, next: DeclaredVariable | null) => void;
+}) {
+  const declared = document.variables ?? [];
+  const derived = declared.filter(isDerived);
+  const derivedSet = new Set(derived.map((variable) => variable.name));
+  const inputs = names.filter((name) => !derivedSet.has(name));
+  const used = new Set(listVariables(document));
+  const [newInput, setNewInput] = useState("");
+  const [newDerived, setNewDerived] = useState({ name: "", formula: "" });
+  const [error, setError] = useState<string | null>(null);
+
+  const nameProblem = (name: string, allowUndeclaredUse = false): string | null => {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return "Use letters, digits and _ only, starting with a letter.";
+    if (isReservedName(name)) return `${name} is a function name.`;
+    const taken = declared.some((variable) => variable.name === name) || (!allowUndeclaredUse && names.includes(name));
+    return taken ? `${name} is already a variable.` : null;
+  };
+  const updateInput = (name: string, patch: Partial<DeclaredVariable>) => {
+    const current = declarationOf(document, name);
+    const next = { ...current, ...patch };
+    for (const key of ["label", "units"] as const) if (!next[key]) delete next[key];
+    onDeclare(name, next);
+  };
+
+  return (
+    <div className="drawing-variables">
+      <h4>Inputs · set by each question</h4>
+      {inputs.length === 0 ? (
+        <p className="drawing-muted">
+          None yet. Add one below, or type <code>{"{{name}}"}</code> in a label, e.g. <code>{"{{mass}} kg"}</code>.
+        </p>
+      ) : (
+        <ul className="drawing-variable-rows">
+          {inputs.map((name) => {
+            const info = declarationOf(document, name);
+            return (
+              <li key={name}>
+                <div className="drawing-variable-row">
+                  <code title={info.label}>{name}</code>
+                  <input
+                    aria-label={`Preview value of ${name}`}
+                    value={values[name] ?? ""}
+                    placeholder="value"
+                    onChange={(event) => onValue(name, event.target.value)}
+                  />
+                  <input
+                    aria-label={`Units of ${name}`}
+                    className="drawing-variable-units"
+                    defaultValue={info.units ?? ""}
+                    key={`u-${info.units ?? ""}`}
+                    placeholder="units"
+                    onBlur={(event) => event.target.value.trim() !== (info.units ?? "") && updateInput(name, { units: event.target.value.trim() })}
+                  />
+                  {!used.has(name) ? (
+                    <button type="button" className="drawing-link-button" title={`Remove ${name} (nothing uses it)`} onClick={() => onDeclare(name, null)}>
+                      ✕
+                    </button>
+                  ) : null}
+                </div>
+                <input
+                  aria-label={`Label of ${name}`}
+                  className="drawing-variable-label"
+                  defaultValue={info.label ?? ""}
+                  key={`l-${info.label ?? ""}`}
+                  placeholder="Label for the question (optional)"
+                  onBlur={(event) => event.target.value.trim() !== (info.label ?? "") && updateInput(name, { label: event.target.value.trim() })}
+                />
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      <form
+        className="drawing-variable-add"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const name = newInput.trim();
+          const problem = nameProblem(name);
+          setError(problem);
+          if (problem) return;
+          onDeclare(name, { name, sample: "1" });
+          onValue(name, "1");
+          setNewInput("");
+        }}
+      >
+        <input aria-label="New input name" value={newInput} placeholder="new input, e.g. force" onChange={(event) => setNewInput(event.target.value)} />
+        <button type="submit" disabled={!newInput.trim()}>
+          Add input
+        </button>
+      </form>
+
+      <h4>Derived · worked out from the inputs</h4>
+      {derived.length === 0 ? (
+        <p className="drawing-muted">
+          e.g. <code>Fx = force * cos(angle)</code> for a component arrow or a label. They follow whenever a question's values change.
+        </p>
+      ) : (
+        <ul className="drawing-variable-rows">
+          {derived.map((variable, index) => (
+            <DerivedRow
+              key={variable.name}
+              variable={variable}
+              earlier={[...inputs, ...derived.slice(0, index).map((item) => item.name)]}
+              value={values[variable.name] ?? ""}
+              onChange={(next) => onDeclare(variable.name, next)}
+              onRemove={used.has(variable.name) ? null : () => onDeclare(variable.name, null)}
+            />
+          ))}
+        </ul>
+      )}
+      <form
+        className="drawing-variable-add"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const name = newDerived.name.trim();
+          const formula = newDerived.formula.trim();
+          // A name already typed as {{name}} somewhere can become derived.
+          const problem =
+            nameProblem(name, true) ?? derivedFormulaError(formula, [...inputs.filter((input) => input !== name), ...derived.map((item) => item.name)]);
+          setError(problem);
+          if (problem) return;
+          onDeclare(name, { name, formula });
+          setNewDerived({ name: "", formula: "" });
+        }}
+      >
+        <input aria-label="New derived name" value={newDerived.name} placeholder="name, e.g. Fx" onChange={(event) => setNewDerived((current) => ({ ...current, name: event.target.value }))} />
+        <input
+          aria-label="New derived formula"
+          className="drawing-formula"
+          value={newDerived.formula}
+          placeholder="formula, e.g. force * cos(angle)"
+          spellCheck={false}
+          onChange={(event) => setNewDerived((current) => ({ ...current, formula: event.target.value }))}
+        />
+        <button type="submit" disabled={!newDerived.name.trim() || !newDerived.formula.trim()}>
+          Add derived
+        </button>
+      </form>
+      {error ? <p className="drawing-error">{error}</p> : null}
+      <p className="drawing-muted">
+        Values here are only a preview. A question attaching this drawing sets the inputs; fields that take a variable offer these names.
+      </p>
+    </div>
+  );
+}
+
+/** One derived variable: its formula (checked against the names before it),
+ *  its current value, and an optional "show as" rounding. */
+function DerivedRow({
+  variable,
+  earlier,
+  value,
+  onChange,
+  onRemove,
+}: {
+  variable: DeclaredVariable;
+  earlier: string[];
+  value: string;
+  onChange: (next: DeclaredVariable) => void;
+  onRemove: (() => void) | null;
+}) {
+  const [formula, setFormula] = useState(variable.formula ?? "");
+  useEffect(() => setFormula(variable.formula ?? ""), [variable.formula]);
+  const error = derivedFormulaError(formula, earlier);
+  const show = variable.show;
+  return (
+    <li>
+      <div className="drawing-variable-row">
+        <code>{variable.name}</code>
+        <span aria-hidden="true">=</span>
+        <input
+          aria-label={`Formula for ${variable.name}`}
+          className="drawing-formula"
+          value={formula}
+          spellCheck={false}
+          onChange={(event) => setFormula(event.target.value)}
+          onBlur={() => !error && formula.trim() !== variable.formula && onChange({ ...variable, formula: formula.trim() })}
+          onKeyDown={(event) => event.key === "Enter" && (event.target as HTMLInputElement).blur()}
+        />
+        {onRemove ? (
+          <button type="button" className="drawing-link-button" title={`Remove ${variable.name} (nothing uses it)`} onClick={onRemove}>
+            ✕
+          </button>
+        ) : null}
+      </div>
+      {error ? <span className="drawing-error">{error}</span> : null}
+      <div className="drawing-variable-row drawing-variable-show">
+        <span className="drawing-derived-value">
+          → <strong>{value || "0"}</strong>
+          {variable.units ? ` ${variable.units}` : ""}
+        </span>
+        <select
+          aria-label={`Show ${variable.name} as`}
+          value={show?.kind ?? "auto"}
+          onChange={(event) => {
+            const kind = event.target.value;
+            const { show: _show, ...rest } = variable;
+            onChange(kind === "auto" ? rest : { ...rest, show: { kind: kind as "decimals" | "sig", places: kind === "sig" ? 3 : 1 } });
+          }}
+        >
+          <option value="auto">As calculated</option>
+          <option value="decimals">Decimal places</option>
+          <option value="sig">Significant figures</option>
+        </select>
+        {show ? (
+          <input
+            aria-label={show.kind === "sig" ? "Significant figures" : "Decimal places"}
+            className="drawing-variable-places"
+            type="number"
+            min={show.kind === "sig" ? 1 : 0}
+            max={10}
+            value={show.places}
+            onChange={(event) => {
+              const places = Math.max(show.kind === "sig" ? 1 : 0, Math.min(10, Math.trunc(Number(event.target.value) || 0)));
+              onChange({ ...variable, show: { ...show, places } });
+            }}
+          />
+        ) : null}
+      </div>
+    </li>
+  );
 }
 
 function SidebarSection({
@@ -4403,6 +4738,20 @@ function withListAttr(attrs: Record<string, string>, name: string, values: strin
 
 /** The preview values written into the saved file (data-nexam-preview), so
  *  the bank's asset thumbnails show a drawing rather than {{placeholders}}. */
+/** Declared inputs take the current preview value as their sample, which a
+ *  question attaching the drawing starts from. */
+function withSamples(document: SceneDocument, values: PreviewValues): SceneDocument {
+  if (!document.variables) return document;
+  return {
+    ...document,
+    variables: document.variables.map((variable) =>
+      isDerived(variable) || values[variable.name] === undefined || values[variable.name].trim() === ""
+        ? variable
+        : { ...variable, sample: values[variable.name].trim() },
+    ),
+  };
+}
+
 function withSavedPreview(document: SceneDocument, values: PreviewValues): SceneDocument {
   const used = new Set(listVariables(document));
   const entries = Object.entries(values)

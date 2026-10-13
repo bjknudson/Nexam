@@ -29,3 +29,9 @@
 - **Status:** accepted
 - **Decision:** include SVG variable maps in asset metadata at launch.
 - **Why:** enables future template workflows without schema breakage.
+
+## ADR-006: Question variables drive attached drawings
+
+- **Status:** accepted (2026-10-12)
+- **Decision:** questions get an optional `variables` map (`{"force": "40"}`). An attached SVG input takes the question's value of the same name; an attachment's `svg_variables` entry overrides it and may refer to the question's variables (`"{{force}}"`, `"{{calc: 2 * force}}"`). Drawings declare their inputs and derived variables in a `<metadata id="nexam-variables">` block inside the SVG.
+- **Why:** one place for a question version's values, so a typed or AI-edited variation changes the question and its drawings together. Additive: banks without `variables` load and render unchanged, and existing `svg_variables` keep working as before. See "Question-driven variables" in docs/svg-editor-plan.md.

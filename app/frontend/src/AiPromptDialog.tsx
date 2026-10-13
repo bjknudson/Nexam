@@ -15,7 +15,9 @@ function buildPromptTemplate(label: string): string {
 
 Instructions: <describe the change you want here>
 
-Return the complete, valid JSON for the ${label} only, keeping the same structure and keys. Do not add commentary or markdown formatting around it.`;
+Return the complete, valid JSON for the ${label} only, keeping the same structure and keys. Do not add commentary or markdown formatting around it.${label === "question" ? `
+
+If the question has a "variables" block, put new values there: attached drawings take them by name, so keep the variable names, and keep any {{…}} references in the attachments' "svg_variables" as they are. Update the prompt and answers to match the new values.` : ""}`;
 }
 
 /** Lets a teacher hand a question or test off to an outside AI assistant

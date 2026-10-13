@@ -5,6 +5,10 @@
 // should be able to read the saved file.
 
 import { hasMath, mathToSvg } from "./mathText";
+import { declarationsJson, parseDeclarations, type DeclaredVariable } from "./variables";
+
+/** The <metadata> block holding the drawing's declared variables. */
+const VARIABLES_ID = "nexam-variables";
 import {
   SHAPE_KINDS,
   newElementKey,
@@ -30,6 +34,7 @@ export function parseSvg(source: string): ParseResult {
 
   const passthroughTags = new Set<string>();
   const serializer = new XMLSerializer();
+  let variables: DeclaredVariable[] | undefined;
 
   const readAttrs = (element: Element, skip: string[] = []): Record<string, string> => {
     const attrs: Record<string, string> = {};
@@ -55,6 +60,9 @@ export function parseSvg(source: string): ParseResult {
         } else {
           elements.push({ key: newElementKey(), kind, attrs: readAttrs(child) });
         }
+      } else if (tag === "metadata" && child.getAttribute("id") === VARIABLES_ID && parent === root) {
+        // The drawing's declared variables, kept as data rather than an element.
+        variables = parseDeclarations(child.textContent ?? "");
       } else if (tag === "g") {
         elements.push({
           key: newElementKey(),
@@ -77,14 +85,19 @@ export function parseSvg(source: string): ParseResult {
     return elements;
   };
 
+  const rootAttrs = readAttrs(root, ["xmlns"]);
+  const elements = readChildren(root);
   return {
-    document: { rootAttrs: readAttrs(root, ["xmlns"]), elements: readChildren(root) },
+    document: variables && variables.length > 0 ? { rootAttrs, elements, variables } : { rootAttrs, elements },
     passthroughTags: [...passthroughTags],
   };
 }
 
 export function serializeSvg(document: SceneDocument): string {
   const lines = [`<svg xmlns="${SVG_NS}"${formatAttrs(document.rootAttrs)}>`];
+  if (document.variables && document.variables.length > 0) {
+    lines.push(`  <metadata id="${VARIABLES_ID}">${escapeXml(declarationsJson(document.variables))}</metadata>`);
+  }
   writeElements(document.elements, 1, lines);
   lines.push("</svg>");
   return `${lines.join("\n")}\n`;

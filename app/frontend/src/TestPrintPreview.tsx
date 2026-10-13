@@ -726,10 +726,10 @@ function TestPrintPreview({ testId, snapshotId, onClose }: TestPrintPreviewProps
   useEffect(() => {
     if (!selectedTest) return;
 
-    const entries: Array<{ key: string; asset: AssetModel }> = [];
+    const entries: Array<{ key: string; asset: AssetModel & { question_variables: Record<string, string> } }> = [];
     for (const question of selectedTest.questions) {
       question.assets.forEach((asset, index) => {
-        entries.push({ key: assetRenderKey(question.id, index), asset });
+        entries.push({ key: assetRenderKey(question.id, index), asset: { ...asset, question_variables: question.variables ?? {} } });
       });
     }
 

@@ -260,6 +260,81 @@ Added 2026-10-11. A **partial circle** whose sweep, and optionally its radius, i
 - A backend render with question values.
 - Round trip: load, then save, gives identical markup.
 
+## Question-driven variables
+
+Added 2026-10-12. **The question's JSON holds the values, and everything else refers to them by name.** A variation, whether typed or made with the AI copy-paste flow, means changing one `variables` block; the prompt, the answer choices, the attached drawing and any choice images follow.
+
+Why: today each attachment carries its own `svg_variables`, typed separately from the prompt and answers. An AI (or a teacher) changing "40 N" in the prompt has to find and change the same value in every attachment, under names like `arrow_length`, and recompute the answers. That's why the connection between question and drawing is inconsistent.
+
+### 1. The drawing declares its inputs (drawing first)
+
+Built 2026-10-12:
+- **Saved form:** `drawing/variables.ts` and `app/backend/svg_variables.py` read and write the `<metadata>` block.
+- **Renderers:** both work out derived variables before filling placeholders. The backend's list of values a question supplies includes declared inputs and names used in formulas, and leaves out derived ones.
+- **`round(x, n)` and `sig(x, n)`** round half away from zero. As the whole expression they keep trailing zeros, in both evaluators.
+- **The Variables panel** has **Inputs · set by each question** (value, units, optional label; unused ones can be removed) and **Derived · worked out from the inputs** (formula checked against earlier names, the current value, and *Show as*: as calculated, decimal places or significant figures). Edits can be undone.
+- **Linking:**
+  - Every variable-name field suggests all the drawing's variables.
+  - The Ω palette has a **Variables** tab that inserts `{{name}}`.
+  - A slider for a derived variable shows its value and formula instead of a slider.
+- **Search:** declared names and labels are searchable in Bank Assets. Saving stores each declared input's preview value as its sample.
+
+- **The Variables panel lists the drawing's inputs:** name, optional label and units, and a sample value (e.g. `force`, N, 40; `angle`, °, 30). Placeholders already used in the drawing appear there automatically; declaring units and labels is optional.
+- **Fields pick from them.** Every field that takes a variable offers a menu of the drawing's inputs and derived variables (typing still works). A force arrow's angle and the variable arc marking it both pick `angle`, so they always move together. This covers linking without fields referencing each other.
+- **Derived variables** are defined in the drawing: `Fx = force * cos(angle)`. Each may use the inputs and earlier derived variables, with `+ − * /`, parentheses, `min`, `max`, `sin`, `cos`, `round` and `sig`.
+  - They're worked out whenever the drawing renders (backend and editor preview), so they follow when the question's values change.
+  - A question never sets them; they aren't listed among the values a question must supply.
+  - **Show as (optional):** *as calculated* (default), *N decimals* or *N significant figures*. Trailing zeros are kept (3 s.f. of 30 is "30.0"), which chemistry needs. It's tucked into the derived variable's row, and nothing changes unless it's chosen.
+- **Stored in the SVG** as a readable JSON block, `<metadata id="nexam-variables">{"variables": [...]}</metadata>`, which other SVG tools ignore. Drawings without it work as before.
+
+### 2. The question holds the values
+
+Built 2026-10-12:
+- **Format:** `variables` on `QuestionModel` (ADR-006, `docs/schema.md`).
+- **Rendering:** `question_variables` on asset inspection, merged by `resolve_asset_variables` (backend) and `resolveAssetVariables` (frontend) for the question editor, print/PDF, Bank Assets thumbnails and the drawing window's starting preview.
+- **Inspection** returns `svg_inputs` (label, units, sample).
+- **Attaching or uploading a drawing** adds its inputs with their samples (only on attach, so opening an older question never changes it).
+- **The question editor's Variables section** lists each value with units and which drawings use it, flags inputs nothing sets, and lets variables be added and removed.
+  - Values an older drawing sets for itself show as "Set in the drawing: …", with **Use for every drawing**. That moves the value into the question's variables and clears it from the drawings that set the same value, so older questions can be moved over one value at a time.
+- **Each drawing's own fields** show "from question: 40" and override only when filled in.
+- **The AI prompt** asks for new values in `variables`, with names and `{{…}}` references kept.
+- **Also fixed:** SVGs are read as UTF-8 on every OS ("°" in a drawing could garble on Windows).
+- **Not yet:** choice images still display the raw file without values; that's step 3.
+
+Refined 2026-10-12, from building a force diagram by hand:
+
+- **Linking in one step:**
+  - A setting that can be fixed or a variable (an arrow's angle, an arc's start and radius) is one menu: **Fixed number**, any of the drawing's variables, or **New variable…**. It leaves out variables it can't share, such as the arrow's own length.
+  - Every variable-name field (length, sweep, …) has a **Use one of the drawing's variables…** menu, so a new arrow links to `force` with one pick and no leftover `arrow_length`.
+- **Saving a drawing opened from a question adds its new inputs to that question** (with their sample values), unless the question or that attachment already sets them.
+  - It goes through the main window when that window has the question open, so its autosave keeps the change, and through the API otherwise.
+  - The drawing window says what it added ("Added 1 new variable to q_fr_0001…").
+
+Later (noted 2026-10-12):
+
+- **Fill from samples:** a one-click button in the question's Variables section that fills every unset input with its drawing's sample value.
+- **Rename across the drawing:** the drawing's Variables panel offers to rename a variable everywhere it's used ("rename `arrow_length` → `force`, used by 1 arrow"), for drawings built before linking by menu, or when a name should change.
+
+- An optional **`variables`** map on the question: `"variables": {"force": "40", "angle": "30"}` (strings, like `svg_variables`). This is an additive schema field: banks without it load unchanged. It needs noting in `docs/schema.md` and `docs/decisions.md`.
+- **Attaching a drawing** adds any of its inputs the question doesn't have yet, with the drawing's sample values.
+- **Matched by name:** a drawing input named `force` takes the question's `force`. Typing values per attachment is no longer needed.
+- **Attachments can map or adjust** with references in `svg_variables`: `"arrow_length": "{{force}}"` (a different name), or `"slope": "{{calc: 2 * slope}}"` (an adjusted value, e.g. a distractor image among the choices). Plain values still work, and win over the question's.
+- The question editor shows a **Variables** section and warns about mismatches (a drawing input the question doesn't set, or a question variable nothing uses).
+
+### 3. Text and answers use the same variables
+
+- The prompt, choices, explanation and answers may contain `{{force}}` and `{{calc: …}}`, filled in for preview, print and PDF export. `round(x, n)` and `sig(x, n)` format numbers for display.
+- **Answers recompute:** the correct choice `{{calc: round(force * cos(angle), 1)}} N`, and distractors written the same way (`sin` for `cos`), change with the values. Literal text still works.
+- **Choice images** use adjusted references as above, so a graph distractor changes with the question.
+- The answer key and print path use the filled-in values.
+- **The AI prompt** asks the AI to change the `variables` block and keep the `{{…}}` references.
+
+### Order
+
+1. **Drawing:** declared inputs, derived variables with Show as, pickers, `round`/`sig`, and evaluation in both renderers.
+2. **Question:** the `variables` field, matching by name, references in attachments, the editor section and warnings.
+3. **Text and answers:** templated prompt, choices and answers; choice images; answer key and print; the AI prompt line.
+
 ## Text: symbols and math
 
 Added 2026-10-11 and built the same day in `drawing/mathText.ts` (converter) and `drawing/SymbolPicker.tsx` (Ω palette and the "Means:" KaTeX hint), with save and load in `svgIO.ts`. It works in text items and in every label field.

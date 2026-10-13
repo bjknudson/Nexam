@@ -79,3 +79,17 @@ def test_math_text_is_indexed_as_its_plain_source() -> None:
     assert "F net = N" in terms
     assert "F g weight" in terms
     assert "net" not in terms
+
+
+def test_declared_variables_are_searchable_but_their_json_is_not() -> None:
+    source = (
+        '<svg xmlns="http://www.w3.org/2000/svg"><metadata id="nexam-variables">'
+        '{"variables": [{"name": "force", "label": "Applied force", "units": "N"}]}'
+        "</metadata><text>{{force}} N</text></svg>"
+    )
+
+    terms = summarize_svg(source).search_terms
+
+    assert "Applied force" in terms
+    assert "force" in terms
+    assert not any("variables" in term for term in terms)

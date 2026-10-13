@@ -6,6 +6,7 @@ import katex from "katex";
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 
 import { mathToSvg, splitSegments } from "./mathText";
+import { useDrawingVariables } from "./variableContext";
 
 interface SymbolGroup {
   name: string;
@@ -27,7 +28,7 @@ const GROUPS: SymbolGroup[] = [
       { insert: "$x_{|}$", label: "x₁", title: "Subscript: $x_{…}$" },
       { insert: "$x^{|}$", label: "x²", title: "Superscript: $x^{…}$" },
       { insert: "$\\vec{|}$", label: "F⃗", title: "Vector: $\\vec{F}$" },
-      { insert: "$\\frac{|}{}$", label: "a/b", title: "Fraction (inline in drawings): $\\frac{a}{b}$" },
+      { insert: "$\\frac{|}{}$", label: "a/b", title: "Stacked fraction: $\\frac{a}{b}$" },
       { insert: "$\\sqrt{|}$", label: "√x", title: "Square root: $\\sqrt{x}$" },
       { insert: "$\\theta$", label: "\\θ", title: "Greek letter by name: $\\theta$" },
       { insert: "$\\Delta |$", label: "Δx", title: "Change in: $\\Delta x$" },
@@ -122,7 +123,15 @@ export default function SymbolPicker({
   }, [open]);
 
   const recent = readRecent();
-  const groups: SymbolGroup[] = recent.length > 0 ? [{ name: "Recent", items: recent.map((insert) => ({ insert })) }, ...GROUPS] : GROUPS;
+  // The drawing's own variables come first, so a label can show {{force}}.
+  const { names } = useDrawingVariables();
+  const variableGroup: SymbolGroup[] =
+    names.length > 0 ? [{ name: "Variables", items: names.map((name) => ({ insert: `{{${name}}}`, label: name, title: `Insert {{${name}}}` })) }] : [];
+  const groups: SymbolGroup[] = [
+    ...variableGroup,
+    ...(recent.length > 0 ? [{ name: "Recent", items: recent.map((insert) => ({ insert })) }] : []),
+    ...GROUPS,
+  ];
   const shown = groups.find((item) => item.name === group) ?? groups[0];
 
   return (
@@ -155,7 +164,7 @@ export default function SymbolPicker({
               </button>
             ))}
           </div>
-          <div className={`drawing-symbols-grid ${shown.name === "LaTeX" ? "wide" : ""}`}>
+          <div className={`drawing-symbols-grid ${shown.name === "LaTeX" || shown.name === "Variables" ? "wide" : ""}`}>
             {shown.items.map((item) => (
               <button
                 key={item.insert}
@@ -163,7 +172,8 @@ export default function SymbolPicker({
                 title={item.title ?? item.insert}
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => {
-                  remember(item.insert);
+                  // A drawing's variables are its own, not "recent symbols".
+                  if (shown.name !== "Variables") remember(item.insert);
                   onInsert(item.insert);
                   fieldRef.current?.focus();
                 }}

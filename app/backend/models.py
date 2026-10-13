@@ -36,12 +36,26 @@ class AssetInspectionRequest(BaseModel):
     path: str
     kind: str
     svg_variables: dict[str, str] = Field(default_factory=dict)
+    # The question's own variables. A drawing input takes the question's value
+    # of the same name; svg_variables override it and may refer to the
+    # question's variables ("{{force}}", "{{calc: 2 * force}}").
+    question_variables: dict[str, str] = Field(default_factory=dict)
+
+
+class SvgInputModel(BaseModel):
+    """A value a drawing needs from its question, with what the drawing declares about it."""
+
+    name: str
+    label: str | None = None
+    units: str | None = None
+    sample: str | None = None
 
 
 class AssetInspectionResponseModel(BaseModel):
     path: str
     kind: str
     svg_placeholders: list[str] = Field(default_factory=list)
+    svg_inputs: list[SvgInputModel] = Field(default_factory=list)
     rendered_svg: str | None = None
 
 
@@ -742,6 +756,9 @@ class QuestionModel(BaseModel):
     sample_solution: str | None = None
     exemplar_answer: str | None = None
     assets: list[AssetModel] = Field(default_factory=list)
+    # Values that drive the question's drawings by name (and, later, its text
+    # and answers). Optional: banks without it load unchanged.
+    variables: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("difficulty")
     @classmethod

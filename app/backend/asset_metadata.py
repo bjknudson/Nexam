@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from xml.etree import ElementTree
 
+from .svg_variables import read_declarations
+
 PLACEHOLDER = re.compile(r"\{\{[^{}]*\}\}")
 WORD_SPLIT = re.compile(r"[^\w'’-]+", re.UNICODE)
 MAX_TERMS = 200
@@ -118,6 +120,13 @@ def summarize_svg(source: str) -> SvgSummary:
                 add(plain_math(value))
             elif value:
                 add(value)
+
+    # Declared variables (svg_variables.py): their names and labels, so
+    # "applied force" finds a drawing driven by it.
+    for item in read_declarations(source):
+        add(str(item["name"]))
+        if isinstance(item.get("label"), str):
+            add(item["label"])
 
     topics = split_list(root.get("data-nexam-topics"))
     tags = split_list(root.get("data-nexam-tags"))
