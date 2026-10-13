@@ -226,6 +226,11 @@ jobs:
         # are about to modify, and notarizing inside `tauri build` hides
         # Apple's rejection detail behind a generic bundling error.
         working-directory: app/frontend
+        env:
+          # Where Help ▸ Send Feedback emails beta reports (a repository
+          # variable, so the address isn't in the code). Unset, testers can
+          # still copy a report. See docs/beta-feedback.md.
+          VITE_FEEDBACK_EMAIL: ${{ vars.FEEDBACK_EMAIL }}
         run: npm run tauri:build
 
       - name: Restore the backend's framework symlinks

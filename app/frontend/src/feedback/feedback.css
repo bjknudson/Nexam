@@ -1,0 +1,196 @@
+/* Send feedback and What's new (beta). Builds on the Settings modal styles. */
+
+.feedback-modal {
+  width: min(560px, 94vw);
+  max-height: 88vh;
+}
+
+.feedback-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.25rem 1.25rem 1.25rem;
+}
+
+.feedback-body label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.feedback-body input:not([type="checkbox"]),
+.feedback-body select,
+.feedback-body textarea {
+  font: inherit;
+  font-weight: 400;
+}
+
+.feedback-body textarea {
+  /* The app's textareas are 120px tall by default; these size by their rows. */
+  min-height: 0;
+  padding: 0.5rem 0.65rem;
+  resize: vertical;
+}
+
+.feedback-kinds {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.4rem;
+}
+
+.feedback-kinds button {
+  font-weight: 600;
+}
+
+.feedback-hint {
+  margin: -0.35rem 0 0;
+  font-size: 0.85rem;
+  color: #64748b;
+}
+
+.feedback-optional {
+  font-weight: 400;
+  color: #64748b;
+}
+
+.feedback-screenshot > button {
+  align-self: flex-start;
+}
+
+.feedback-screenshot-chosen {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  padding: 0.5rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+}
+
+.feedback-screenshot-chosen img {
+  width: 120px;
+  max-height: 90px;
+  object-fit: contain;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.feedback-screenshot-chosen > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: #475569;
+}
+
+.feedback-screenshot-chosen .link-button {
+  align-self: flex-start;
+}
+
+.feedback-body label.feedback-check {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-weight: 400;
+}
+
+.feedback-system {
+  display: block;
+  font-size: 0.8rem;
+  color: #64748b;
+}
+
+.feedback-preview summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: #2563eb;
+}
+
+.feedback-preview pre {
+  margin: 0.5rem 0 0;
+  padding: 0.6rem;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 0.8rem;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+
+.feedback-error {
+  margin: 0;
+  color: #b91c1c;
+  font-size: 0.85rem;
+}
+
+.feedback-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding-top: 0.25rem;
+}
+
+.feedback-destination {
+  flex: 1 1 12rem;
+  font-size: 0.8rem;
+  color: #64748b;
+}
+
+.feedback-modal button.primary {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.feedback-modal button.primary:disabled {
+  background: #93c5fd;
+  border-color: #93c5fd;
+  cursor: not-allowed;
+}
+
+.feedback-sent p {
+  margin: 0;
+}
+
+.feedback-attach-note {
+  padding: 0.5rem 0.65rem;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  border-radius: 8px;
+}
+
+.whats-new-release h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.whats-new-release h3 span {
+  font-weight: 400;
+  color: #64748b;
+}
+
+.whats-new-release h4 {
+  margin: 0.5rem 0 0;
+  font-size: 0.85rem;
+  color: #475569;
+}
+
+.whats-new-release ul {
+  margin: 0.35rem 0 0;
+  padding-left: 1.2rem;
+  display: grid;
+  gap: 0.25rem;
+}
+
+/* The top bar's Feedback button during the beta. */
+.feedback-topbar-button {
+  border-color: #f59e0b;
+  background: #fffbeb;
+}
