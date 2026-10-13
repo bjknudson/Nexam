@@ -4,8 +4,11 @@
   "topic": "Mechanics",
   "subtopic": "Kinematics",
   "difficulty": 2,
-  "prompt": "A cart starts from rest and accelerates at 2 m/s^2 for 3 s. What is its final speed?",
-  "tags": ["motion", "acceleration"],
+  "prompt": "A cart starts from rest and accelerates at {{a}} m/s^2 for {{t}} s. What is its final speed?",
+  "tags": [
+    "motion",
+    "acceleration"
+  ],
   "standards": [
     {
       "standard_id": "PHY-KIN-01"
@@ -15,9 +18,24 @@
   "points": 1,
   "status": "draft",
   "answer": {
-    "choices": ["3 m/s", "6 m/s", "9 m/s", "12 m/s"],
+    "choices": [
+      "{{t}} m/s",
+      "{{calc: a * t}} m/s",
+      "{{calc: 0.5 * a * t * t}} m/s",
+      "{{calc: 2 * a * t}} m/s"
+    ],
     "correct_choice_index": 1
   },
-  "explanation": "Use v = u + at with u = 0, a = 2, t = 3.",
-  "assets": []
+  "explanation": "Use v = u + at with u = 0, a = {{a}}, t = {{t}}, so v = {{calc: a * t}} m/s.",
+  "assets": [
+    {
+      "path": "assets/cart-accelerating.svg",
+      "kind": "svg",
+      "svg_variables": {}
+    }
+  ],
+  "variables": {
+    "a": "2",
+    "t": "3"
+  }
 }

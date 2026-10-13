@@ -4,7 +4,7 @@
   "topic": "Electricity",
   "subtopic": "Series circuits",
   "difficulty": 5,
-  "prompt": "A circuit has two resistors in series, $R_1=12\\ \\Omega$ and $R_2=18\\ \\Omega$, connected to a $15\\text{ V}$ battery.\n\nFind the equivalent resistance, the circuit current, and the voltage drop across each resistor. Use $R_{eq}=R_1+R_2$, $V=IR$, and explain why $V_1+V_2$ should equal the battery voltage.",
+  "prompt": "A circuit has two resistors in series, $R_1={{R1}}\\ \\Omega$ and $R_2={{R2}}\\ \\Omega$, connected to a ${{V}}\\text{ V}$ battery.\n\nFind the equivalent resistance, the circuit current, and the voltage drop across each resistor. Use $R_{eq}=R_1+R_2$, $V=IR$, and explain why $V_1+V_2$ should equal the battery voltage.",
   "tags": [
     "electricity",
     "series-circuit",
@@ -21,7 +21,7 @@
   "status": "draft",
   "teacher_notes": "Longer equation-heavy FR item for section timing and response space.",
   "answer": null,
-  "explanation": "$R_{eq}=12+18=30\\ \\Omega$. The current is $I=\\frac{V}{R_{eq}}=\\frac{15}{30}=0.50\\text{ A}$. $V_1=IR_1=(0.50)(12)=6.0\\text{ V}$ and $V_2=IR_2=(0.50)(18)=9.0\\text{ V}$. The drops add to $15\\text{ V}$, matching the battery.",
+  "explanation": "$R_{eq}={{R1}}+{{R2}}={{calc: R1 + R2}}\\ \\Omega$. The current is $I=\\frac{V}{R_{eq}}=\\frac{{{V}}}{{{calc: R1 + R2}}}={{calc: round(V / (R1 + R2), 2)}}\\text{ A}$. $V_1=IR_1=({{calc: round(V / (R1 + R2), 2)}})({{R1}})={{calc: round(V * R1 / (R1 + R2), 1)}}\\text{ V}$ and $V_2=IR_2=({{calc: round(V / (R1 + R2), 2)}})({{R2}})={{calc: round(V * R2 / (R1 + R2), 1)}}\\text{ V}$. The drops add to ${{V}}\\text{ V}$, matching the battery.",
   "rubric": [
     {
       "criterion": "Computes $R_{eq}$ for series resistors",
@@ -44,7 +44,18 @@
       "points": 1.5
     }
   ],
-  "sample_solution": "$R_{eq}=30\\ \\Omega$, so $I=15\\text{ V}/30\\ \\Omega=0.50\\text{ A}$. Then $V_1=0.50(12)=6.0\\text{ V}$ and $V_2=0.50(18)=9.0\\text{ V}$.",
-  "exemplar_answer": "The two resistors are in series, so their resistances add to $30\\ \\Omega$. The same current flows through both resistors, giving $I=0.50\\text{ A}$. The voltage drops are $6.0\\text{ V}$ and $9.0\\text{ V}$, and these add to $15\\text{ V}$ because the battery energy per charge is used across the two resistors.",
-  "assets": []
+  "sample_solution": "$R_{eq}={{calc: R1 + R2}}\\ \\Omega$, so $I={{V}}\\text{ V}/{{calc: R1 + R2}}\\ \\Omega={{calc: round(V / (R1 + R2), 2)}}\\text{ A}$. Then $V_1={{calc: round(V / (R1 + R2), 2)}}({{R1}})={{calc: round(V * R1 / (R1 + R2), 1)}}\\text{ V}$ and $V_2={{calc: round(V / (R1 + R2), 2)}}({{R2}})={{calc: round(V * R2 / (R1 + R2), 1)}}\\text{ V}$.",
+  "exemplar_answer": "The two resistors are in series, so their resistances add to ${{calc: R1 + R2}}\\ \\Omega$. The same current flows through both resistors, giving $I={{calc: round(V / (R1 + R2), 2)}}\\text{ A}$. The voltage drops are ${{calc: round(V * R1 / (R1 + R2), 1)}}\\text{ V}$ and ${{calc: round(V * R2 / (R1 + R2), 1)}}\\text{ V}$, and these add to ${{V}}\\text{ V}$ because the battery energy per charge is used across the two resistors.",
+  "assets": [
+    {
+      "path": "assets/series-circuit.svg",
+      "kind": "svg",
+      "svg_variables": {}
+    }
+  ],
+  "variables": {
+    "R1": "12",
+    "R2": "18",
+    "V": "15"
+  }
 }

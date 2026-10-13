@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="318" height="200" viewBox="0 0 318 200" data-nexam-topics="Circuits; Ohm's law" data-nexam-preview="V=9.0; I=0.25">
+  <metadata id="nexam-variables">{"variables": [
+  {"name":"V","label":"Battery voltage","units":"V","sample":"9.0"},
+  {"name":"I","label":"Current","units":"A","sample":"0.25"}
+]}</metadata>
+  <line x1="60" y1="50" x2="120" y2="50" stroke="#000000" stroke-width="1.5"/>
+  <g data-nexam-stamp="Resistor" data-nexam-stamp-category="Circuits" data-x="160" data-y="50" data-rotation="0" data-scale="1" data-origin-x="40" data-origin-y="10" data-width="80" data-height="20" transform="translate(160 50) translate(-40 -10)">
+    <polyline points="0,10 20,10 23.33,3 30,17 36.67,3 43.33,17 50,3 56.67,17 60,10 80,10" fill="none" stroke="#000000" stroke-width="1.5"/>
+  </g>
+  <line x1="200" y1="50" x2="260" y2="50" stroke="#000000" stroke-width="1.5"/>
+  <line x1="260" y1="50" x2="260" y2="160" stroke="#000000" stroke-width="1.5"/>
+  <line x1="260" y1="160" x2="60" y2="160" stroke="#000000" stroke-width="1.5"/>
+  <line x1="60" y1="160" x2="60" y2="132" stroke="#000000" stroke-width="1.5"/>
+  <g data-nexam-stamp="Battery" data-nexam-stamp-category="Circuits" data-x="58" data-y="100" data-rotation="-90" data-scale="1" data-origin-x="30" data-origin-y="20" data-width="60" data-height="40" transform="translate(58 100) rotate(-90) translate(-30 -20)">
+    <line x1="0" y1="22" x2="26" y2="22" stroke="#000000" stroke-width="1.5"/>
+    <line x1="26" y1="8" x2="26" y2="36" stroke="#000000" stroke-width="1.5"/>
+    <line x1="34" y1="15" x2="34" y2="29" stroke="#000000" stroke-width="3"/>
+    <line x1="34" y1="22" x2="60" y2="22" stroke="#000000" stroke-width="1.5"/>
+    <text x="16" y="12" font-size="12" font-family="sans-serif" text-anchor="middle" fill="#000000">+</text>
+  </g>
+  <line x1="60" y1="70" x2="60" y2="50" stroke="#000000" stroke-width="1.5"/>
+  <text x="160" y="30" font-size="14" font-family="sans-serif" fill="#000000" text-anchor="middle">R = ?</text>
+  <text x="84" y="104" font-size="14" font-family="sans-serif" fill="#000000">V = {{V}} V</text>
+  <text x="160" y="148" font-size="14" font-family="sans-serif" fill="#000000" text-anchor="middle">I = {{I}} A</text>
+  <g data-nexam-control="variable-arrow" data-variable="I" data-x="140" data-y="160" data-angle="180" data-angle-convention="ccw" data-scale="80" data-heads="end" fill="none" stroke="#000000" stroke-width="1.5" data-max-length="60">
+    <line x1="140" y1="160" x2="{{calc: 147.8 - min(60, 80 * I)}}" y2="160"/>
+    <polygon points="{{calc: 140 - min(60, 80 * I)}},160 {{calc: 149.75 - min(60, 80 * I)}},155.63 {{calc: 149.75 - min(60, 80 * I)}},164.38" fill="#000000" stroke="none"/>
+    <g data-nexam-clamp-mark="true" opacity="{{calc: min(1, 1000 * max(80 * I - min(60, 80 * I), min(60, 80 * I) - 80 * I))}}" stroke="#000000" stroke-width="1.5" stroke-dasharray="none" fill="none">
+      <line x1="{{calc: 144.5 - 0.5 * min(60, 80 * I)}}" y1="164.33" x2="{{calc: 139.5 - 0.5 * min(60, 80 * I)}}" y2="155.67"/>
+      <line x1="{{calc: 140.5 - 0.5 * min(60, 80 * I)}}" y1="164.33" x2="{{calc: 135.5 - 0.5 * min(60, 80 * I)}}" y2="155.67"/>
+    </g>
+  </g>
+</svg>

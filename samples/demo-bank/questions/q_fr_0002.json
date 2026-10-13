@@ -4,7 +4,7 @@
   "topic": "Mechanics",
   "subtopic": "Newton's second law",
   "difficulty": 4,
-  "prompt": "A $12\\text{ kg}$ crate is pulled across a level floor by a horizontal force of $48\\text{ N}$. The coefficient of kinetic friction is $\\mu_k=0.20$.\n\nUse $F_f=\\mu_k mg$ and $\\sum F=ma$ to find the crate's acceleration. Show your work and include units.",
+  "prompt": "A ${{mass}}\\text{ kg}$ crate is pulled across a level floor by a horizontal force of ${{force}}\\text{ N}$. The coefficient of kinetic friction is $\\mu_k={{mu}}$.\n\nUse $F_f=\\mu_k mg$ and $\\sum F=ma$ to find the crate's acceleration. Show your work and include units.",
   "tags": [
     "forces",
     "friction",
@@ -21,7 +21,7 @@
   "status": "draft",
   "teacher_notes": "Good for testing free-response spacing and rubric display later.",
   "answer": null,
-  "explanation": "The friction force is $F_f=\\mu_kmg=(0.20)(12)(9.8)\\approx23.5\\text{ N}$. The net force is $48-23.5=24.5\\text{ N}$, so $a=\\frac{F_{net}}{m}=\\frac{24.5}{12}\\approx2.0\\text{ m/s}^2$.",
+  "explanation": "The friction force is $F_f=\\mu_kmg=({{mu}})({{mass}})(9.8)\\approx{{calc: round(mu * mass * 9.8, 1)}}\\text{ N}$. The net force is ${{force}}-{{calc: round(mu * mass * 9.8, 1)}}={{calc: round(force - mu * mass * 9.8, 1)}}\\text{ N}$, so $a=\\frac{F_{net}}{m}=\\frac{{{calc: round(force - mu * mass * 9.8, 1)}}}{{{mass}}}\\approx{{calc: round((force - mu * mass * 9.8) / mass, 1)}}\\text{ m/s}^2$.",
   "rubric": [
     {
       "criterion": "Computes friction force using $F_f=\\mu_kmg$",
@@ -40,7 +40,18 @@
       "points": 1.0
     }
   ],
-  "sample_solution": "$F_f=(0.20)(12\\text{ kg})(9.8\\text{ m/s}^2)=23.5\\text{ N}$. $F_{net}=48-23.5=24.5\\text{ N}$. $a=F_{net}/m=24.5/12=2.04\\text{ m/s}^2$.",
-  "exemplar_answer": "The normal force is $mg$, so kinetic friction is about $23.5\\text{ N}$. The applied force is larger than friction, leaving a net force of about $24.5\\text{ N}$. Dividing by $12\\text{ kg}$ gives $a\\approx2.0\\text{ m/s}^2$ in the direction of the pull.",
-  "assets": []
+  "sample_solution": "$F_f=({{mu}})({{mass}}\\text{ kg})(9.8\\text{ m/s}^2)={{calc: round(mu * mass * 9.8, 1)}}\\text{ N}$. $F_{net}={{force}}-{{calc: round(mu * mass * 9.8, 1)}}={{calc: round(force - mu * mass * 9.8, 1)}}\\text{ N}$. $a=F_{net}/m={{calc: round(force - mu * mass * 9.8, 1)}}/{{mass}}={{calc: round((force - mu * mass * 9.8) / mass, 2)}}\\text{ m/s}^2$.",
+  "exemplar_answer": "The normal force is $mg$, so kinetic friction is about ${{calc: round(mu * mass * 9.8, 1)}}\\text{ N}$. The applied force is larger than friction, leaving a net force of about ${{calc: round(force - mu * mass * 9.8, 1)}}\\text{ N}$. Dividing by ${{mass}}\\text{ kg}$ gives $a\\approx{{calc: round((force - mu * mass * 9.8) / mass, 1)}}\\text{ m/s}^2$ in the direction of the pull.",
+  "assets": [
+    {
+      "path": "assets/crate-friction-fbd.svg",
+      "kind": "svg",
+      "svg_variables": {}
+    }
+  ],
+  "variables": {
+    "mass": "12",
+    "force": "48",
+    "mu": "0.20"
+  }
 }

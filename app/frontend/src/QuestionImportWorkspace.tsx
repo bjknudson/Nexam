@@ -12,6 +12,7 @@ import {
   updateQuestionImportRow,
 } from "./api";
 import { MathTextPreview } from "./MathPreview";
+import { QuestionValuesContext } from "./questionValuesContext";
 import type { QuestionImportRowModel, QuestionImportStageModel } from "./types";
 
 type PendingFilter = "all" | "pending" | "needs_attention" | "selected" | "adopted";
@@ -1163,7 +1164,10 @@ export default function QuestionImportWorkspace() {
               </div>
 
               <div className="pending-render-preview">
-                <MathTextPreview text={getString(draftQuestion, "prompt")} />
+                {/* With the pasted question's own values, as it will appear. */}
+                <QuestionValuesContext.Provider value={variablesOf(draftQuestion)}>
+                  <MathTextPreview text={getString(draftQuestion, "prompt")} />
+                </QuestionValuesContext.Provider>
               </div>
 
               <details className="test-template-editor">
@@ -1210,4 +1214,11 @@ export default function QuestionImportWorkspace() {
       </div>
     </section>
   );
+}
+
+/** A pasted question's `variables` map (string values only), or null. */
+function variablesOf(question: unknown): Record<string, string> | null {
+  const variables = (question as { variables?: unknown } | null)?.variables;
+  if (!variables || typeof variables !== "object") return null;
+  return Object.fromEntries(Object.entries(variables as Record<string, unknown>).map(([name, value]) => [name, String(value)]));
 }

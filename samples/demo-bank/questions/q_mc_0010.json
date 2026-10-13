@@ -3,7 +3,7 @@
   "type": "multiple_choice",
   "topic": "Electricity",
   "difficulty": 3,
-  "prompt": "A resistor has current $I=0.25\\text{ A}$ when connected across a $9.0\\text{ V}$ battery. Using $V=IR$, what is the resistance?",
+  "prompt": "A resistor has current $I={{I}}\\text{ A}$ when connected across a ${{V}}\\text{ V}$ battery. Using $V=IR$, what is the resistance?",
   "subtopic": "Ohm's law",
   "tags": [
     "electricity",
@@ -22,16 +22,26 @@
   "teacher_notes": null,
   "answer": {
     "choices": [
-      "$2.25\\ \\Omega$",
-      "$8.75\\ \\Omega$",
-      "$18\\ \\Omega$",
-      "$36\\ \\Omega$"
+      "${{calc: round(V * I, 2)}}\\ \\Omega$",
+      "${{calc: round(V - I, 2)}}\\ \\Omega$",
+      "${{calc: round(V / I / 2)}}\\ \\Omega$",
+      "${{calc: round(V / I)}}\\ \\Omega$"
     ],
     "correct_choice_index": 3
   },
-  "explanation": "Solve $R=\\frac{V}{I}=\\frac{9.0\\text{ V}}{0.25\\text{ A}}=36\\ \\Omega$.",
+  "explanation": "Solve $R=\\frac{V}{I}=\\frac{{{V}}\\text{ V}}{{{I}}\\text{ A}}={{calc: round(V / I)}}\\ \\Omega$.",
   "rubric": [],
   "sample_solution": null,
   "exemplar_answer": null,
-  "assets": []
+  "assets": [
+    {
+      "path": "assets/ohms-law-circuit.svg",
+      "kind": "svg",
+      "svg_variables": {}
+    }
+  ],
+  "variables": {
+    "V": "9.0",
+    "I": "0.25"
+  }
 }

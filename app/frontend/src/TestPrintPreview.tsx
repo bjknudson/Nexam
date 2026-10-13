@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactElement } from "react";
 
 import { getAdministeredTest, getAssetFileUrl, inspectAssets, listTestDrafts } from "./api";
+import { QuestionValuesContext } from "./questionValuesContext";
 import { printCurrentWindow } from "./desktop";
 import { MathTextPreview } from "./MathPreview";
 import type {
@@ -55,6 +56,11 @@ function getPageSizeLabel(settings: TestPrintSettingsModel) {
 
 function assetRenderKey(questionId: string, index: number) {
   return `${questionId}::${index}`;
+}
+
+/** Choice images render separately from the question's figures. */
+function choiceRenderKey(questionId: string, choiceIndex: number | string) {
+  return `${questionId}::choice::${choiceIndex}`;
 }
 
 function QuestionAssetFigures({
@@ -585,7 +591,9 @@ function buildPrintBlocks({
     }
 
     return (
-      <article key={`${item.question_id ?? "question"}-${index}`} className="print-question-item">
+      // Its text shows this question's values ({{force}}, {{calc: …}}).
+      <QuestionValuesContext.Provider key={`${item.question_id ?? "question"}-${index}`} value={question?.variables ?? null}>
+      <article className="print-question-item">
         {showSectionHeader && section && question ? (
           <TemplateBlock
             block={{
@@ -631,11 +639,22 @@ function buildPrintBlocks({
                       <div className="print-choice-content">
                         <MathTextPreview text={choice} preferWholeExpression />
                         {choiceAsset ? (
-                          <img
-                            className="print-choice-image"
-                            src={getAssetFileUrl(choiceAsset.path)}
-                            alt=""
-                          />
+                          // An SVG choice is drawn with the question's values
+                          // (a distractor may adjust them in its svg_variables).
+                          choiceAsset.kind === "svg" && assetRenders[choiceRenderKey(question.id, choiceIndex)]?.rendered_svg ? (
+                            <div
+                              className="print-choice-image print-choice-svg"
+                              dangerouslySetInnerHTML={{
+                                __html: assetRenders[choiceRenderKey(question.id, choiceIndex)]?.rendered_svg ?? "",
+                              }}
+                            />
+                          ) : (
+                            <img
+                              className="print-choice-image"
+                              src={getAssetFileUrl(choiceAsset.path)}
+                              alt=""
+                            />
+                          )
                         ) : null}
                       </div>
                     </li>
@@ -653,6 +672,7 @@ function buildPrintBlocks({
           </>
         ) : null}
       </article>
+      </QuestionValuesContext.Provider>
     );
   });
 }
@@ -728,9 +748,15 @@ function TestPrintPreview({ testId, snapshotId, onClose }: TestPrintPreviewProps
 
     const entries: Array<{ key: string; asset: AssetModel & { question_variables: Record<string, string> } }> = [];
     for (const question of selectedTest.questions) {
+      const questionVariables = question.variables ?? {};
       question.assets.forEach((asset, index) => {
-        entries.push({ key: assetRenderKey(question.id, index), asset: { ...asset, question_variables: question.variables ?? {} } });
+        entries.push({ key: assetRenderKey(question.id, index), asset: { ...asset, question_variables: questionVariables } });
       });
+      for (const [choiceIndex, asset] of Object.entries(getChoiceAssets(question))) {
+        if (asset.kind === "svg") {
+          entries.push({ key: choiceRenderKey(question.id, choiceIndex), asset: { ...asset, question_variables: questionVariables } });
+        }
+      }
     }
 
     if (entries.length === 0) {

@@ -26,10 +26,22 @@ function fileName(path: string): string {
   return path.split("/").slice(-1)[0] ?? path;
 }
 
+/** Names a piece of question text uses: {{name}} and names inside {{calc: …}}. */
+export function namesInText(text: string): string[] {
+  const names = new Set<string>();
+  for (const match of text.matchAll(/\{\{\s*calc:\s*([^{}]+?)\s*\}\}/g)) {
+    for (const name of match[1].match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? []) names.add(name);
+  }
+  for (const match of text.matchAll(/\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g)) names.add(match[1]);
+  return [...names];
+}
+
 export function questionVariableRows(
   variables: Record<string, string>,
   assets: AssetModel[],
   inspections: AssetInspectionResponseModel[],
+  /** The question's text by where it is ("prompt", "choice B"), for "used in". */
+  texts: Record<string, string> = {},
 ): Row[] {
   const rows = new Map<string, Row>();
   const row = (name: string): Row => {
@@ -41,6 +53,12 @@ export function questionVariableRows(
     return entry;
   };
   Object.keys(variables).forEach(row);
+  for (const [where, text] of Object.entries(texts)) {
+    for (const name of namesInText(text)) {
+      // Only names the question has: unknown ones may be LaTeX braces.
+      if (variables[name] !== undefined) row(name).usedBy.push(where);
+    }
+  }
   assets.forEach((asset, index) => {
     if (asset.kind !== "svg") return;
     for (const input of inspections[index]?.svg_inputs ?? []) {
@@ -59,6 +77,7 @@ export default function QuestionVariablesSection({
   variables,
   assets,
   inspections,
+  texts,
   editing,
   onChange,
   onPromote,
@@ -66,6 +85,7 @@ export default function QuestionVariablesSection({
   variables: Record<string, string>;
   assets: AssetModel[];
   inspections: AssetInspectionResponseModel[];
+  texts: Record<string, string>;
   editing: boolean;
   onChange: (next: Record<string, string>) => void;
   /** Makes a value a drawing sets itself into the question's, clearing it from those drawings. */
@@ -73,7 +93,7 @@ export default function QuestionVariablesSection({
 }) {
   const [newName, setNewName] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const rows = questionVariableRows(variables, assets, inspections);
+  const rows = questionVariableRows(variables, assets, inspections, texts);
   if (rows.length === 0 && !editing) return null;
   if (rows.length === 0 && !assets.some((asset) => asset.kind === "svg")) return null;
 
@@ -88,7 +108,11 @@ export default function QuestionVariablesSection({
       <div className="question-section-header">
         <div>
           <h2>Variables</h2>
-          <p>Values this question's drawings take by name. Change them here (or in the JSON) and every attached drawing follows.</p>
+          <p>
+            Values this question's drawings take by name. Use them in the text too: <code>{"{{force}}"}</code>, or{" "}
+            <code>{"{{calc: round(force * cos(angle), 1)}}"}</code> for an answer worked out from them. Change them here (or in the
+            JSON) and the drawings, text and answers follow.
+          </p>
         </div>
       </div>
       {rows.length === 0 ? (
@@ -123,8 +147,8 @@ export default function QuestionVariablesSection({
                   : entry.unsetIn.length > 0
                   ? `Not set: ${entry.unsetIn.join(", ")} would show it blank.`
                   : entry.usedBy.length > 0
-                    ? `Used by ${entry.usedBy.join(", ")}`
-                    : "Not used by an attached drawing."}
+                    ? `Used in ${[...new Set(entry.usedBy)].join(", ")}`
+                    : "Not used yet."}
               </span>
               {editing && entry.value === undefined && entry.setIn.length > 0 ? (
                 <button
@@ -172,5 +196,53 @@ export default function QuestionVariablesSection({
         </form>
       ) : null}
     </section>
+  );
+}
+
+/** One attached drawing's own values (e.g. a choice image used as a
+ *  distractor): blank uses the question's variable of the same name; a value
+ *  wins for this drawing only and may refer to the question's variables, as
+ *  in "{{calc: 2 * slope}}". */
+export function AttachmentValuesEditor({
+  inputs,
+  values,
+  questionVariables,
+  label = "Values for this image",
+  onChange,
+}: {
+  inputs: SvgInputModel[];
+  values: Record<string, string>;
+  questionVariables: Record<string, string>;
+  label?: string;
+  onChange: (next: Record<string, string>) => void;
+}) {
+  if (inputs.length === 0) return null;
+  const own = inputs.filter((input) => (values[input.name] ?? "").trim() !== "").length;
+  return (
+    <details className="attachment-values">
+      <summary>
+        {label}
+        {own > 0 ? ` · ${own} changed` : " · from the question"}
+      </summary>
+      <p className="attachment-values-hint">
+        Leave blank to use the question's value. A value here changes this image only, e.g. <code>{"{{calc: 2 * slope}}"}</code> for a
+        distractor.
+      </p>
+      {inputs.map((input) => (
+        <label key={input.name}>
+          <code>{input.name}</code>
+          <input
+            value={values[input.name] ?? ""}
+            placeholder={questionVariables[input.name] !== undefined ? `from question: ${questionVariables[input.name] || "(blank)"}` : "not set"}
+            onChange={(event) => {
+              const next = { ...values, [input.name]: event.target.value };
+              if (event.target.value === "") delete next[input.name];
+              onChange(next);
+            }}
+          />
+          {input.units ? <span>{input.units}</span> : null}
+        </label>
+      ))}
+    </details>
   );
 }

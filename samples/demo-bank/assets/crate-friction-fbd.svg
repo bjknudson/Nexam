@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="318" height="200" viewBox="0 0 318 200" data-nexam-topics="Forces; Friction; Newton's second law" data-nexam-preview="mass=12; force=48; mu=0.20">
+  <metadata id="nexam-variables">{"variables": [
+  {"name":"mass","label":"Mass of the crate","units":"kg","sample":"12"},
+  {"name":"force","label":"Applied force","units":"N","sample":"48"},
+  {"name":"mu","label":"Coefficient of kinetic friction","sample":"0.20"},
+  {"name":"Fg","units":"N","formula":"mass * 9.8","show":{"kind":"decimals","places":1}},
+  {"name":"Ff","units":"N","formula":"mu * Fg","show":{"kind":"decimals","places":1}}
+]}</metadata>
+  <line x1="20" y1="120" x2="298" y2="120" stroke="#000000" stroke-width="2"/>
+  <g data-nexam-stamp="Block" data-nexam-stamp-category="Mechanics" data-x="159" data-y="100" data-rotation="0" data-scale="1" data-origin-x="30" data-origin-y="20" data-width="60" data-height="40" transform="translate(159 100) translate(-30 -20)" id="nexam-group-1">
+    <rect x="1" y="1" width="58" height="38" fill="#d9d9d9" stroke="#000000" stroke-width="1.5"/>
+  </g>
+  <text x="159" y="100" font-size="14" font-family="sans-serif" fill="#000000" text-anchor="middle" data-nexam-anchor="nexam-group-1" data-anchor-point="center" dy="0.35em">{{mass}} kg</text>
+  <g data-nexam-control="variable-arrow" data-variable="force" data-x="189" data-y="100" data-angle="0" data-angle-convention="ccw" data-scale="0.45" data-heads="end" fill="none" stroke="#000000" stroke-width="1.5" data-scale-group="Forces" data-label="$F_{app}$ = {{force}} N">
+    <line x1="189" y1="100" x2="{{calc: 181.2 + 0.45 * force}}" y2="100"/>
+    <polygon points="{{calc: 189 + 0.45 * force}},100 {{calc: 179.25 + 0.45 * force}},104.38 {{calc: 179.25 + 0.45 * force}},95.63" fill="#000000" stroke="none"/>
+    <text x="{{calc: 195 + 0.45 * force}}" y="100" dy="0.35em" text-anchor="start" font-size="14" font-family="sans-serif" fill="#000000" stroke="none" data-nexam-tex="$F_{app}$ = {{force}} N"><tspan font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', serif"><tspan font-style="italic">F</tspan><tspan baseline-shift="sub" font-size="70%"><tspan font-style="italic">app</tspan></tspan></tspan> = {{force}} N</text>
+  </g>
+  <g data-nexam-control="variable-arrow" data-variable="Ff" data-x="129" data-y="100" data-angle="180" data-angle-convention="ccw" data-scale="0.45" data-heads="end" fill="none" stroke="#000000" stroke-width="1.5" data-scale-group="Forces" data-label="$F_f$ = {{Ff}} N">
+    <line x1="129" y1="100" x2="{{calc: 136.8 - 0.45 * Ff}}" y2="100"/>
+    <polygon points="{{calc: 129 - 0.45 * Ff}},100 {{calc: 138.75 - 0.45 * Ff}},95.63 {{calc: 138.75 - 0.45 * Ff}},104.38" fill="#000000" stroke="none"/>
+    <text x="{{calc: 123 - 0.45 * Ff}}" y="100" dy="0.35em" text-anchor="end" font-size="14" font-family="sans-serif" fill="#000000" stroke="none" data-nexam-tex="$F_f$ = {{Ff}} N"><tspan font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', serif"><tspan font-style="italic">F</tspan><tspan baseline-shift="sub" font-size="70%"><tspan font-style="italic">f</tspan></tspan></tspan> = {{Ff}} N</text>
+  </g>
+  <g data-nexam-control="variable-arrow" data-variable="Fg" data-x="159" data-y="80" data-angle="90" data-angle-convention="ccw" data-scale="0.45" data-heads="end" fill="none" stroke="#000000" stroke-width="1.5" data-scale-group="Forces" data-label="$F_N$">
+    <line x1="159" y1="80" x2="159" y2="{{calc: 87.8 - 0.45 * Fg}}"/>
+    <polygon points="159,{{calc: 80 - 0.45 * Fg}} 163.38,{{calc: 89.75 - 0.45 * Fg}} 154.63,{{calc: 89.75 - 0.45 * Fg}}" fill="#000000" stroke="none"/>
+    <text x="159" y="{{calc: 65.6 - 0.45 * Fg}}" dy="0.35em" text-anchor="middle" font-size="14" font-family="sans-serif" fill="#000000" stroke="none" data-nexam-tex="$F_N$"><tspan font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', serif"><tspan font-style="italic">F</tspan><tspan baseline-shift="sub" font-size="70%"><tspan font-style="italic">N</tspan></tspan></tspan></text>
+  </g>
+  <g data-nexam-control="variable-arrow" data-variable="Fg" data-x="159" data-y="120" data-angle="270" data-angle-convention="ccw" data-scale="0.45" data-heads="end" fill="none" stroke="#000000" stroke-width="1.5" data-scale-group="Forces" data-label="$F_g$ = {{Fg}} N">
+    <line x1="159" y1="120" x2="159" y2="{{calc: 112.2 + 0.45 * Fg}}"/>
+    <polygon points="159,{{calc: 120 + 0.45 * Fg}} 154.63,{{calc: 110.25 + 0.45 * Fg}} 163.38,{{calc: 110.25 + 0.45 * Fg}}" fill="#000000" stroke="none"/>
+    <text x="159" y="{{calc: 134.4 + 0.45 * Fg}}" dy="0.35em" text-anchor="middle" font-size="14" font-family="sans-serif" fill="#000000" stroke="none" data-nexam-tex="$F_g$ = {{Fg}} N"><tspan font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', serif"><tspan font-style="italic">F</tspan><tspan baseline-shift="sub" font-size="70%"><tspan font-style="italic">g</tspan></tspan></tspan> = {{Fg}} N</text>
+  </g>
+</svg>

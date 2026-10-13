@@ -5941,3 +5941,53 @@ textarea {
   font-size: 0.85rem;
   color: #334155;
 }
+
+/* An SVG choice image drawn with its question's values. */
+.print-choice-svg svg {
+  display: block;
+  max-width: 1.4in;
+  max-height: 1in;
+  width: auto;
+  height: auto;
+}
+
+/* A choice image's own values (e.g. a distractor's adjusted slope) */
+.attachment-values {
+  flex-basis: 100%;
+  font-size: 0.85rem;
+}
+
+.attachment-values summary {
+  cursor: pointer;
+  color: #2563eb;
+}
+
+.attachment-values-hint {
+  margin: 0.35rem 0;
+  color: #64748b;
+}
+
+.attachment-values label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.3rem;
+}
+
+.attachment-values input {
+  width: 11rem;
+  padding: 0.35rem 0.5rem;
+}
+
+/* Under a numeric answer worked out from the question's variables */
+.worked-out-value {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 0.82rem;
+  font-weight: 400;
+  color: #475569;
+}
+
+.worked-out-value.is-invalid {
+  color: #b91c1c;
+}

@@ -83,6 +83,7 @@ def test_open_bank_lists_and_filters_questions(
         "q_mc_0046",
         "q_mc_0047",
         "q_mc_0048",
+        "q_mc_0049",
         "q_num_0001",
         "q_num_0002",
         "q_num_0003",
@@ -90,6 +91,7 @@ def test_open_bank_lists_and_filters_questions(
         "q_num_0005",
         "q_num_0006",
         "q_num_0007",
+        "q_num_0008",
         "q_sa_0001",
         "q_sa_0002",
         "q_sa_0003",
@@ -197,7 +199,7 @@ def test_create_question_from_json_assigns_unique_id(
     created = bank_service.create_question_from_json(source)
     summary = bank_service.get_summary()
 
-    assert created.id == "q_mc_0049"
+    assert created.id == "q_mc_0050"
     assert created.prompt == source["prompt"]
     assert "q_mc_0001" in summary.bank.question_ids
     assert "q_mc_0023" in summary.bank.question_ids
@@ -263,7 +265,7 @@ def test_stage_question_import_accepts_question_wrapper(
 
     assert len(stage.rows) == 1
     assert stage.rows[0].status == "valid"
-    assert stage.rows[0].proposed_id == "q_num_0008"
+    assert stage.rows[0].proposed_id == "q_num_0009"
 
 
 def test_stage_question_import_reports_validation_errors(
@@ -780,8 +782,8 @@ def test_next_question_id_uses_type_prefix_and_serial(
 ) -> None:
     bank_service.open_bank(str(demo_bok))
 
-    assert bank_service.next_question_id("multiple_choice") == "q_mc_0049"
-    assert bank_service.next_question_id("numeric_response") == "q_num_0008"
+    assert bank_service.next_question_id("multiple_choice") == "q_mc_0050"
+    assert bank_service.next_question_id("numeric_response") == "q_num_0009"
     assert bank_service.next_question_id("short_answer") == "q_sa_0011"
     assert bank_service.next_question_id("free_response") == "q_fr_0013"
 
@@ -1043,7 +1045,7 @@ def test_create_questions_from_json_assigns_ids_across_the_batch(
     )
 
     # Ids are unique across the batch, not all resolved to the same next id.
-    assert [question.id for question in created] == ["q_mc_0049", "q_mc_0050", "q_sa_0011"]
+    assert [question.id for question in created] == ["q_mc_0050", "q_mc_0051", "q_sa_0011"]
 
     summary = bank_service.get_summary()
     for question in created:
@@ -1949,12 +1951,12 @@ def test_render_svg_ignores_an_unreadable_variables_block(bank_service: BankWork
 
 def test_question_variables_are_optional_and_round_trip(bank_service: BankWorkspaceService, demo_bok: Path) -> None:
     bank_service.open_bank(str(demo_bok))
-    question = bank_service.get_question("q_mc_0001")
+    question = bank_service.get_question("q_mc_0002")
     assert question.variables == {}
 
-    bank_service.update_question("q_mc_0001", question.model_copy(update={"variables": {"force": "40", "angle": "30"}}))
+    bank_service.update_question("q_mc_0002", question.model_copy(update={"variables": {"force": "40", "angle": "30"}}))
 
-    assert bank_service.get_question("q_mc_0001").variables == {"force": "40", "angle": "30"}
+    assert bank_service.get_question("q_mc_0002").variables == {"force": "40", "angle": "30"}
 
 
 def test_attached_drawings_take_question_variables_by_name(bank_service: BankWorkspaceService) -> None:
@@ -1993,3 +1995,45 @@ def test_inspect_asset_uses_question_variables_and_lists_inputs(
         ("force", "N", "40", "Applied force"),
         ("angle", None, "30", None),
     ]
+
+
+def test_fill_question_text_fills_known_variables_and_calc() -> None:
+    from app.backend.svg_variables import fill_question_text
+
+    variables = {"force": "40", "angle": "30"}
+
+    assert fill_question_text("A {{force}} N force at {{angle}}°", variables) == "A 40 N force at 30°"
+    assert fill_question_text("Fx = {{calc: round(force * cos(angle), 1)}} N", variables) == "Fx = 34.6 N"
+    # Unknown names and LaTeX braces stay as typed.
+    assert fill_question_text("{{mass}} kg and $\\frac{{a}}{b}$", variables) == "{{mass}} kg and $\\frac{{a}}{b}$"
+    assert fill_question_text("no placeholders", variables) == "no placeholders"
+
+
+def test_answer_key_works_out_a_templated_numeric_answer() -> None:
+    from app.backend.grading.answer_key import derive_answer_key
+    from app.backend.models import QuestionModel, TestDraftModel, TestQuestionItemModel
+
+    question = QuestionModel(
+        id="q_num_vars",
+        type="numeric_response",
+        topic="Forces",
+        difficulty=2,
+        prompt="A {{force}} N force acts at {{angle}}°. Find Fx in N.",
+        answer={"value": "{{calc: round(force * cos(angle), 1)}}", "tolerance": "0.1"},
+        variables={"force": "40", "angle": "30"},
+    )
+    test = TestDraftModel(id="t", title="T", items=[TestQuestionItemModel(question_id="q_num_vars")])
+
+    key = derive_answer_key(test, {"q_num_vars": question})
+
+    assert key.items[0].numeric_value == pytest.approx(34.6)
+    assert key.items[0].numeric_tolerance == pytest.approx(0.1)
+
+
+def test_question_lists_show_each_question_with_its_values(bank_service: BankWorkspaceService, demo_bok: Path) -> None:
+    bank_service.open_bank(str(demo_bok))
+
+    item = next(item for item in bank_service.list_questions(search="horizontal component").items if item.id == "q_mc_0049")
+
+    assert item.prompt.startswith(r"A force of $50\text{ N}$ acts at $37^\circ$")
+    assert any("39.9" in choice for choice in item.choice_preview)

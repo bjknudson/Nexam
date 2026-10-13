@@ -76,3 +76,58 @@ def test_demo_gradebook_ships_a_roster_and_no_student_work(tmp_path: Path) -> No
     assert all(student.first_name and student.last_name for student in students)
     # A shipped sample must not carry scans or scores from anyone.
     assert service.list_administered_tests().items == []
+
+
+DEMO_BANK_DIR = REPO_ROOT / "samples" / "demo-bank"
+
+
+def test_demo_questions_with_variables_fill_to_numbers() -> None:
+    import json
+    import re
+
+    from app.backend.svg_variables import fill_question_text
+
+    templated = 0
+    for path in sorted((DEMO_BANK_DIR / "questions").glob("*.json")):
+        question = json.loads(path.read_text(encoding="utf-8"))
+        variables = question.get("variables") or {}
+        if not variables:
+            continue
+        templated += 1
+        answer = question.get("answer") or {}
+        texts = [question["prompt"], question.get("explanation") or "", *map(str, answer.get("choices", []))]
+        for text in texts:
+            filled = fill_question_text(text, variables)
+            # Every {{name}} is one of the question's variables, and every calc worked out.
+            assert not re.search(r"{{\s*(calc:|[A-Za-z_])", filled), (path.name, filled)
+        if "value" in answer:
+            float(fill_question_text(str(answer["value"]), variables))
+
+    assert templated >= 8
+
+
+def test_demo_drawings_render_completely_with_their_samples() -> None:
+    from app.backend.asset_metadata import summarize_svg
+
+    service = BankWorkspaceService()
+    for path in sorted((DEMO_BANK_DIR / "assets").glob("*.svg")):
+        source = path.read_text(encoding="utf-8")
+        values = summarize_svg(source).preview_values
+        if not values:
+            continue
+        rendered = service.render_svg(source, values)
+        assert "{{" not in rendered.split("</metadata>")[-1], path.name
+
+
+def test_demo_numeric_answer_key_is_worked_out(tmp_path: Path) -> None:
+    from app.backend.grading.answer_key import derive_answer_key
+    from app.backend.models import TestDraftModel, TestQuestionItemModel
+
+    service = BankWorkspaceService()
+    service.open_bank(str(REPO_ROOT / "samples" / "demo-bank.bok"))
+    question = service.get_question("q_num_0008")
+    test = TestDraftModel(id="t", title="T", items=[TestQuestionItemModel(question_id="q_num_0008")])
+
+    key = derive_answer_key(test, {"q_num_0008": question})
+
+    assert key.items[0].numeric_value == 5.0

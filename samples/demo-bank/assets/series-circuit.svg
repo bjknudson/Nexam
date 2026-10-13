@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="318" height="200" viewBox="0 0 318 200" data-nexam-topics="Circuits; Series circuits" data-nexam-preview="R1=12; R2=18; V=15">
+  <metadata id="nexam-variables">{"variables": [
+  {"name":"R1","label":"First resistor","units":"Ω","sample":"12"},
+  {"name":"R2","label":"Second resistor","units":"Ω","sample":"18"},
+  {"name":"V","label":"Battery voltage","units":"V","sample":"15"}
+]}</metadata>
+  <line x1="60" y1="40" x2="110" y2="40" stroke="#000000" stroke-width="1.5"/>
+  <g data-nexam-stamp="Resistor" data-nexam-stamp-category="Circuits" data-x="150" data-y="40" data-rotation="0" data-scale="1" data-origin-x="40" data-origin-y="10" data-width="80" data-height="20" transform="translate(150 40) translate(-40 -10)">
+    <polyline points="0,10 20,10 23.33,3 30,17 36.67,3 43.33,17 50,3 56.67,17 60,10 80,10" fill="none" stroke="#000000" stroke-width="1.5"/>
+  </g>
+  <line x1="190" y1="40" x2="240" y2="40" stroke="#000000" stroke-width="1.5"/>
+  <line x1="240" y1="40" x2="240" y2="70" stroke="#000000" stroke-width="1.5"/>
+  <g data-nexam-stamp="Resistor" data-nexam-stamp-category="Circuits" data-x="240" data-y="110" data-rotation="90" data-scale="1" data-origin-x="40" data-origin-y="10" data-width="80" data-height="20" transform="translate(240 110) rotate(90) translate(-40 -10)">
+    <polyline points="0,10 20,10 23.33,3 30,17 36.67,3 43.33,17 50,3 56.67,17 60,10 80,10" fill="none" stroke="#000000" stroke-width="1.5"/>
+  </g>
+  <line x1="240" y1="150" x2="240" y2="170" stroke="#000000" stroke-width="1.5"/>
+  <line x1="240" y1="170" x2="60" y2="170" stroke="#000000" stroke-width="1.5"/>
+  <line x1="60" y1="170" x2="60" y2="142" stroke="#000000" stroke-width="1.5"/>
+  <g data-nexam-stamp="Battery" data-nexam-stamp-category="Circuits" data-x="58" data-y="110" data-rotation="-90" data-scale="1" data-origin-x="30" data-origin-y="20" data-width="60" data-height="40" transform="translate(58 110) rotate(-90) translate(-30 -20)">
+    <line x1="0" y1="22" x2="26" y2="22" stroke="#000000" stroke-width="1.5"/>
+    <line x1="26" y1="8" x2="26" y2="36" stroke="#000000" stroke-width="1.5"/>
+    <line x1="34" y1="15" x2="34" y2="29" stroke="#000000" stroke-width="3"/>
+    <line x1="34" y1="22" x2="60" y2="22" stroke="#000000" stroke-width="1.5"/>
+    <text x="16" y="12" font-size="12" font-family="sans-serif" text-anchor="middle" fill="#000000">+</text>
+  </g>
+  <line x1="60" y1="80" x2="60" y2="40" stroke="#000000" stroke-width="1.5"/>
+  <text x="150" y="22" font-size="14" font-family="sans-serif" fill="#000000" text-anchor="middle" data-nexam-tex="$R_1$ = {{R1}} Ω"><tspan font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', serif"><tspan font-style="italic">R</tspan><tspan baseline-shift="sub" font-size="70%">1</tspan></tspan> = {{R1}} Ω</text>
+  <text x="226" y="114" font-size="14" font-family="sans-serif" fill="#000000" text-anchor="end" data-nexam-tex="$R_2$ = {{R2}} Ω"><tspan font-family="'STIX Two Math', 'Cambria Math', 'Times New Roman', serif"><tspan font-style="italic">R</tspan><tspan baseline-shift="sub" font-size="70%">2</tspan></tspan> = {{R2}} Ω</text>
+  <text x="84" y="114" font-size="14" font-family="sans-serif" fill="#000000">V = {{V}} V</text>
+</svg>

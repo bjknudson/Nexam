@@ -19,6 +19,7 @@ import {
   getQuestion,
   getNextQuestionId,
   inspectAsset,
+  inspectAssets,
   listCourses,
   listSourceStandardLists,
   listStandards,
@@ -94,8 +95,9 @@ import DocumentSwitcherDialog from "./DocumentSwitcherDialog";
 import AiPromptDialog from "./AiPromptDialog";
 import { setFeedbackArea } from "./feedback/area";
 import { openFeedback } from "./feedback/FeedbackHost";
-import QuestionVariablesSection from "./QuestionVariablesSection";
-import { resolveAssetVariables, withSeededVariables } from "./questionVariables";
+import QuestionVariablesSection, { AttachmentValuesEditor } from "./QuestionVariablesSection";
+import { QuestionValuesContext } from "./questionValuesContext";
+import { fillQuestionText, resolveAssetVariables, withSeededVariables } from "./questionVariables";
 import StandardsWorkspace from "./StandardsWorkspace";
 import TestBuilderPane from "./TestBuilderPane";
 import TestPrintPreview from "./TestPrintPreview";
@@ -116,6 +118,7 @@ import type {
   SourceStandardListModel,
   StandardRecordModel,
   StandardReferenceModel,
+  SvgInputModel,
   TestDraftDetailModel,
   TestDraftModel,
 } from "./types";
@@ -384,6 +387,37 @@ function getPaneMode(): PaneKind | null {
 }
 
 /** A question's attached figures plus its answer-choice images, with their variable values. */
+/** "= 5.00 with this question's values", under a numeric answer that is worked out. */
+function WorkedOutValue({ text, variables }: { text: string; variables: Record<string, string> | undefined }) {
+  if (!text.includes("{{")) return null;
+  const filled = fillQuestionText(text, variables);
+  const number = Number(filled);
+  return (
+    <span className={`worked-out-value${Number.isFinite(number) && filled.trim() !== "" ? "" : " is-invalid"}`}>
+      {Number.isFinite(number) && filled.trim() !== "" ? `= ${filled} with this question's values` : `Not a number with this question's values: ${filled}`}
+    </span>
+  );
+}
+
+/** The question's SVG choice images, by choice index. */
+function svgChoiceAssetsOf(question: QuestionModel): [string, AssetModel][] {
+  const choiceAssets = (question.answer as { choice_assets?: Record<string, AssetModel> } | null | undefined)?.choice_assets ?? {};
+  return Object.entries(choiceAssets).filter(([, asset]) => asset.kind === "svg");
+}
+
+/** The question's text by where it is, for showing where its variables are used. */
+function questionTextsOf(question: QuestionModel): Record<string, string> {
+  const texts: Record<string, string> = { prompt: question.prompt, explanation: question.explanation ?? "" };
+  const answer = (question.answer ?? {}) as { choices?: unknown; value?: unknown; tolerance?: unknown };
+  if (Array.isArray(answer.choices)) {
+    answer.choices.forEach((choice, index) => {
+      texts[`choice ${String.fromCharCode(65 + index)}`] = String(choice);
+    });
+  }
+  if (answer.value !== undefined) texts.answer = `${String(answer.value)} ${String(answer.tolerance ?? "")}`;
+  return texts;
+}
+
 /** The question's attached assets (figures and choice images), each with
  *  the values it renders with: the question's variables by name, then its own. */
 function attachedAssetsOf(question: QuestionModel | null): AssetModel[] {
@@ -1467,6 +1501,41 @@ function App() {
         seedQuestionVariables(assets, inspections);
       }
     })();
+  }, [draftQuestion, hostsBankState]);
+
+  // SVG choice images drawn with the question's values (a distractor may
+  // adjust them in its own svg_variables), as data URLs by choice index.
+  const [choiceImageRenders, setChoiceImageRenders] = useState<Record<string, string>>({});
+  const [choiceImageInputs, setChoiceImageInputs] = useState<Record<string, SvgInputModel[]>>({});
+  useEffect(() => {
+    const svgChoices = draftQuestion ? svgChoiceAssetsOf(draftQuestion) : [];
+    if (!draftQuestion || svgChoices.length === 0) {
+      setChoiceImageRenders({});
+      setChoiceImageInputs({});
+      return;
+    }
+    let cancelled = false;
+    const questionVariables = draftQuestion.variables ?? {};
+    inspectAssets(svgChoices.map(([, asset]) => ({ ...asset, question_variables: questionVariables })))
+      .then((response) => {
+        if (cancelled) return;
+        const next: Record<string, string> = {};
+        const inputs: Record<string, SvgInputModel[]> = {};
+        response.items.forEach((item, position) => {
+          const key = svgChoices[position][0];
+          if (item.rendered_svg) next[key] = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(item.rendered_svg)}`;
+          inputs[key] = item.svg_inputs ?? [];
+        });
+        setChoiceImageRenders(next);
+        setChoiceImageInputs(inputs);
+      })
+      .catch(() => {
+        // Fall back to the file as saved.
+        if (!cancelled) setChoiceImageRenders({});
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [draftQuestion, hostsBankState]);
 
   useEffect(() => {
@@ -3057,9 +3126,12 @@ function App() {
 
   function updateNumericAnswer(field: "value" | "unit" | "tolerance", value: string) {
     const answer = (draftQuestionRef.current?.answer as Record<string, unknown>) ?? {};
+    // A value or tolerance may be worked out from the question's variables
+    // ("{{calc: round(force * cos(angle), 1)}}"), so text with {{ is kept.
+    const keepText = field === "unit" || value.includes("{{");
     updateDraft("answer", {
       ...answer,
-      [field]: field === "unit" ? value : Number(value),
+      [field]: keepText ? value : value.trim() === "" ? "" : Number(value),
     });
   }
 
@@ -4242,6 +4314,7 @@ function App() {
             onDock={() => void handleDockWorkspacePage("questions")}
           />
         ) : activeWorkspacePage === "questions" ? (
+        <QuestionValuesContext.Provider value={draftQuestion?.variables ?? null}>
         <main className="editor-pane">
           <div className={`editor-main ${editorShouldFill ? "full-width" : ""}`}>
             {draftQuestion ? (
@@ -4636,8 +4709,17 @@ function App() {
 
                   <QuestionVariablesSection
                     variables={draftQuestion.variables ?? {}}
-                    assets={draftQuestion.assets}
-                    inspections={assetInspections}
+                    assets={[...draftQuestion.assets, ...svgChoiceAssetsOf(draftQuestion).map(([, asset]) => asset)]}
+                    inspections={[
+                      ...draftQuestion.assets.map((asset, index) => assetInspections[index] ?? { path: asset.path, kind: asset.kind, svg_placeholders: [] }),
+                      ...svgChoiceAssetsOf(draftQuestion).map(([choiceIndex, asset]) => ({
+                        path: asset.path,
+                        kind: asset.kind,
+                        svg_placeholders: [],
+                        svg_inputs: choiceImageInputs[choiceIndex] ?? [],
+                      })),
+                    ]}
+                    texts={questionTextsOf(draftQuestion)}
                     editing={editingFieldsEnabled}
                     onChange={(next) => updateDraft("variables", next)}
                     onPromote={(name, value) => {
@@ -4930,7 +5012,7 @@ function App() {
                                         <>
                                           <img
                                             className="choice-image-thumb"
-                                            src={getAssetFileUrl(choiceAsset.path)}
+                                            src={choiceImageRenders[String(index)] ?? getAssetFileUrl(choiceAsset.path)}
                                             alt=""
                                           />
                                           {choiceAsset.kind === "svg" ? (
@@ -4956,6 +5038,14 @@ function App() {
                                           >
                                             Remove Image
                                           </button>
+                                          {choiceAsset.kind === "svg" ? (
+                                            <AttachmentValuesEditor
+                                              inputs={choiceImageInputs[String(index)] ?? []}
+                                              values={choiceAsset.svg_variables}
+                                              questionVariables={draftQuestion.variables ?? {}}
+                                              onChange={(next) => updateChoiceAsset(index, { ...choiceAsset, svg_variables: next })}
+                                            />
+                                          ) : null}
                                         </>
                                       ) : (
                                         <button
@@ -5001,9 +5091,14 @@ function App() {
                         Answer Value
                         <IssueDot issues={issuesForPath(questionIssues, ["answer", "value"])} />
                         <input
-                          type="number"
-                          value={Number((draftQuestion.answer as Record<string, unknown>)?.value ?? 0)}
+                          inputMode="decimal"
+                          value={String((draftQuestion.answer as Record<string, unknown>)?.value ?? "")}
+                          placeholder="e.g. 4 or {{calc: F1 - F2}}"
                           onChange={(event) => updateNumericAnswer("value", event.target.value)}
+                        />
+                        <WorkedOutValue
+                          text={String((draftQuestion.answer as Record<string, unknown>)?.value ?? "")}
+                          variables={draftQuestion.variables}
                         />
                       </label>
                       <MathPreviewField
@@ -5026,14 +5121,15 @@ function App() {
                         Tolerance
                         <IssueDot issues={issuesForPath(questionIssues, ["answer", "tolerance"])} />
                         <input
-                          type="number"
-                          step="0.01"
-                          value={Number(
-                            (draftQuestion.answer as Record<string, unknown>)?.tolerance ?? 0,
-                          )}
+                          inputMode="decimal"
+                          value={String((draftQuestion.answer as Record<string, unknown>)?.tolerance ?? "")}
                           onChange={(event) =>
                             updateNumericAnswer("tolerance", event.target.value)
                           }
+                        />
+                        <WorkedOutValue
+                          text={String((draftQuestion.answer as Record<string, unknown>)?.tolerance ?? "")}
+                          variables={draftQuestion.variables}
                         />
                       </label>
                       <MathPreviewField
@@ -5190,6 +5286,7 @@ function App() {
           )}
           </div>
         </main>
+        </QuestionValuesContext.Provider>
         ) : activeWorkspacePage === "tests" ? (
           activePageIsPoppedOut ? (
             <PoppedOutPagePlaceholder

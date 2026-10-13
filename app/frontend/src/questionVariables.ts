@@ -5,7 +5,7 @@
 // blank attachment value means "use the question's".
 
 import { assetUsesIn } from "./assetSwap";
-import { fillPlaceholders } from "./drawing/preview";
+import { evaluateToText, fillPlaceholders } from "./drawing/preview";
 import { listVariables, type SceneDocument } from "./drawing/scene";
 import { derivedNames } from "./drawing/variables";
 import type { QuestionModel } from "./types";
@@ -60,4 +60,23 @@ export function withSeededVariables(
     added = true;
   }
   return added ? { ...question, variables } : null;
+}
+
+const CALC_IN_TEXT = /\{\{\s*calc:\s*([^{}]+?)\s*\}\}/g;
+const NAME_IN_TEXT = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g;
+
+/** Question text (prompt, choices, answers) with its variables filled in,
+ *  mirroring fill_question_text in app/backend/svg_variables.py: every
+ *  {{calc: …}}, and each {{name}} the question defines. Other {{…}} is left
+ *  as typed, so LaTeX braces and unset names stay visible. */
+export function fillQuestionText(text: string, variables: Record<string, string> | undefined): string {
+  if (!text.includes("{{") || !variables) return text;
+  return text
+    .replace(CALC_IN_TEXT, (_match, expression: string) => evaluateToText(expression, variables))
+    .replace(NAME_IN_TEXT, (match, name: string) => variables[name] ?? match);
+}
+
+/** Whether `text` has something fillQuestionText would change. */
+export function hasQuestionPlaceholders(text: string, variables: Record<string, string> | undefined): boolean {
+  return !!variables && fillQuestionText(text, variables) !== text;
 }

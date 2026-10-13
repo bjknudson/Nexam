@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { questionVariableRows } from "./QuestionVariablesSection";
+import { namesInText, questionVariableRows } from "./QuestionVariablesSection";
 import type { AssetInspectionResponseModel, AssetModel } from "./types";
 
 const inspection = (path: string, names: string[]): AssetInspectionResponseModel => ({
@@ -31,5 +31,16 @@ describe("question variable rows", () => {
     expect(rows.angle.unsetIn).toEqual(["a.svg"]);
     expect(rows.label.setIn).toEqual([{ file: "b.svg", value: "A" }]);
     expect(rows.label.unsetIn).toEqual([]);
+  });
+});
+
+describe("variables used in the question's text", () => {
+  it("finds names in placeholders and calc expressions", () => {
+    expect(namesInText("A {{force}} N push; Fx = {{calc: round(force * cos(angle), 1)}}").sort()).toEqual(["angle", "cos", "force", "round"]);
+  });
+
+  it("lists where the question's variables are used, ignoring unknown names", () => {
+    const rows = questionVariableRows({ force: "40" }, [], [], { prompt: "Push {{force}} N", "choice A": "{{calc: 2 * force}} and $\\frac{{a}}{b}$" });
+    expect(rows.map((row) => [row.name, row.usedBy])).toEqual([["force", ["prompt", "choice A"]]]);
   });
 });

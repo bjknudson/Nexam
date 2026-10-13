@@ -3,7 +3,7 @@
   "type": "multiple_choice",
   "topic": "Mechanics",
   "difficulty": 4,
-  "prompt": "A ball is dropped from rest and falls freely for $2.5\\text{ s}$. Using $g=9.8\\text{ m/s}^2$ and ignoring air resistance, how far does it fall?",
+  "prompt": "A ball is dropped from rest and falls freely for ${{t}}\\text{ s}$. Using $g={{g}}\\text{ m/s}^2$ and ignoring air resistance, how far does it fall?",
   "subtopic": "Kinematics",
   "tags": [
     "motion",
@@ -22,16 +22,26 @@
   "teacher_notes": "Both wrong-formula distractors are diagnostic; ask students to check units on their chosen equation.",
   "answer": {
     "choices": [
-      "$12\\text{ m}$",
-      "$25\\text{ m}$",
-      "$31\\text{ m}$",
-      "$61\\text{ m}$"
+      "${{calc: sig(0.5 * g * t, 2)}}\\text{ m}$",
+      "${{calc: sig(g * t, 2)}}\\text{ m}$",
+      "${{calc: sig(0.5 * g * t * t, 2)}}\\text{ m}$",
+      "${{calc: sig(g * t * t, 2)}}\\text{ m}$"
     ],
     "correct_choice_index": 2
   },
-  "explanation": "Use $d=\\frac{1}{2}gt^2$ with $u=0$: $d=\\frac{1}{2}(9.8\\text{ m/s}^2)(2.5\\text{ s})^2=\\frac{1}{2}(9.8)(6.25)\\approx31\\text{ m}$. Students who use $d=gt$ instead get about 25 m, and those who forget to square the time get about 12 m.",
+  "explanation": "Use $d=\\frac{1}{2}gt^2$ with $u=0$: $d=\\frac{1}{2}({{g}}\\text{ m/s}^2)({{t}}\\text{ s})^2=\\frac{1}{2}({{g}})({{calc: t * t}})\\approx{{calc: sig(0.5 * g * t * t, 2)}}\\text{ m}$. Students who use $d=gt$ instead get about {{calc: sig(g * t, 2)}} m, and those who forget to square the time get about {{calc: sig(0.5 * g * t, 2)}} m.",
   "rubric": [],
   "sample_solution": null,
   "exemplar_answer": null,
-  "assets": []
+  "assets": [
+    {
+      "path": "assets/ball-drop.svg",
+      "kind": "svg",
+      "svg_variables": {}
+    }
+  ],
+  "variables": {
+    "t": "2.5",
+    "g": "9.8"
+  }
 }

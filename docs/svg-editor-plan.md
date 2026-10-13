@@ -323,6 +323,19 @@ Later (noted 2026-10-12):
 
 ### 3. Text and answers use the same variables
 
+Built 2026-10-13:
+- **Text with values:** `fillQuestionText` (frontend) and `fill_question_text` (`app/backend/svg_variables.py`) fill every `{{calc: …}}` and each `{{name}}` the question defines. Other `{{…}}` (LaTeX braces, unset names) is left as typed.
+  - The math preview reads the question's variables from a context, so text appears with this version's values in the question editor, in each question of the print preview and PDF, and in the Import Questions preview.
+  - While editing, a field using variables shows a "Preview with this question's values".
+- **Answers:** multiple-choice choices can be worked out (`{{calc: a * t}} m/s`), and a numeric answer's `value` and `tolerance` may be `{{calc: …}}`. The answer key works them out with the question's variables, so grading matches each version.
+- **Choice images** are drawn with the question's values in the editor and in print, not shown as the raw file.
+  - Each SVG choice image has **Values for this image** (blank means "use the question's"), so a distractor can adjust a value, e.g. `angle` = `{{calc: angle + 90}}`.
+- **The Variables section** lists where each variable is used: the prompt, a choice, the answer, a drawing or a choice image.
+- **The expression evaluator** moved from `service.py` to `svg_variables.py`, shared by drawings and question text.
+- **Question lists** (the question pane, the test builder) show each question with its own values: the backend fills the list rows' prompt and choice previews. Search still matches the text as typed.
+- **Numeric answers in the editor:** Answer Value and Tolerance take a number or a `{{calc: …}}` expression, with "= 5.00 with this question's values" underneath.
+- **The demo bank** uses all of this. Its physics questions have drawings made by `app/frontend/scripts/demo-drawings.ts` (`npx vite-node scripts/demo-drawings.ts`, then `python scripts/build_demo_bok.py`), with templated text and answers, plus two new questions: `q_mc_0049` (force components) and `q_num_0008` (net force, worked-out numeric answer).
+
 - The prompt, choices, explanation and answers may contain `{{force}}` and `{{calc: …}}`, filled in for preview, print and PDF export. `round(x, n)` and `sig(x, n)` format numbers for display.
 - **Answers recompute:** the correct choice `{{calc: round(force * cos(angle), 1)}} N`, and distractors written the same way (`sin` for `cos`), change with the values. Literal text still works.
 - **Choice images** use adjusted references as above, so a graph distractor changes with the question.

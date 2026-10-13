@@ -15,6 +15,7 @@ from ..models import (
     TestDraftModel,
     TestQuestionItemModel,
 )
+from ..svg_variables import fill_question_text
 
 
 def derive_answer_key(
@@ -92,8 +93,10 @@ def _derive_numeric_response(
     question: QuestionModel, item_number: int, points: float, standard_ids: list[str]
 ) -> AnswerKeyItemModel:
     answer = question.answer or {}
-    value = float(answer["value"])
-    tolerance = float(answer["tolerance"])
+    # A value may be worked out from the question's variables, e.g.
+    # "{{calc: round(force * cos(angle), 1)}}", so the key matches this version.
+    value = float(fill_question_text(str(answer["value"]), question.variables))
+    tolerance = float(fill_question_text(str(answer["tolerance"]), question.variables))
 
     allow_negative = bool(answer.get("allow_negative", value < 0))
     allow_decimal = bool(answer.get("allow_decimal", not float(value).is_integer()))

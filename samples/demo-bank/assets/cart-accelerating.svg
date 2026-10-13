@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="318" height="200" viewBox="0 0 318 200" data-nexam-topics="Kinematics; Acceleration" data-nexam-preview="a=2; t=3">
+  <metadata id="nexam-variables">{"variables": [
+  {"name":"a","label":"Acceleration","units":"m/s²","sample":"2"},
+  {"name":"t","label":"Time","units":"s","sample":"3"}
+]}</metadata>
+  <g data-nexam-stamp="Ground" data-nexam-stamp-category="Mechanics" data-x="159" data-y="145" data-rotation="0" data-scale="2.4" data-origin-x="60" data-origin-y="6" data-width="120" data-height="12" transform="translate(159 145) scale(2.4) translate(-60 -6)">
+    <line x1="0" y1="2" x2="120" y2="2" stroke="#000000" stroke-width="1.5"/>
+    <line x1="2" y1="11" x2="10" y2="3" stroke="#000000" stroke-width="1"/>
+    <line x1="12" y1="11" x2="20" y2="3" stroke="#000000" stroke-width="1"/>
+    <line x1="22" y1="11" x2="30" y2="3" stroke="#000000" stroke-width="1"/>
+    <line x1="32" y1="11" x2="40" y2="3" stroke="#000000" stroke-width="1"/>
+    <line x1="42" y1="11" x2="50" y2="3" stroke="#000000" stroke-width="1"/>
+    <line x1="52" y1="11" x2="60" y2="3" stroke="#000000" stroke-width="1"/>
+    <line x1="62" y1="11" x2="70" y2="3" stroke="#000000" stroke-width="1"/>
+    <line x1="72" y1="11" x2="80" y2="3" stroke="#000000" stroke-width="1"/>
+    <line x1="82" y1="11" x2="90" y2="3" stroke="#000000" stroke-width="1"/>
+    <line x1="92" y1="11" x2="100" y2="3" stroke="#000000" stroke-width="1"/>
+    <line x1="102" y1="11" x2="110" y2="3" stroke="#000000" stroke-width="1"/>
+    <line x1="112" y1="11" x2="120" y2="3" stroke="#000000" stroke-width="1"/>
+  </g>
+  <g data-nexam-stamp="Cart" data-nexam-stamp-category="Mechanics" data-x="110" data-y="115" data-rotation="0" data-scale="1" data-origin-x="40" data-origin-y="23" data-width="80" data-height="46" transform="translate(110 115) translate(-40 -23)">
+    <rect x="2" y="4" width="76" height="28" rx="3" fill="#f0f0f0" stroke="#000000" stroke-width="1.5"/>
+    <circle cx="20" cy="37" r="7" fill="#ffffff" stroke="#000000" stroke-width="1.5"/>
+    <circle cx="60" cy="37" r="7" fill="#ffffff" stroke="#000000" stroke-width="1.5"/>
+    <circle cx="20" cy="37" r="1.5" fill="#000000"/>
+    <circle cx="60" cy="37" r="1.5" fill="#000000"/>
+  </g>
+  <g data-nexam-control="variable-arrow" data-variable="a" data-x="160" data-y="80" data-angle="0" data-angle-convention="ccw" data-scale="20" data-heads="end" fill="none" stroke="#000000" stroke-width="1.5" data-label="a = {{a}} m/s²" data-label-at="mid">
+    <line x1="160" y1="80" x2="{{calc: 152.2 + 20 * a}}" y2="80"/>
+    <polygon points="{{calc: 160 + 20 * a}},80 {{calc: 150.25 + 20 * a}},84.38 {{calc: 150.25 + 20 * a}},75.63" fill="#000000" stroke="none"/>
+    <text x="{{calc: 160 + 10 * a}}" y="65.6" dy="0.35em" text-anchor="middle" font-size="14" font-family="sans-serif" fill="#000000" stroke="none">a = {{a}} m/s²</text>
+  </g>
+  <text x="110" y="40" font-size="14" font-family="sans-serif" fill="#000000" text-anchor="middle">starts at rest · t = {{t}} s</text>
+</svg>

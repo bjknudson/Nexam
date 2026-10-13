@@ -1,0 +1,47 @@
+{
+  "id": "q_mc_0049",
+  "type": "multiple_choice",
+  "topic": "Mechanics",
+  "difficulty": 3,
+  "prompt": "A force of ${{force}}\\text{ N}$ acts at ${{angle}}^\\circ$ above the horizontal, as shown. What is its horizontal component $F_x$?",
+  "subtopic": "Vectors",
+  "tags": [
+    "vectors",
+    "components",
+    "trigonometry",
+    "variable-drawing"
+  ],
+  "standards": [
+    {
+      "standard_id": "PHY-NEW-01"
+    }
+  ],
+  "estimated_time_sec": 90,
+  "points": 1.0,
+  "status": "review",
+  "teacher_notes": "The sine distractor is the vertical component; the force itself and F/cos θ catch students who skip resolving.",
+  "answer": {
+    "choices": [
+      "${{calc: round(force * sin(angle), 1)}}\\text{ N}$",
+      "${{calc: round(force * cos(angle), 1)}}\\text{ N}$",
+      "${{force}}\\text{ N}$",
+      "${{calc: round(force / cos(angle), 1)}}\\text{ N}$"
+    ],
+    "correct_choice_index": 1
+  },
+  "explanation": "The horizontal component is adjacent to the angle: $F_x=F\\cos\\theta=({{force}})\\cos {{angle}}^\\circ\\approx{{calc: round(force * cos(angle), 1)}}\\text{ N}$. $F\\sin\\theta$ gives the vertical component, ${{calc: round(force * sin(angle), 1)}}\\text{ N}$.",
+  "rubric": [],
+  "sample_solution": null,
+  "exemplar_answer": null,
+  "assets": [
+    {
+      "path": "assets/force-components.svg",
+      "kind": "svg",
+      "svg_variables": {}
+    }
+  ],
+  "variables": {
+    "force": "50",
+    "angle": "37"
+  }
+}

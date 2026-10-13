@@ -2,6 +2,8 @@ import type { ReactNode } from "react";
 import { BlockMath, InlineMath } from "react-katex";
 
 import { getAssetFileUrl } from "./api";
+import { fillQuestionText, hasQuestionPlaceholders } from "./questionVariables";
+import { useQuestionValues } from "./questionValuesContext";
 import type {
   AssetInspectionResponseModel,
   AssetModel,
@@ -106,7 +108,7 @@ export function escapeLikelyLatexBackslashesInJson(rawText: string): string {
 }
 
 export function MathTextPreview({
-  text,
+  text: source,
   className,
   preferWholeExpression = false,
   inline = false,
@@ -117,6 +119,9 @@ export function MathTextPreview({
   inline?: boolean;
 }) {
   const Wrapper = inline ? "span" : "div";
+  // Inside one question, show its version: {{force}} and {{calc: …}} filled in.
+  const values = useQuestionValues();
+  const text = values ? fillQuestionText(source, values) : source;
 
   if (
     preferWholeExpression &&
@@ -163,7 +168,9 @@ export function MathPreviewField({
   preferWholeExpression = false,
   issues = [],
 }: MathPreviewFieldProps) {
-  const showLivePreview = editing && hasMathMarkup(value);
+  const values = useQuestionValues();
+  const filled = hasQuestionPlaceholders(value, values ?? undefined);
+  const showLivePreview = editing && (hasMathMarkup(value) || filled);
 
   return (
     <div
@@ -191,7 +198,7 @@ export function MathPreviewField({
       </label>
       {showLivePreview ? (
         <aside className="math-preview-panel">
-          <span className="math-preview-label">Preview</span>
+          <span className="math-preview-label">{filled ? "Preview with this question's values" : "Preview"}</span>
           <MathTextPreview text={value} preferWholeExpression={preferWholeExpression} />
         </aside>
       ) : null}

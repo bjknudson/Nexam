@@ -15,7 +15,14 @@ import re
 from pydantic import ValidationError
 
 from .asset_metadata import SvgSummary, SvgSummaryCache, summarize_svg
-from .svg_variables import derived_variables, format_rounded, read_declarations, round_sig, round_to
+from .svg_variables import (
+    EXPR_FUNCTIONS,
+    derived_variables,
+    eval_expression_ast,
+    evaluate_expression,
+    fill_question_text,
+    read_declarations,
+)
 from .grading.answer_key import derive_answer_key
 from .models import (
     SvgInputModel,
@@ -107,17 +114,8 @@ class BankWorkspaceService:
     SVG_EXPR_VARIABLE_PATTERN = re.compile(r"\b([A-Za-z_][A-Za-z0-9_.-]*)\b")
     # Functions allowed in {{calc: ...}}; the drawing editor uses them to keep
     # variable-length arrows between a minimum and maximum length.
-    # min/max take any number of arguments; sin/cos take one, in degrees;
-    # round(x, places) and sig(x, figures) round half away from zero. As the
-    # whole expression, round/sig also keep trailing zeros ("30.0").
-    SVG_EXPR_FUNCTIONS = {
-        "min": min,
-        "max": max,
-        "sin": lambda values: math.sin(math.radians(values[0])),
-        "cos": lambda values: math.cos(math.radians(values[0])),
-        "round": lambda values: round_to(values[0], int(values[1]) if len(values) > 1 else 0),
-        "sig": lambda values: round_sig(values[0], int(values[1]) if len(values) > 1 else 3),
-    }
+    # See svg_variables.EXPR_FUNCTIONS: min, max, sin, cos, round, sig.
+    SVG_EXPR_FUNCTIONS = EXPR_FUNCTIONS
     ALLOWED_ASSET_EXTENSIONS = {
         ".svg": "svg",
         ".png": "image",
@@ -1430,8 +1428,11 @@ class BankWorkspaceService:
                 type=question.type,
                 difficulty=question.difficulty,
                 status=question.status,
-                prompt=question.prompt,
-                choice_preview=self._build_question_choice_preview(question),
+                # Lists show this version: {{force}} and {{calc: …}} filled in.
+                prompt=fill_question_text(question.prompt, question.variables),
+                choice_preview=[
+                    fill_question_text(choice, question.variables) for choice in self._build_question_choice_preview(question)
+                ],
                 subtopic=question.subtopic,
                 standards=question.standards,
             )
@@ -3039,70 +3040,7 @@ class BankWorkspaceService:
         show_kind: str | None = None,
         places: int = 0,
     ) -> str:
-        try:
-            parsed = ast.parse(expression, mode="eval")
-            value = self._eval_svg_ast(parsed.body, variables)
-            # round()/sig() as the whole expression decide how it's written.
-            body = parsed.body
-            if (
-                show_kind is None
-                and isinstance(body, ast.Call)
-                and isinstance(body.func, ast.Name)
-                and body.func.id in ("round", "sig")
-            ):
-                show_kind = "decimals" if body.func.id == "round" else "sig"
-                default = 0 if show_kind == "decimals" else 3
-                places = int(self._eval_svg_ast(body.args[1], variables)) if len(body.args) > 1 else default
-        except Exception:
-            return "0"
-
-        if show_kind in ("decimals", "sig") and math.isfinite(value):
-            return format_rounded(value, show_kind, places)
-
-        if float(value).is_integer():
-            return str(int(value))
-        return f"{value:.4f}".rstrip("0").rstrip(".")
+        return evaluate_expression(expression, variables, show_kind, places)
 
     def _eval_svg_ast(self, node: ast.AST, variables: dict[str, str]) -> float:
-        if isinstance(node, ast.BinOp):
-            left = self._eval_svg_ast(node.left, variables)
-            right = self._eval_svg_ast(node.right, variables)
-            if isinstance(node.op, ast.Add):
-                return left + right
-            if isinstance(node.op, ast.Sub):
-                return left - right
-            if isinstance(node.op, ast.Mult):
-                return left * right
-            if isinstance(node.op, ast.Div):
-                return left / right if right != 0 else 0
-            raise ValueError("unsupported binary operator")
-
-        if isinstance(node, ast.UnaryOp):
-            value = self._eval_svg_ast(node.operand, variables)
-            if isinstance(node.op, ast.UAdd):
-                return value
-            if isinstance(node.op, ast.USub):
-                return -value
-            raise ValueError("unsupported unary operator")
-
-        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
-            return float(node.value)
-
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id in self.SVG_EXPR_FUNCTIONS
-            and node.args
-            and not node.keywords
-        ):
-            values = [self._eval_svg_ast(argument, variables) for argument in node.args]
-            return float(self.SVG_EXPR_FUNCTIONS[node.func.id](values))
-
-        if isinstance(node, ast.Name):
-            raw_value = variables.get(node.id, "0").strip()
-            try:
-                return float(raw_value)
-            except ValueError:
-                return 0
-
-        raise ValueError("unsupported expression node")
+        return eval_expression_ast(node, variables)

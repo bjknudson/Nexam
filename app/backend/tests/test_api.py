@@ -65,7 +65,7 @@ def test_api_returns_next_question_id_for_type(client: TestClient, demo_bok: Pat
     response = client.get("/api/questions/next-id", params={"type": "numeric_response"})
 
     assert response.status_code == 200
-    assert response.json() == {"id": "q_num_0008"}
+    assert response.json() == {"id": "q_num_0009"}
 
 
 def test_api_accepts_incomplete_question_with_an_advisory_issue(
@@ -128,7 +128,7 @@ def test_api_stages_question_json_import(client: TestClient, demo_bok: Path) -> 
     assert stage_response.status_code == 200
     stage = stage_response.json()
     assert stage["rows"][0]["status"] == "valid"
-    assert stage["rows"][0]["proposed_id"] == "q_num_0008"
+    assert stage["rows"][0]["proposed_id"] == "q_num_0009"
 
     list_response = client.get("/api/question-imports")
     assert list_response.status_code == 200

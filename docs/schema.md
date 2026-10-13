@@ -217,6 +217,8 @@ A question may carry its own values, which its attached drawings take by name (A
 - A drawing input takes the question's value of the same name.
 - An attachment's `svg_variables` entry wins over it; blank means "use the question's". It may refer to the question's variables: `"{{force}}"`, `"{{calc: 2 * force}}"`.
 - `variables` is optional; questions without it behave as before.
+- The prompt, explanation, choices and answers may use them too: `{{force}}`, or `{{calc: round(force * cos(angle), 1)}}`. Only names the question defines are filled; other `{{…}}` is kept as typed. A `numeric_response` answer's `value` and `tolerance` may be such an expression; the answer key works it out with the question's variables.
+- Choice images (`answer.choice_assets`) take the question's variables like attached figures, with their own `svg_variables` able to adjust them (e.g. a distractor).
 
 A drawing can declare its inputs (label, units, sample value) and derived variables (`Fx = force * cos(angle)`, optionally shown to N decimals or significant figures) in an SVG `<metadata id="nexam-variables">` block holding `{"variables": [...]}`. Derived variables are worked out when the drawing renders; a question never sets them.
 

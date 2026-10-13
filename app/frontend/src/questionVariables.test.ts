@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { parseSvg } from "./drawing/svgIO";
-import { drawingInputSamples, resolveAssetVariables, withSeededVariables } from "./questionVariables";
+import { drawingInputSamples, fillQuestionText, hasQuestionPlaceholders, resolveAssetVariables, withSeededVariables } from "./questionVariables";
 import type { QuestionModel } from "./types";
 
 describe("resolveAssetVariables", () => {
@@ -50,5 +50,23 @@ describe("adding a saved drawing's new inputs to its question", () => {
         "<text>{{Fx}} {{angle}} {{mass}}</text></svg>",
     );
     expect(drawingInputSamples(document)).toEqual({ force: "40", angle: "30", mass: "2" });
+  });
+});
+
+describe("question text with variables", () => {
+  const variables = { force: "40", angle: "30" };
+
+  it("fills known names and every calc, leaving the rest as typed", () => {
+    expect(fillQuestionText("A {{force}} N force at {{angle}}°", variables)).toBe("A 40 N force at 30°");
+    expect(fillQuestionText("{{calc: round(force * cos(angle), 1)}} N", variables)).toBe("34.6 N");
+    expect(fillQuestionText("{{calc: sig(force / 3, 3)}}", variables)).toBe("13.3");
+    expect(fillQuestionText("{{mass}} kg, $\\frac{{a}}{b}$", variables)).toBe("{{mass}} kg, $\\frac{{a}}{b}$");
+    expect(fillQuestionText("{{force}}", undefined)).toBe("{{force}}");
+  });
+
+  it("says when there is something to fill", () => {
+    expect(hasQuestionPlaceholders("Push {{force}} N", variables)).toBe(true);
+    expect(hasQuestionPlaceholders("Push {{mass}} kg", variables)).toBe(false);
+    expect(hasQuestionPlaceholders("Push {{force}} N", undefined)).toBe(false);
   });
 });

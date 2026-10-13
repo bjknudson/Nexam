@@ -12,6 +12,22 @@ export interface ReleaseNote {
 
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: "0.18.0",
+    date: "2026-10",
+    highlights: [
+      "Question variables: give a question values like force = 40 and angle = 30, and its drawings, prompt, choices and answers all follow. Change them (or paste AI-edited JSON) to make a new version.",
+      "Answers that work themselves out: write a choice or numeric answer as {{calc: round(force * cos(angle), 1)}}, with optional decimals or significant figures.",
+      "Drawings declare their inputs and derived values (Fx = force · cos θ); arrows, arcs and labels link to them from a menu.",
+      "Choice images use the question's values too, and a distractor image can adjust them.",
+      "The demo bank's physics questions now have drawings driven by variables, plus two new questions (force components, net force).",
+    ],
+    retest: [
+      "Open the demo bank, change a physics question's Variables, and check the prompt, choices, drawing and print preview all update.",
+      "Build a drawing with a variable arrow and an angle arc that share one angle variable, and attach it to a question.",
+      "Make a variation with the ✦ “Use AI to edit this question” button by asking the AI for new values.",
+    ],
+  },
+  {
     version: "0.17.2",
     date: "2026-10",
     highlights: [
