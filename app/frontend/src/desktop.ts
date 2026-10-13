@@ -415,6 +415,26 @@ export function onCloseGradebookMenu(callback: () => void): Promise<UnlistenFn |
   return onMenuEvent("nexam://close-gradebook", callback);
 }
 
+/** Help ▸ Send Feedback… (every window hears it; the focused one acts). */
+export function onSendFeedbackMenu(callback: () => void): Promise<UnlistenFn | null> {
+  return onMenuEvent("nexam://send-feedback", callback);
+}
+
+/** Help ▸ What's New in This Beta… */
+export function onWhatsNewMenu(callback: () => void): Promise<UnlistenFn | null> {
+  return onMenuEvent("nexam://whats-new", callback);
+}
+
+/** Opens a mailto: or https: link in the system's mail app or browser. */
+export async function openExternalLink(url: string): Promise<void> {
+  if (!isDesktopShell()) {
+    if (url.startsWith("mailto:")) window.location.href = url;
+    else window.open(url, "_blank", "noopener");
+    return;
+  }
+  await invoke("open_external", { url });
+}
+
 /** Tell the shell which "close" menu commands should be available. */
 export async function setDocumentMenuState(
   bankOpen: boolean,

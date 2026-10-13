@@ -226,3 +226,7 @@ src-tauri/target/
 .DS_Store
 app/backend/_baked_version.py
 .DS_Store
+
+# Local Vite settings (e.g. VITE_FEEDBACK_EMAIL for the beta feedback form)
+.env.local
+.env.*.local

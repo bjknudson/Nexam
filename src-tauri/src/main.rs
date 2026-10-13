@@ -446,6 +446,32 @@ fn show_update_message(level: MessageLevel, message: impl Into<String>) {
         .show();
 }
 
+/// Open a `mailto:` or `https:` link for the frontend: the beta feedback
+/// form's "Open in email" and links in What's New. Other schemes are refused,
+/// so a page can't use this to launch arbitrary programs.
+#[tauri::command]
+fn open_external(url: String) -> Result<(), String> {
+    let allowed = url.starts_with("mailto:") || url.starts_with("https://");
+    if !allowed {
+        return Err("Only mailto: and https: links can be opened.".into());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // Not `cmd /C start`: cmd treats the `&` between a mailto link's
+        // subject and body as a command separator. The protocol handler
+        // takes the URL as one argument.
+        Command::new("rundll32")
+            .args(["url.dll,FileProtocolHandler", &url])
+            .spawn()
+            .map_err(|error| error.to_string())?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        open_external_url(&url);
+    }
+    Ok(())
+}
+
 /// Open a URL in the user's default browser.
 ///
 /// Each platform's blessed way to hand a URL to the browser without pulling
@@ -502,6 +528,11 @@ fn main() {
                 MenuItemBuilder::with_id("check-for-updates", "Check for Updates…").build(handle)?;
             let view_help_item =
                 MenuItemBuilder::with_id("view-help", "Nexam Help").build(handle)?;
+            // Beta testing: report problems and ideas, and see what changed.
+            let send_feedback_item =
+                MenuItemBuilder::with_id("send-feedback", "Send Feedback…").build(handle)?;
+            let whats_new_item =
+                MenuItemBuilder::with_id("whats-new", "What's New in This Beta…").build(handle)?;
             let new_bank_item = MenuItemBuilder::with_id("new-bank", "New Bank…")
                 .accelerator("CmdOrCtrl+N")
                 .build(handle)?;
@@ -599,11 +630,17 @@ fn main() {
             let help_menu = if cfg!(target_os = "macos") {
                 SubmenuBuilder::new(handle, "Help")
                     .item(&view_help_item)
+                    .item(&send_feedback_item)
+                    .item(&whats_new_item)
+                    .separator()
                     .item(&check_updates_item)
                     .build()?
             } else {
                 SubmenuBuilder::new(handle, "Help")
                     .item(&view_help_item)
+                    .item(&send_feedback_item)
+                    .item(&whats_new_item)
+                    .separator()
                     .item(&check_updates_item)
                     .separator()
                     .item(&PredefinedMenuItem::about(handle, Some("About Nexam"), None)?)
@@ -644,6 +681,13 @@ fn main() {
             }
             "check-for-updates" => {
                 run_update_check(app_handle);
+            }
+            // Every window hears these; the focused one opens the dialog.
+            "send-feedback" => {
+                let _ = app_handle.emit("nexam://send-feedback", ());
+            }
+            "whats-new" => {
+                let _ = app_handle.emit("nexam://whats-new", ());
             }
             "view-help" => {
                 let help_url = format!("https://github.com/{UPDATE_REPO}#readme");
@@ -690,6 +734,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             get_desktop_context,
+            open_external,
             open_bank_dialog,
             save_bank_dialog,
             open_gradebook_dialog,
