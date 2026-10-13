@@ -322,7 +322,7 @@ jobs:
           set -euo pipefail
           cd src-tauri/target/release/bundle/macos
           ditto -c -k --sequesterRsrc --keepParent \
-            Nexam.app "Nexam-${{ github.ref_name }}.zip"
+            Nexam.app "Nexam-${{ github.ref_name }}-macOS-arm64.zip"
 
       - name: Remove temporary keychain
         if: always()
@@ -335,7 +335,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: Nexam-${{ github.ref_name }}-macos
-          path: src-tauri/target/release/bundle/macos/Nexam-${{ github.ref_name }}.zip
+          path: src-tauri/target/release/bundle/macos/Nexam-${{ github.ref_name }}-macOS-arm64.zip
           if-no-files-found: error
           retention-days: 90
 
@@ -347,15 +347,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-          ZIP_PATH: src-tauri/target/release/bundle/macos/Nexam-${{ github.ref_name }}.zip
+          ZIP_PATH: src-tauri/target/release/bundle/macos/Nexam-${{ github.ref_name }}-macOS-arm64.zip
+          # Shown as the download's name on the release page ("file#label").
+          ASSET_LABEL: macOS (Apple silicon)
         run: |
           set -euo pipefail
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $TAG already exists -- uploading the signed build to it."
-            gh release upload "$TAG" "$ZIP_PATH" --repo "$GITHUB_REPOSITORY" --clobber
+            gh release upload "$TAG" "$ZIP_PATH#$ASSET_LABEL" --repo "$GITHUB_REPOSITORY" --clobber
           else
             echo "Creating release $TAG."
-            gh release create "$TAG" "$ZIP_PATH" \
+            gh release create "$TAG" "$ZIP_PATH#$ASSET_LABEL" \
               --repo "$GITHUB_REPOSITORY" \
               --title "$TAG" \
               --generate-notes \

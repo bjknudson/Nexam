@@ -101,7 +101,7 @@ jobs:
             Write-Output "::error::No NSIS installer was produced in $bundle."
             exit 1
           }
-          $named = Join-Path $bundle "Nexam-${{ github.ref_name }}-x64-setup.exe"
+          $named = Join-Path $bundle "Nexam-${{ github.ref_name }}-Windows-x64-setup.exe"
           Move-Item -LiteralPath $built.FullName -Destination $named -Force
           "INSTALLER_PATH=$named" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Output "Renamed $($built.Name) -> $(Split-Path $named -Leaf)"
@@ -123,6 +123,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
+          # Shown as the download's name on the release page ("file#label").
+          ASSET_LABEL: Windows (64-bit installer)
         run: |
           # This workflow and release-macos.yml fire on the same tag and
           # race to create the release; whichever loses gets an error
@@ -134,11 +136,11 @@ jobs:
             gh release view $env:TAG --repo $env:GITHUB_REPOSITORY 2>$null | Out-Null
             if ($LASTEXITCODE -eq 0) {
               Write-Output "Release $env:TAG exists -- uploading the installer to it."
-              gh release upload $env:TAG "$env:INSTALLER_PATH" --repo $env:GITHUB_REPOSITORY --clobber
+              gh release upload $env:TAG "$($env:INSTALLER_PATH)#$($env:ASSET_LABEL)" --repo $env:GITHUB_REPOSITORY --clobber
               if ($LASTEXITCODE -eq 0) { exit 0 }
             } else {
               Write-Output "Creating release $env:TAG (attempt $attempt)."
-              gh release create $env:TAG "$env:INSTALLER_PATH" `
+              gh release create $env:TAG "$($env:INSTALLER_PATH)#$($env:ASSET_LABEL)" `
                 --repo $env:GITHUB_REPOSITORY `
                 --title $env:TAG `
                 --generate-notes `
