@@ -11,6 +11,7 @@ See "Asset search" and "Topics and tags on assets" in docs/svg-editor-plan.md.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -141,23 +142,29 @@ def summarize_svg(source: str) -> SvgSummary:
 
 
 class SvgSummaryCache:
-    """Summaries keyed by file and modification time, so listing a large bank
-    doesn't re-parse every drawing each time the asset list refreshes."""
+    """Summaries keyed by file content, so listing a large bank doesn't
+    re-parse every drawing each time the asset list refreshes.
+
+    Reading a file and hashing it is cheap next to parsing it. The content is
+    the key, not the modification time and size: a quick edit that keeps the
+    size (e.g. renaming "Pulley" to "Spring") can leave the time unchanged on
+    some file systems, which would serve the old summary."""
 
     def __init__(self) -> None:
-        self._entries: dict[Path, tuple[int, int, SvgSummary]] = {}
+        self._entries: dict[Path, tuple[str, SvgSummary]] = {}
 
     def get(self, path: Path) -> SvgSummary:
         try:
-            stat = path.stat()
+            data = path.read_bytes()
         except OSError:
             return SvgSummary()
+        digest = hashlib.sha256(data).hexdigest()
         cached = self._entries.get(path)
-        if cached and cached[0] == stat.st_mtime_ns and cached[1] == stat.st_size:
-            return cached[2]
+        if cached and cached[0] == digest:
+            return cached[1]
         try:
-            summary = summarize_svg(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError):
+            summary = summarize_svg(data.decode("utf-8"))
+        except UnicodeDecodeError:
             summary = SvgSummary()
-        self._entries[path] = (stat.st_mtime_ns, stat.st_size, summary)
+        self._entries[path] = (digest, summary)
         return summary
