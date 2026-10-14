@@ -480,7 +480,16 @@ def _manual_row_sheet(bank_service, gradebook_service, tmp_path):
     updated = gradebook_service.ingest_scan_batch(
         batch.id, [("sheet.png", png_bytes(rasterize_layout_page(snapshot.layout, 0, 300)))]
     )
-    return snapshot, batch, updated.sheets[0]
+    sheet = updated.sheets[0]
+    # Say what the scan saw if the row to score is missing, rather than leaving
+    # a bare 404 for the caller to puzzle over (it failed this way only on CI).
+    assert any(row.question_id == "q_fr_0001" for row in sheet.row_results), (
+        "The scanned sheet has no q_fr_0001 row. "
+        f"Sheet: {sheet.model_dump_json(exclude={'source_image_path'})}. "
+        f"Layout rows: {[row.question_id for page in snapshot.layout.pages for row in page.rows]}. "
+        f"Answer key: {[(item.question_id, item.row_kind) for item in snapshot.answer_key.items]}."
+    )
+    return snapshot, batch, sheet
 
 
 def test_scoring_a_row_leaves_the_grader_note_alone(
