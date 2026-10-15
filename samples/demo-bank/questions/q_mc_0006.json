@@ -20,10 +20,10 @@
   "teacher_notes": "Standard exponential identity rule.",
   "answer": {
     "choices": [
-      "x e^{x-1}",
-      "e^x",
-      "\\ln(x)",
-      "e^{x-1}"
+      "$x e^{x-1}$",
+      "$e^x$",
+      "$\\ln(x)$",
+      "$e^{x-1}$"
     ],
     "correct_choice_index": 1
   },

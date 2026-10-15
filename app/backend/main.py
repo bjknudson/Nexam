@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 
 from .models import (
+    VersionImportRequest,
     AdministeredTestSnapshotCollectionModel,
     AssetContentRequest,
     StampImportCommitRequest,
@@ -803,6 +804,16 @@ def copy_test_draft(test_id: str, request: CopyTestDraftRequest):
         detach_courses_from_source=request.detach_courses_from_source,
         source_restore=request.source_restore,
     )
+
+
+@app.post("/api/tests/{test_id}/versions/preview")
+def preview_test_version(test_id: str, request: VersionImportRequest):
+    return service.preview_test_version(test_id, request)
+
+
+@app.post("/api/tests/{test_id}/versions")
+def create_test_version(test_id: str, request: VersionImportRequest):
+    return service.create_test_version(test_id, request)
 
 
 @app.post("/api/tests/{test_id}/items")

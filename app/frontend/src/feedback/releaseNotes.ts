@@ -12,6 +12,22 @@ export interface ReleaseNote {
 
 export const RELEASE_NOTES: ReleaseNote[] = [
   {
+    version: "0.18.1",
+    date: "2026-10",
+    highlights: [
+      "Make a new version of a test with AI: ✦ Use AI… in the Test Builder walks you through it — tick what you want (change the order, new values, new questions, keep difficulty or standards), copy the prompt, paste the reply, and review every question beside its original before anything is created.",
+      "Keep the good ones, fix the rest: in the review, mark each question Keep, Needs work (with a note), Use original or Leave out. “Ask AI to fix” sends just the flagged questions back with your notes and swaps the answers into place.",
+      "A tidier Test Builder: open tests are tabs across the top, the test gets the full width, title / version / note line up, and the main button just says Finish. Print Settings show their values at a glance; Test JSON and the Experimental flag (now in each question's ⋯ menu) are out of the way.",
+      "AI prompts for questions and tests now explain math ($…$) and variables, with example instructions.",
+      "LaTeX outside $…$ (like a bare \\ln(x) in a choice) is flagged by the question checks.",
+    ],
+    retest: [
+      "Open a test, press ✦ Use AI…, ask for a new version with new values, and bring it back through the review.",
+      "In the review, mark one question Needs work with a note, use Ask AI to fix, and check only that question changes.",
+      "Open several tests and switch between them with the tabs; check the Finish button and Print Settings.",
+    ],
+  },
+  {
     version: "0.18.0",
     date: "2026-10",
     highlights: [

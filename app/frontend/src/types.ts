@@ -942,3 +942,28 @@ export interface StudentPerformanceListResponseModel {
    *  count toward nobody's totals. */
   unlinked_sheet_count: number;
 }
+
+/** One slot of a new test version made from AI-edited JSON (app/backend/test_versions.py). */
+export interface VersionItemModel {
+  position: number;
+  kind: "question" | "section";
+  /** kept: same as the original. changed: a new question in that slot. new: no
+   *  matching original. restored: left out by the AI, kept from the original. */
+  status: "kept" | "changed" | "new" | "restored" | "section";
+  title?: string | null;
+  original_id?: string | null;
+  question?: QuestionModel | null;
+  original?: QuestionModel | null;
+  issues: QuestionImportValidationIssueModel[];
+  /** Which entry of the pasted "questions" array it came from; null when the AI left it out. */
+  payload_index?: number | null;
+}
+
+export interface VersionPreviewModel {
+  title: string;
+  version: string;
+  version_description?: string | null;
+  items: VersionItemModel[];
+  errors: string[];
+  warnings: string[];
+}

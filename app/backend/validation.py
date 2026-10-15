@@ -14,6 +14,7 @@ resulting `QuestionImportValidationIssueModel` list generically by `location`.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Callable
 
@@ -135,6 +136,39 @@ def _free_response_needs_rubric(
     ]
 
 
+# Math already inside $...$, $$...$$, \(...\) or \[...\] (an escaped \$ is a dollar sign).
+_DELIMITED_MATH = re.compile(r"\$\$.*?\$\$|\\\[.*?\\\]|\\\(.*?\\\)|(?<!\\)\$.*?(?<!\\)\$", re.S)
+_LATEX_COMMAND = re.compile(r"\\([A-Za-z]+)")
+
+
+def _latex_outside_math(question: QuestionModel) -> list[QuestionImportValidationIssueModel]:
+    """A LaTeX command typed without $...$ ("\\ln(x)") may show as plain text in
+    some views. Suggest the delimiters, field by field."""
+
+    answer = question.answer or {}
+    fields: list[tuple[str, list[str | int], str]] = [
+        ("prompt", ["prompt"], question.prompt),
+        ("explanation", ["explanation"], question.explanation or ""),
+    ]
+    for index, choice in enumerate(answer.get("choices") or []):
+        if isinstance(choice, str):
+            fields.append((f"choice {index + 1}", ["answer", "choices", index], choice))
+    issues: list[QuestionImportValidationIssueModel] = []
+    for label, location, text in fields:
+        commands = _LATEX_COMMAND.findall(_DELIMITED_MATH.sub(" ", text))
+        if commands:
+            shown = ", ".join(dict.fromkeys(f"\\{name}" for name in commands))
+            issues.append(
+                QuestionImportValidationIssueModel(
+                    code="latex_outside_math",
+                    message=f"{label} has LaTeX outside $...$ ({shown}); wrap the math in $...$ so it renders everywhere",
+                    location=location,
+                    severity="warning",
+                )
+            )
+    return issues
+
+
 RULES: list[Rule] = [
     Rule("mc_needs_two_choices", lambda q: q.type == "multiple_choice", _mc_needs_two_choices),
     Rule(
@@ -163,6 +197,7 @@ RULES: list[Rule] = [
         lambda q: q.type == "free_response",
         _free_response_needs_rubric,
     ),
+    Rule("latex_outside_math", lambda q: True, _latex_outside_math),
 ]
 
 

@@ -50,8 +50,19 @@ interface MathPreviewSection {
 
 // One list, used to build every pattern below. It used to be spelled out five
 // times, which is how a bug in the terminator could sit in all five at once.
-const MATH_COMMANDS =
-  "frac|sqrt|sum|int|lim|theta|pi|alpha|beta|gamma|delta|Delta|lambda|mu|sigma|omega|cdot|times|div|pm|leq|geq|neq|approx|implies|sin|cos|tan|left|right";
+// Commands that mark text as math even without $…$ (e.g. a choice typed as
+// "\ln(x)"). Common functions, operators, arrows, accents and Greek letters.
+// The question check "latex_outside_math" (app/backend/validation.py) still
+// suggests $…$ for any of them, so text renders the same everywhere.
+const MATH_COMMANDS = [
+  "frac|dfrac|tfrac|sqrt|sum|prod|int|oint|lim|infty|partial|nabla",
+  "sin|cos|tan|sec|csc|cot|arcsin|arccos|arctan|sinh|cosh|tanh|ln|log|exp|det|min|max",
+  "cdot|times|div|pm|mp|leq|geq|neq|le|ge|ne|approx|propto|equiv|sim|implies|to|rightarrow|leftarrow|Rightarrow|circ|degree",
+  "vec|hat|bar|dot|ddot|tilde|overline|underline|text|mathrm|mathbf",
+  "alpha|beta|gamma|delta|epsilon|varepsilon|zeta|eta|theta|vartheta|iota|kappa|lambda|mu|nu|xi|pi|rho|sigma|tau|upsilon|phi|varphi|chi|psi|omega",
+  "Gamma|Delta|Theta|Lambda|Xi|Pi|Sigma|Upsilon|Phi|Psi|Omega",
+  "left|right",
+].join("|");
 
 /** A command name ends at the first character that is not a letter.
  *

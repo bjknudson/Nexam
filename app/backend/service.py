@@ -23,8 +23,12 @@ from .svg_variables import (
     fill_question_text,
     read_declarations,
 )
+from .test_versions import build_version_test, plan_test_version
 from .grading.answer_key import derive_answer_key
+from .grading.lineage import lineage_key
 from .models import (
+    VersionImportRequest,
+    VersionPreviewModel,
     SvgInputModel,
     AssetInspectionBatchRequest,
     AssetInspectionBatchResponseModel,
@@ -1275,6 +1279,52 @@ class BankWorkspaceService:
         tests.items.sort(key=lambda item: item.id)
         self._write_tests(tests)
         return self.get_test_draft(copy.id)
+
+    def preview_test_version(self, test_id: str, request: VersionImportRequest) -> VersionPreviewModel:
+        """What a new version from AI-edited JSON would contain (test_versions.py). Writes nothing."""
+        source, originals, used = self._version_inputs(test_id)
+        return plan_test_version(
+            source,
+            originals,
+            request.payload,
+            keep_missing=request.keep_missing,
+            used_versions=used,
+            next_id=self._next_question_id_for_type_with_reserved,
+        )
+
+    def create_test_version(self, test_id: str, request: VersionImportRequest) -> TestDraftDetailModel:
+        """Create the version: its new and changed questions, then the new test
+        draft, all or nothing. Kept questions are shared with the original."""
+        source, originals, used = self._version_inputs(test_id)
+        plan = plan_test_version(
+            source,
+            originals,
+            request.payload,
+            keep_missing=request.keep_missing,
+            used_versions=used,
+            next_id=self._next_question_id_for_type_with_reserved,
+        )
+        if plan.errors:
+            raise BankWorkspaceError(" ".join(plan.errors), status_code=422)
+
+        _, workspace_path = self.ensure_open()
+        tests = self._read_tests()
+        version_test = build_version_test(source, plan, request.payload, self._next_test_draft_id())
+        created = [item.question for item in plan.items if item.status in ("changed", "new") and item.question]
+        for question in created:
+            (workspace_path / "questions" / f"{question.id}.json").write_text(question.model_dump_json(indent=2) + "\n")
+        tests.items.append(version_test)
+        tests.items.sort(key=lambda item: item.id)
+        self._write_tests(tests)
+        self._refresh_bank_index()
+        return self.get_test_draft(version_test.id)
+
+    def _version_inputs(self, test_id: str) -> tuple[TestDraftModel, dict[str, QuestionModel], set[str]]:
+        detail = self.get_test_draft(test_id)
+        originals = {question.id: question for question in detail.questions}
+        key = lineage_key(detail.test.title)
+        used = {test.version for test in self._read_tests().items if lineage_key(test.title) == key}
+        return detail.test, originals, used
 
     def add_question_to_test(
         self,

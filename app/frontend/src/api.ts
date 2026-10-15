@@ -49,6 +49,7 @@ import type {
   StudentPerformanceListResponseModel,
   StudentPerformanceModel,
   TestDraftDetailModel,
+  VersionPreviewModel,
   TestDraftListResponseModel,
   TestDraftModel,
 } from "./types";
@@ -478,6 +479,36 @@ export async function setTestCourses(
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ course_ids: courseIds }),
+    }),
+  );
+}
+
+/** What a new version of a test from AI-edited JSON would contain. Writes nothing. */
+export async function previewTestVersion(
+  testId: string,
+  payload: Record<string, unknown>,
+  keepMissing: boolean,
+): Promise<VersionPreviewModel> {
+  return handleResponse(
+    await fetch(buildApiUrl(`/api/tests/${encodeURIComponent(testId)}/versions/preview`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ payload, keep_missing: keepMissing }),
+    }),
+  );
+}
+
+/** Creates that version: its new questions and a new test draft, all or nothing. */
+export async function createTestVersion(
+  testId: string,
+  payload: Record<string, unknown>,
+  keepMissing: boolean,
+): Promise<TestDraftDetailModel> {
+  return handleResponse(
+    await fetch(buildApiUrl(`/api/tests/${encodeURIComponent(testId)}/versions`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ payload, keep_missing: keepMissing }),
     }),
   );
 }

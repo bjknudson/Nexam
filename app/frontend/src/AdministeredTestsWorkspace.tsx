@@ -593,7 +593,7 @@ export default function AdministeredTestsWorkspace({
       {!loading && stacks.length === 0 ? (
         <p>
           No tests have been printed into this gradebook yet. Use "Create Response Sheets..."
-          above, or the same button in a bank's Test Builder, to hand one off. A bank has to be
+          above, or Finish (then Response Sheets...) in a bank's Test Builder, to hand one off. A bank has to be
           open for its tests to be listed.
         </p>
       ) : null}

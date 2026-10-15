@@ -1700,3 +1700,42 @@ class RelinkSnapshotLineageRequest(BaseModel):
 
     lineage_of_snapshot_id: str | None = None
     lineage_id: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# A new version of a test from AI-edited JSON (test_versions.py)
+# ---------------------------------------------------------------------------
+
+
+class VersionImportRequest(BaseModel):
+    """The pasted {test, questions} JSON for a new version of a test."""
+
+    payload: dict[str, Any]
+    # A question the AI left out is put back from the original, where it was.
+    keep_missing: bool = True
+
+
+class VersionItemModel(BaseModel):
+    position: int
+    kind: Literal["question", "section"]
+    # kept: identical to the original. changed: a new question in that slot.
+    # new: no matching original. restored: left out by the AI, kept from the original.
+    status: Literal["kept", "changed", "new", "restored", "section"]
+    title: str | None = None
+    original_id: str | None = None
+    question: QuestionModel | None = None
+    original: QuestionModel | None = None
+    issues: list[QuestionImportValidationIssueModel] = Field(default_factory=list)
+    # Which entry of the pasted "questions" array this came from (None when the
+    # AI left it out), so the review can change that entry and check again.
+    payload_index: int | None = None
+
+
+class VersionPreviewModel(BaseModel):
+    title: str
+    version: str
+    version_description: str | None = None
+    items: list[VersionItemModel] = Field(default_factory=list)
+    # Errors block creating the version; warnings are for the teacher to check.
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)

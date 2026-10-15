@@ -4070,8 +4070,9 @@ function App() {
 
       <AiPromptDialog
         open={aiPromptDialogOpen}
-        label="question"
+        kind="question"
         json={rawJson}
+        context={{ usesVariables: Object.keys(draftQuestion?.variables ?? {}).length > 0 || rawJson.includes("{{") }}
         onClose={() => setAiPromptDialogOpen(false)}
       />
 
@@ -4700,6 +4701,7 @@ function App() {
                     label="Prompt"
                     value={draftQuestion.prompt}
                     editing={editingFieldsEnabled}
+                    issues={issuesForPath(questionIssues, ["prompt"])}
                   >
                     <textarea
                       value={draftQuestion.prompt}
@@ -5069,6 +5071,7 @@ function App() {
                         value={draftQuestion.explanation ?? ""}
                         editing={editingFieldsEnabled}
                         className="longform-math-field"
+                        issues={issuesForPath(questionIssues, ["explanation"])}
                       >
                         <textarea
                           value={draftQuestion.explanation ?? ""}
@@ -5137,6 +5140,7 @@ function App() {
                         value={draftQuestion.explanation ?? ""}
                         editing={editingFieldsEnabled}
                         className="longform-math-field"
+                        issues={issuesForPath(questionIssues, ["explanation"])}
                       >
                         <textarea
                           value={draftQuestion.explanation ?? ""}
@@ -5321,6 +5325,14 @@ function App() {
                 onUpdateTest={(test) => void handleUpdateTestDraft(test)}
                 onCopyTest={(testId, payload) => void handleCopyTestDraft(testId, payload)}
                 onApplyTestJson={(testId, raw) => void handleApplyTestJson(testId, raw)}
+                onVersionCreated={(detail) => {
+                  replaceTestDraft(detail);
+                  handleOpenTest(detail.test.id);
+                  setWorkspaceDirty(true);
+                  void refreshQuestionList();
+                  setStatusMessage(`Created ${detail.test.title}, version ${detail.test.version} (${detail.test.id}) from the AI's JSON.`);
+                  setErrorMessage("");
+                }}
               />
             </main>
           )

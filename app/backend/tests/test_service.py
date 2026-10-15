@@ -2037,3 +2037,37 @@ def test_question_lists_show_each_question_with_its_values(bank_service: BankWor
 
     assert item.prompt.startswith(r"A force of $50\text{ N}$ acts at $37^\circ$")
     assert any("39.9" in choice for choice in item.choice_preview)
+
+
+def test_lint_flags_latex_outside_dollar_signs() -> None:
+    from app.backend.models import QuestionModel
+    from app.backend.validation import lint_question
+
+    question = QuestionModel(
+        id="q_ln",
+        type="multiple_choice",
+        topic="Calculus",
+        difficulty=2,
+        prompt=r"What is the derivative of $g(x) = e^x$? Use \frac{d}{dx} carefully.",
+        answer={"choices": [r"\ln(x)", r"$\ln(x)$", r"\$5 and \(\sqrt{2}\)", "e^x"], "correct_choice_index": 1},
+    )
+
+    issues = [issue for issue in lint_question(question) if issue.code == "latex_outside_math"]
+
+    assert [issue.location for issue in issues] == [["prompt"], ["answer", "choices", 0]]
+    assert "\\frac" in issues[0].message
+    assert "\\ln" in issues[1].message
+
+
+def test_demo_bank_has_no_latex_outside_dollar_signs(bank_service: BankWorkspaceService, demo_bok: Path) -> None:
+    from app.backend.validation import lint_question
+
+    bank_service.open_bank(str(demo_bok))
+    flagged = [
+        (question_id, issue.message)
+        for question_id in bank_service.get_summary().bank.question_ids
+        for issue in lint_question(bank_service.get_question(question_id))
+        if issue.code == "latex_outside_math"
+    ]
+
+    assert flagged == []
